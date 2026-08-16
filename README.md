@@ -1,4 +1,10 @@
-# KOJ
+# KOJ — Kottayam Online Judge
+
+> Contest hosting platform with an integrated problem archive for IIIT Kottayam.
+
+**Docs:** [Project Overview](docs/overview.md) · [Architecture](docs/architecture.md) · [Features](docs/features.md) · [Testing](docs/testing.md) · [Glossary](docs/glossary.md) · [All docs](docs/)
+
+---
 
 Next.js 16 (App Router) + Tailwind v4 + Drizzle ORM (Neon Postgres) + a separate FastAPI service.
 
