@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 
 type Tab = "ACTIVE" | "UPCOMING" | "ENDED";
@@ -64,6 +65,14 @@ export default function ContestsPage() {
       <h1 className="uppercase font-mono tracking-[0.3em] text-2xl text-kjprimary text-glow mb-8">
         Contest Arena
       </h1>
+
+      {/* Back to Dashboard */}
+      <Link
+        href="/dashboard"
+        className="inline-flex items-center gap-1 text-xs font-mono text-kjtext-muted hover:text-kjprimary transition-colors mb-6"
+      >
+        <span>←</span> Back to Dashboard
+      </Link>
 
       {/* Tab Bar */}
       <div className="flex gap-1 bg-kjsurface rounded-lg p-1 border border-kjborder mb-8 w-fit">
