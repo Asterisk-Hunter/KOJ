@@ -54,6 +54,14 @@ export default function ProblemsPage() {
         Filter by Difficulty / Category
       </p>
 
+      {/* Back to Dashboard */}
+      <Link
+        href="/dashboard"
+        className="inline-flex items-center gap-1 text-xs font-mono text-kjtext-muted hover:text-kjprimary transition-colors mb-6"
+      >
+        <span>←</span> Back to Dashboard
+      </Link>
+
       {/* Filter Bar */}
       <div className="flex flex-col gap-4 mb-8">
         <input
