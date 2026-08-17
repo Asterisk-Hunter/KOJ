@@ -1,26 +1,50 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-kjbg: #050505;
+  --color-kjsurface: #0c150f;
+  --color-kjsurface-alt: #0f0f0f;
+  --color-kjcontainer: #18221b;
+  --color-kjprimary: #00ff9d;
+  --color-kjsecondary: #10b981;
+  --color-kjtertiary: #4edea3;
+  --color-kjtext: #e5e1e4;
+  --color-kjtext-muted: #888;
+  --color-kjborder: #1f1f1f;
+  --color-kjborder-bright: #2a2a2a;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+:root {
+  --background: #050505;
+  --foreground: #e5e1e4;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans, 'Geist', sans-serif);
+  color-scheme: dark;
+}
+
+@layer utilities {
+  .glow {
+    box-shadow: 0 0 20px rgba(0, 255, 157, 0.3);
+  }
+
+  .glow-sm {
+    box-shadow: 0 0 10px rgba(0, 255, 157, 0.15);
+  }
+
+  .text-glow {
+    text-shadow: 0 0 10px rgba(0, 255, 157, 0.5);
+  }
+
+  .bg-grid {
+    background-image:
+      linear-gradient(rgba(0, 255, 157, 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0, 255, 157, 0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
 }
