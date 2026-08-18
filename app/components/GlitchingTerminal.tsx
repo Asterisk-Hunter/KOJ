@@ -21,12 +21,10 @@ export default function GlitchingTerminal() {
   const [currentLine, setCurrentLine] = useState("");
   const [lineIndex, setLineIndex] = useState(0);
   const [charIndex, setCharIndex] = useState(0);
-  const [isTypingDone, setIsTypingDone] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (lineIndex >= BOOT_MESSAGES.length) {
-      setIsTypingDone(true);
       return;
     }
 

@@ -7,6 +7,7 @@ const isPublicRoute = createRouteMatcher([
   "/problems(.*)",
   "/contests(.*)",
   "/rankings(.*)",
+  "/submissions(.*)",
   "/api(.*)",
 ]);
 
