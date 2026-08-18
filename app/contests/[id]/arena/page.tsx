@@ -1,0 +1,7 @@
+import Link from "next/link";
+import { contests } from "@/mock/data";
+
+export default function ContestArenaPage() {
+  const contest = contests[0];
+  return <main className="max-w-5xl mx-auto px-4 py-16"><p className="text-xs font-mono text-kjprimary tracking-widest mb-3">LIVE ARENA / MOCK MODE</p><h1 className="text-3xl font-mono text-kjtext">{contest.title}</h1><p className="text-kjtext-muted mt-3">This UI state represents the active contest workspace.</p><div className="mt-8 grid md:grid-cols-2 gap-4"><div className="bg-kjsurface border border-kjborder rounded-lg p-5"><h2 className="font-mono text-kjtext mb-4">Problem queue</h2>{["A · Two Sum", "B · Longest Substring", "C · Merge K Sorted Lists", "D · Binary Tree Traversal"].map((item) => <p key={item} className="border-b border-kjborder py-3 text-sm text-kjtext-muted">{item}<span className="float-right text-xs text-green-400">OPEN</span></p>)}</div><div className="bg-kjsurface border border-kjborder rounded-lg p-5"><h2 className="font-mono text-kjtext mb-4">Contest panel</h2><p className="font-mono text-3xl text-kjprimary">01:23:42</p><p className="text-sm text-kjtext-muted mt-3">5 problems · scoring is solved count, then penalty.</p><Link href="/rankings" className="inline-block mt-6 border border-kjborder px-4 py-2 rounded text-xs font-mono text-kjprimary">LEADERBOARD →</Link></div></div><Link href="/contests/weekly-42" className="inline-block mt-8 text-xs font-mono text-kjtext-muted hover:text-kjprimary">← Contest details</Link></main>;
+}
