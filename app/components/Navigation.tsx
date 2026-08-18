@@ -52,12 +52,6 @@ const navLinks = [
     label: "Submissions",
     icon: <span className="font-mono text-xs">#</span>,
   },
-  {
-    href: "/admin",
-    signedOutHref: "/admin",
-    label: "Admin",
-    icon: <span className="font-mono text-xs">+</span>,
-  },
 ];
 
 export default function Navigation() {
