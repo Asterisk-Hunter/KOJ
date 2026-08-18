@@ -5,12 +5,6 @@ import { SignInButton, SignUpButton, UserButton, useAuth } from "@clerk/nextjs";
 import GlitchingTerminal from "@/app/components/GlitchingTerminal";
 import Navigation from "@/app/components/Navigation";
 
-const stats = [
-  { label: "PROBLEMS INDEXED", value: "2,408" },
-  { label: "ACTIVE CONTESTS", value: "12" },
-  { label: "DAILY SUBMISSIONS", value: "15,932" },
-];
-
 const features = [
   {
     icon: (
@@ -119,27 +113,6 @@ export default function LandingPage() {
           <h2 className="font-mono text-xl text-kjtext">Winter Championship</h2>
           <p className="text-sm text-kjtext-muted mt-2">Registration is open for 10 problems across five hours.</p>
         </Link>
-      </section>
-
-      {/* Stats Strip */}
-      <section className="border-t border-kjborder border-b border-b-kjborder bg-kjsurface/50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            {stats.map((stat) => (
-              <div
-                key={stat.label}
-                className="bg-kjsurface border border-kjborder rounded-lg p-4 border-l-4 border-l-kjprimary"
-              >
-                <span className="block uppercase font-mono text-xs tracking-widest text-kjtext-muted mb-1">
-                  {stat.label}
-                </span>
-                <span className="block text-2xl font-mono font-bold text-kjtext">
-                  {stat.value}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
       </section>
 
       {/* Features Section */}
