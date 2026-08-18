@@ -2,156 +2,36 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import PageHeader from "@/app/components/PageHeader";
+import { problems, type Difficulty } from "@/mock/data";
 
-type Difficulty = "All" | "Easy" | "Medium" | "Hard";
-type Category = "All" | "Arrays" | "Graphs" | "DP" | "Strings" | "Trees";
+const difficulties: Array<"All" | Difficulty> = ["All", "Easy", "Medium", "Hard"];
 
-const problems = [
-  { id: 1, title: "Two Sum", difficulty: "Easy" as Difficulty, category: "Arrays" as Category, acceptance: "85.2%", status: "solved" },
-  { id: 2, title: "Longest Substring", difficulty: "Medium" as Difficulty, category: "Strings" as Category, acceptance: "68.4%", status: "attempted" },
-  { id: 3, title: "Merge K Sorted Lists", difficulty: "Hard" as Difficulty, category: "Arrays" as Category, acceptance: "45.1%", status: "unsolved" },
-  { id: 4, title: "Binary Tree Traversal", difficulty: "Easy" as Difficulty, category: "Trees" as Category, acceptance: "78.9%", status: "solved" },
-  { id: 5, title: "Word Break", difficulty: "Medium" as Difficulty, category: "DP" as Category, acceptance: "52.3%", status: "attempted" },
-  { id: 6, title: "Course Schedule", difficulty: "Medium" as Difficulty, category: "Graphs" as Category, acceptance: "61.7%", status: "unsolved" },
-  { id: 7, title: "Maximum Subarray", difficulty: "Easy" as Difficulty, category: "DP" as Category, acceptance: "82.5%", status: "solved" },
-  { id: 8, title: "Alien Dictionary", difficulty: "Hard" as Difficulty, category: "Graphs" as Category, acceptance: "38.6%", status: "unsolved" },
-];
-
-const difficulties: Difficulty[] = ["All", "Easy", "Medium", "Hard"];
-const categories: Category[] = ["All", "Arrays", "Graphs", "DP", "Strings", "Trees"];
-
-function difficultyColor(d: Difficulty) {
-  if (d === "Easy") return "text-green-400 bg-green-400/10 border border-green-400/20 rounded-full px-2 py-0.5 text-xs font-mono";
-  if (d === "Medium") return "text-yellow-400 bg-yellow-400/10 border border-yellow-400/20 rounded-full px-2 py-0.5 text-xs font-mono";
-  return "text-red-400 bg-red-400/10 border border-red-400/20 rounded-full px-2 py-0.5 text-xs font-mono";
-}
-
-function statusDot(s: string) {
-  if (s === "solved") return "bg-green-400";
-  if (s === "attempted") return "bg-yellow-400";
-  return "bg-zinc-500";
+function badge(difficulty: Difficulty) {
+  return difficulty === "Easy" ? "text-green-400 bg-green-400/10 border-green-400/20" : difficulty === "Medium" ? "text-yellow-400 bg-yellow-400/10 border-yellow-400/20" : "text-red-400 bg-red-400/10 border-red-400/20";
 }
 
 export default function ProblemsPage() {
-  const [difficulty, setDifficulty] = useState<Difficulty>("All");
-  const [category, setCategory] = useState<Category>("All");
   const [search, setSearch] = useState("");
-
-  const filtered = problems.filter((p) => {
-    if (difficulty !== "All" && p.difficulty !== difficulty) return false;
-    if (category !== "All" && p.category !== category) return false;
-    if (search && !p.title.toLowerCase().includes(search.toLowerCase())) return false;
-    return true;
-  });
+  const [difficulty, setDifficulty] = useState<"All" | Difficulty>("All");
+  const filtered = problems.filter((problem) => (difficulty === "All" || problem.difficulty === difficulty) && `${problem.title} ${problem.category}`.toLowerCase().includes(search.toLowerCase()));
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-      {/* Page Title */}
-      <h1 className="uppercase font-mono tracking-[0.3em] text-2xl text-kjprimary text-glow mb-2">
-        Problem Archive
-      </h1>
-      <p className="text-xs text-kjtext-muted uppercase tracking-widest mb-8">
-        Filter by Difficulty / Category
-      </p>
-
-      {/* Back to Dashboard */}
-      <Link
-        href="/dashboard"
-        className="inline-flex items-center gap-1 text-xs font-mono text-kjtext-muted hover:text-kjprimary transition-colors mb-6"
-      >
-        <span>←</span> Back to Dashboard
-      </Link>
-
-      {/* Filter Bar */}
-      <div className="flex flex-col gap-4 mb-8">
-        <input
-          type="text"
-          placeholder="Search problems..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="bg-kjsurface border border-kjborder rounded px-4 py-2.5 text-sm text-kjtext font-mono placeholder:text-kjtext-muted/50 focus:border-kjprimary focus:outline-none focus:glow-sm w-full max-w-md"
-        />
-
-        <div className="flex flex-wrap gap-2 items-center">
-          <span className="text-xs font-mono text-kjtext-muted mr-2">DIFFICULTY:</span>
-          {difficulties.map((d) => (
-            <button
-              key={d}
-              onClick={() => setDifficulty(d)}
-              className={
-                difficulty === d
-                  ? "bg-kjprimary/10 text-kjprimary border border-kjprimary/30 text-xs font-mono px-3 py-1.5 rounded-full"
-                  : "border border-kjborder text-kjtext-muted text-xs font-mono px-3 py-1.5 rounded-full hover:border-kjborder-bright cursor-pointer"
-              }
-            >
-              {d}
-            </button>
-          ))}
+    <>
+      <PageHeader eyebrow="Archive / 008 indexed" title="Problem Archive" description="Practice from the public KOJ catalogue. Search by title or topic, then open a problem to read the statement and submit code." />
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="flex flex-col lg:flex-row gap-3 mb-6">
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search title or category..." className="flex-1 bg-kjsurface border border-kjborder rounded px-4 py-3 text-sm font-mono text-kjtext placeholder:text-kjtext-muted/50 focus:border-kjprimary focus:outline-none" />
+          <div className="flex gap-2 flex-wrap">
+            {difficulties.map((item) => <button key={item} onClick={() => setDifficulty(item)} className={`px-4 py-2 rounded border text-xs font-mono ${difficulty === item ? "border-kjprimary/50 bg-kjprimary/10 text-kjprimary" : "border-kjborder text-kjtext-muted hover:text-kjtext"}`}>{item}</button>)}
+          </div>
         </div>
-
-        <div className="flex flex-wrap gap-2 items-center">
-          <span className="text-xs font-mono text-kjtext-muted mr-2">CATEGORY:</span>
-          {categories.map((c) => (
-            <button
-              key={c}
-              onClick={() => setCategory(c)}
-              className={
-                category === c
-                  ? "bg-kjprimary/10 text-kjprimary border border-kjprimary/30 text-xs font-mono px-3 py-1.5 rounded-full"
-                  : "border border-kjborder text-kjtext-muted text-xs font-mono px-3 py-1.5 rounded-full hover:border-kjborder-bright cursor-pointer"
-              }
-            >
-              {c}
-            </button>
-          ))}
+        <div className="border border-kjborder rounded-lg overflow-hidden bg-kjsurface/30">
+          <div className="px-5 py-4 border-b border-kjborder flex justify-between items-center"><span className="text-xs uppercase tracking-widest font-mono text-kjtext-muted">{filtered.length} problems</span><span className="text-xs font-mono text-kjtext-muted">● solved &nbsp; ◐ attempted &nbsp; ○ new</span></div>
+          <div className="overflow-x-auto"><table className="w-full"><thead><tr className="bg-kjsurface text-left">{["ID", "Problem", "Difficulty", "Topic", "Acceptance", "Status"].map((heading) => <th key={heading} className="px-5 py-3 text-[11px] uppercase tracking-widest font-mono text-kjtext-muted">{heading}</th>)}</tr></thead><tbody>{filtered.map((problem) => <tr key={problem.id} className="border-t border-kjborder/70 hover:bg-kjsurface transition-colors"><td className="px-5 py-4 font-mono text-sm text-kjtext-muted">{String(problem.id).padStart(3, "0")}</td><td className="px-5 py-4"><Link href={`/problems/${problem.id}`} className="font-medium text-kjtext hover:text-kjprimary">{problem.title}</Link></td><td className="px-5 py-4"><span className={`rounded-full border px-2 py-1 text-xs font-mono ${badge(problem.difficulty)}`}>{problem.difficulty}</span></td><td className="px-5 py-4 text-sm text-kjtext-muted">{problem.category}</td><td className="px-5 py-4 text-sm font-mono text-kjtext-muted">{problem.acceptance}</td><td className="px-5 py-4 text-sm">{problem.status === "solved" ? <span className="text-green-400">● Solved</span> : problem.status === "attempted" ? <span className="text-yellow-400">◐ Attempted</span> : <span className="text-zinc-500">○ Unsolved</span>}</td></tr>)}</tbody></table></div>
+          {filtered.length === 0 && <p className="px-5 py-12 text-center font-mono text-sm text-kjtext-muted">No problems match those filters.</p>}
         </div>
-      </div>
-
-      {/* Problem Table */}
-      <div className="overflow-x-auto">
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="bg-kjsurface border-b border-kjborder">
-              <th className="text-left px-4 py-3 uppercase font-mono text-xs tracking-widest text-kjtext-muted">ID</th>
-              <th className="text-left px-4 py-3 uppercase font-mono text-xs tracking-widest text-kjtext-muted">Problem</th>
-              <th className="text-left px-4 py-3 uppercase font-mono text-xs tracking-widest text-kjtext-muted">Difficulty</th>
-              <th className="text-left px-4 py-3 uppercase font-mono text-xs tracking-widest text-kjtext-muted">Category</th>
-              <th className="text-left px-4 py-3 uppercase font-mono text-xs tracking-widest text-kjtext-muted">Acceptance</th>
-              <th className="text-left px-4 py-3 uppercase font-mono text-xs tracking-widest text-kjtext-muted">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((p) => (
-              <tr
-                key={p.id}
-                className="border-b border-kjborder/50 hover:bg-kjsurface/50 transition-colors"
-              >
-                <td className="px-4 py-3 text-kjtext-muted font-mono text-sm">{String(p.id).padStart(3, "0")}</td>
-                <td className="px-4 py-3">
-                  <Link href={`/problems/${p.id}`} className="text-kjtext font-medium hover:text-kjprimary transition-colors">
-                    {p.title}
-                  </Link>
-                </td>
-                <td className="px-4 py-3">
-                  <span className={difficultyColor(p.difficulty)}>{p.difficulty}</span>
-                </td>
-                <td className="px-4 py-3 text-kjtext-muted text-sm font-mono">{p.category}</td>
-                <td className="px-4 py-3 text-kjtext-muted text-sm">{p.acceptance}</td>
-                <td className="px-4 py-3">
-                  <span className={`inline-block w-2 h-2 rounded-full ${statusDot(p.status)}`} />
-                </td>
-              </tr>
-            ))}
-            {filtered.length === 0 && (
-              <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-kjtext-muted font-mono text-sm">
-                  No problems match the current filters.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
+      </main>
+    </>
   );
 }

@@ -93,7 +93,7 @@ export default function DashboardPage() {
           <p className="text-lg text-kjtext mb-6">Ready to compete?</p>
           <div className="flex items-center gap-4">
             <Link
-              href="/arena"
+                href="/contests/weekly-42"
               className="bg-kjprimary text-kjbg font-mono font-semibold px-6 py-3 rounded hover:glow-sm transition-all"
             >
               ENTER THE ARENA

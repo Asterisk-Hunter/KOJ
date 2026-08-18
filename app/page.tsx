@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { SignInButton, SignUpButton, UserButton, useAuth } from "@clerk/nextjs";
 import GlitchingTerminal from "@/app/components/GlitchingTerminal";
+import Navigation from "@/app/components/Navigation";
 
 const stats = [
   { label: "PROBLEMS INDEXED", value: "2,408" },
@@ -52,6 +53,7 @@ export default function LandingPage() {
 
   return (
     <div className="min-h-screen flex flex-col">
+      <Navigation />
       {/* Hero Section */}
       <section className="flex-1 flex items-center justify-center px-4 sm:px-6 lg:px-8 py-20">
         <div className="max-w-7xl mx-auto w-full flex flex-col lg:flex-row items-center gap-12 lg:gap-20">
@@ -71,7 +73,7 @@ export default function LandingPage() {
               {!isLoaded ? null : !isSignedIn ? (
                 <>
                   <SignUpButton mode="modal">
-                    <button className="bg-kjprimary text-[#050505] font-mono font-semibold text-sm uppercase tracking-widest px-8 py-3 rounded hover:glow transition-all cursor-pointer">
+                  <button className="bg-kjprimary text-[#050505] font-mono font-semibold text-sm uppercase tracking-widest px-8 py-3 rounded hover:glow transition-all cursor-pointer">
                       Get Started
                     </button>
                   </SignUpButton>
@@ -93,6 +95,10 @@ export default function LandingPage() {
                 </>
               )}
             </div>
+            <div className="flex gap-3 justify-center lg:justify-start mt-5">
+              <Link href="/problems" className="text-xs font-mono text-kjtext-muted hover:text-kjprimary">Browse problems →</Link>
+              <Link href="/contests" className="text-xs font-mono text-kjtext-muted hover:text-kjprimary">View contests →</Link>
+            </div>
           </div>
 
           {/* Right - Terminal */}
@@ -100,6 +106,19 @@ export default function LandingPage() {
             <GlitchingTerminal />
           </div>
         </div>
+      </section>
+
+      <section className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 pb-16 grid md:grid-cols-2 gap-4">
+        <Link href="/problems/1" className="bg-kjsurface border border-kjborder rounded-lg p-5 hover:border-kjprimary/50">
+          <p className="text-xs font-mono text-kjprimary tracking-widest mb-2">FEATURED PROBLEM</p>
+          <h2 className="font-mono text-xl text-kjtext">Two Sum</h2>
+          <p className="text-sm text-kjtext-muted mt-2">Start with a classic hash-map problem from the public archive.</p>
+        </Link>
+        <Link href="/contests/winter-2026" className="bg-kjsurface border border-kjborder rounded-lg p-5 hover:border-kjprimary/50">
+          <p className="text-xs font-mono text-kjprimary tracking-widest mb-2">UPCOMING CONTEST</p>
+          <h2 className="font-mono text-xl text-kjtext">Winter Championship</h2>
+          <p className="text-sm text-kjtext-muted mt-2">Registration is open for 10 problems across five hours.</p>
+        </Link>
       </section>
 
       {/* Stats Strip */}
