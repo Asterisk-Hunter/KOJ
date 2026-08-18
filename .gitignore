@@ -48,3 +48,10 @@ next-env.d.ts
 
 # clerk configuration (can include secrets)
 /.clerk/
+
+# Stakpak session files
+.stakpak/session*
+.stakpak/data/
+
+# Playwright MCP artifacts
+.playwright-mcp/

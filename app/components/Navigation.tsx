@@ -46,6 +46,12 @@ const navLinks = [
       </svg>
     ),
   },
+  {
+    href: "/submissions/1042",
+    signedOutHref: "/submissions/1042",
+    label: "Submissions",
+    icon: <span className="font-mono text-xs">#</span>,
+  },
 ];
 
 export default function Navigation() {
@@ -66,7 +72,7 @@ export default function Navigation() {
           <div className="hidden md:flex items-center gap-6">
             {navLinks.map((link) => {
               const href = isSignedIn ? link.href : link.signedOutHref;
-              const isActive = pathname === href;
+              const isActive = pathname === href || (link.href !== "/dashboard" && pathname.startsWith(`${link.href}/`));
               return (
                 <Link
                   key={href}
@@ -128,7 +134,7 @@ export default function Navigation() {
         <div className="md:hidden bg-kjsurface border-b border-kjborder px-4 pb-4 pt-2">
           {navLinks.map((link) => {
             const href = isSignedIn ? link.href : link.signedOutHref;
-            const isActive = pathname === href;
+            const isActive = pathname === href || (link.href !== "/dashboard" && pathname.startsWith(`${link.href}/`));
             return (
               <Link
                 key={href}
