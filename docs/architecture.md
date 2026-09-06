@@ -1,199 +1,203 @@
 # Architecture
 
-## System diagram
+> Status note: diagram reflects current `feat/sprint1-backend` plus planned realtime. For authoritative status see `docs/status.md`.
+
+## System diagram (current + planned)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    Frontend (Next.js 16 + React)             │
-│  Problem List │ Contest View │ Submission Form │ Leaderboard │
+│  Landing │ Dashboard │ Problems │ Contests/Arena │ Rankings  │
+│  Submissions/[id] │ Admin (problem create + summary)         │
 └──────────────────────────┬──────────────────────────────────┘
-                           │ HTTP/WebSocket
+                           │ HTTP (fetch) + Clerk auth
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    Presentation Layer                        │
-│              Next.js API Routes / FastAPI Routes             │
-│  POST /submit │ GET /problems │ GET /leaderboard │ WS events│
+│              Next.js Route Handlers (`app/api/*`)            │
+│  POST /submissions │ GET /problems │ GET /contests │ etc.   │
+│  GET /rankings │ GET/POST /admin/* │ GET /health             │
 └──────────────────────────┬──────────────────────────────────┘
-                           │
-        ┌──────────────────┼──────────────────┐
-        ▼                  ▼                  ▼
+                           │ SQL (Drizzle) + HTTP (FastAPI)
+         ┌─────────────────┼──────────────────┐
+         ▼                 ▼                  ▼
 ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-│   Auth API   │   │  Problem API │   │Contest Engine│
-│ (Supabase)   │   │ (FastAPI)    │   │  (FastAPI)   │
-└──────────────┘   └──────────────┘   └──────────────┘
-        │                  │                  │
-        └──────────────────┼──────────────────┘
-                           │ SQL
-                           ▼
-                    ┌──────────────────┐
-                    │  Postgres (via   │
-                    │  Supabase)       │
-                    │  - Users         │
-                    │  - Problems      │
-                    │  - TestCases     │
-                    │  - Submissions   │
-                    │  - Contests      │
-                    └──────────────────┘
+│  Auth (Clerk)│   │ Problem /    │   │Contest +     │
+│  Organizations│  │ Submission   │   │Rankings API  │
+│  proxy.ts    │   │ API (Next)   │   │ (Next)       │
+└──────────────┘   └──────┬───────┘   └──────────────┘
+                          │  POST /judge  (X-Judge-Secret)
+                          ▼
+                   ┌──────────────────┐
+                   │  Judge Service   │
+                   │  FastAPI (Python)│
+                   │  py_compile +    │
+                   │  subprocess.run  │
+                   │  + setrlimit     │
+                   └────────┬─────────┘
+                            │ SQL (psycopg)
+                            ▼
+                     ┌──────────────────┐
+                     │  Postgres (Neon) │
+                     │  users           │
+                     │  problems        │
+                     │  problem_test_cases│
+                     │  contests        │
+                     │  contest_problems│
+                     │  contest_registrations│
+                     │  submissions     │
+                     └──────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
-│                    Judge Module (Python)                     │
-│  ├─ Compiler Interface (invoke g++, python3, javac)          │
-│  ├─ Process Isolation (setrlimit, signal.alarm)              │
-│  ├─ Input/Output Pipes (communicate with subprocess)         │
-│  ├─ Verdict Comparator (whitespace-normalized string compare)│
-│  └─ Verdict Writer (write result back to DB + Realtime)      │
-└─────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────┐
-│            Redis (Caching & Rate Limiting)                   │
-│  ├─ Leaderboard Cache (invalidated on each new AC)           │
-│  ├─ Rate Limiter (submissions per user per minute)           │
-│  └─ Session Cache (optional, for performance)                │
-└─────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────┐
-│         Supabase Realtime (Event Distribution)               │
-│  ├─ Subscription: contest participants subscribe to         │
-│  │  submission updates for their contest                     │
-│  ├─ Trigger: new submission verdict written to DB            │
-│  ├─ Broadcast: all subscribed clients get live update        │
-│  └─ Effect: leaderboard & submission status auto-update in UI│
+│  Planned: Redis (Caching & Pub/Sub) → Next.js SSE           │
+│  Leaderboard cache (invalidate on AC) · submission events   │
+│  Status: NOT IMPLEMENTED — see docs/status.md               │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+Previous diagram referencing Supabase Postgres/Realtime is superseded — Neon is authoritative and realtime is Redis→SSE (planned).
 
 ---
 
 ## Architectural styles
 
-| Style | Where | Why | Concrete example |
-|---|---|---|---|
-| **Layered** | Entire system | Separation of concerns across presentation, business logic, data access | Next.js UI → FastAPI routes → DB queries |
-| **Pipe-and-Filter** | Judge module | Each stage has a single responsibility, fixed input/output | Read code → Compile → Execute test by test → Compare output → Aggregate verdict |
-| **MVC** | Frontend | Model (problem state), View (React components), Controller (Next.js page handlers) | Problem page loads problem from DB, renders statement, handles submission form submit |
-| **Event-Driven / Broker** | Realtime leaderboard | DB event (verdict insert) triggers Realtime broadcast; UI is a subscriber | Submission → FastAPI writes verdict → Postgres change event → Supabase Realtime → live leaderboard |
-| **Master-Slave** | Judge execution | Master (FastAPI endpoint) dispatches to slave (subprocess judge), collects result | Submission endpoint spawns judge subprocess, waits for verdict, writes result back |
-
-### Why each pattern exists
-
-- **Layered:** makes code testable (can test judge without web server)
-- **Pipe-and-filter:** makes judge testable in parts (compile module independently, execution module independently)
-- **Event-driven:** makes leaderboard updates responsive without polling (every 5 seconds)
-- **Master-slave:** makes judge sandboxed (subprocess can't directly access web server state)
-
-None of these patterns are forced. Each exists because it solves a real problem.
+| Style | Where | Why | Concrete example | Status |
+|---|---|---|---|---|
+| **Layered** | Entire system | Separation of concerns | Next UI → Route Handlers → Drizzle/Neon; Next → FastAPI → Neon | Implemented |
+| **Pipe-and-Filter** | Judge module | Single-responsibility stages | Read code → py_compile → Execute per test → Compare (normalized) → Aggregate verdict | Implemented (`api/app/judge.py`) |
+| **MVC** | Frontend | Model (problem/contest state), View (React), Controller (page handlers + Route Handlers) | Problem detail loads from `GET /api/problems/[id]`, renders statement, handles Run/Submit | Implemented |
+| **Event-Driven / Broker** | Realtime leaderboard | DB event triggers broadcast; UI subscribes | Planned: submission verdict → Redis pub/sub → SSE → live leaderboard | **Planned, not implemented** |
+| **Master-Slave** | Judge execution | Master (Next handler) dispatches to slave (FastAPI subprocess) | `POST /api/submissions` spawns judge via HTTP, collects verdict | Implemented (HTTP, not in-process thread pool) |
 
 ---
 
 ## Module decomposition
 
-### Module 1: Judge Module (Python)
+### Module 1: Judge Module (Python) — [Implemented]
 
-**Responsibility:** Execute untrusted code submissions safely, return verdicts.
+**Responsibility:** Execute untrusted Python code safely, return verdicts.
 
-**Key function:**
+**Entry:** `POST /judge` (`api/app/main.py` → `api/app/judge.py:execute_judge`)
+
 ```python
-judge_submission(code: str, language: str, testcases: List[str]) -> Verdict
+execute_judge(req: JudgeRequest) -> JudgeResponse  # language, code, cases, time_limit_ms, memory_mb
 ```
 
-**Subprocess isolation:**
-- CPU limit via `resource.setrlimit(resource.RLIMIT_CPU, 2)` — CPU seconds, not wall time
-- Memory limit via `resource.setrlimit(resource.RLIMIT_AS, 256*1024*1024)` — 256MB max
-- Wall-clock timeout via `subprocess.run(..., timeout=3)` — if CPU limit doesn't fire, wall timeout does
-- Runs as restricted OS user with no home directory, no network interface
-- Stdout/stderr captured and returned as part of verdict
+**Isolation:**
+- Syntax check via `py_compile.compile(doraise=True)` — CE on `PyCompileError`/`SyntaxError`
+- Per-case `subprocess.run([sys.executable, tmp.py], input=stdin, timeout=wall_timeout, preexec_fn=setrlimit(RLIMIT_AS, memory_mb*1024*1024))`
+- Wall timeout = `time_limit_ms/1000 + 2.0` s; `RLIMIT_AS` skipped on Windows (no `resource` module)
+- Stdout/stderr truncated 4KB per case; error_message truncated 2KB
 
-**Honest limitations:**
-- No protection against fork bombs
-- No seccomp filtering
-- Timing variance due to server load is acknowledged
+**Honest limitations:** No fork-bomb protection, no seccomp, timing variance under load — documented in `docs/hard-problems.md` and `docs/status.md`.
 
 ---
 
-### Module 2: Problem API (FastAPI)
+### Module 2: Problem API (Next) — [Implemented]
 
-**Responsibility:** CRUD operations for problems, test case management, problem lifecycle state transitions.
+**Responsibility:** List/get problems, compute acceptance/status.
 
-**Endpoints:**
+**Routes:**
 ```
-POST   /problems               Create a problem (problem setter)
-GET    /problems/{id}          Fetch problem statement
-POST   /problems/{id}/testcases Upload test case (problem setter)
-PATCH  /problems/{id}/publish  Transition to Published (admin)
-GET    /problems/archive       List all published problems (public)
+GET  /api/problems          List published problems (?q=&difficulty=&category=)
+GET  /api/problems/[id]     Fetch problem + sample cases + stats
+POST /api/admin/problems    Create problem (admin only) — Module 6
 ```
 
-**State machine:**
+**State machine (intended):**
 ```
 Draft ──(problem setter submits to contest)──> Contest-Active ──(contest ends)──> Published
 ```
+Seed creates 8 `published` problems directly; transitions via contest lifecycle are future work.
 
 ---
 
-### Module 3: Submission API (FastAPI)
+### Module 3: Submission API (Next + FastAPI) — [Implemented]
 
-**Responsibility:** Accept submissions, dispatch to judge, store verdicts, coordinate with Realtime.
+**Responsibility:** Accept submissions, call judge, persist verdicts.
 
-**Endpoints:**
+**Routes:**
 ```
-POST   /contests/{id}/submit       Submit code (contestant)
-GET    /submissions/{id}           Fetch submission & verdict
-GET    /users/me/submissions       List user's submissions
-```
-
-**Lifecycle:**
-```
-Pending ──(judge picks up)──> Running ──(judge finishes)──> Verdict(AC/WA/TLE/MLE/RE/CE)
+POST /api/submissions              Submit (mode run|submit)
+GET  /api/submissions?problemId=&contestId=  List caller's submissions
+GET  /api/submissions/[id]         Fetch one (owner-only)
+POST /judge (FastAPI)              Internal judge
 ```
 
-**Background worker:** FastAPI runs a background thread pool. Submissions sit in an in-memory queue. Worker picks up, calls judge, writes verdict to DB. Writes trigger Supabase Realtime events.
+**Lifecycle (actual):**
+```
+Pending (INSERT) ──> Running (UPDATE startedAt) ──> Verdict via FastAPI ──> persisted (completedAt)
+```
+No background queue — synchronous HTTP with 55s abort, `maxDuration=60`. Background thread pool / Redis queue is future work.
 
 ---
 
-### Module 4: Contest Engine (FastAPI)
+### Module 4: Contest Engine (Next) — [Partially implemented]
 
-**Responsibility:** Create contests, manage time windows, enforce submission deadlines, auto-publish problems.
+**Responsibility:** List/get contests, register, enforce submission windows.
 
-**Endpoints:**
+**Routes:**
 ```
-POST   /contests              Create contest (admin)
-GET    /contests/{id}         Fetch contest details
-POST   /contests/{id}/register Register for contest (contestant)
-PATCH  /contests/{id}/start   Start contest (admin)
-PATCH  /contests/{id}/end     End contest, auto-publish problems (admin)
+GET  /api/contests              List all contests (with problem/registration counts, registered flag)
+GET  /api/contests/[id]         Fetch contest by slug|id + problems
+POST /api/contests/[id]/register Register (auth required)
 ```
 
-**State machine:**
+**State machine (DB enum):**
 ```
-Draft ──(admin starts)──> Live ──(admin ends or deadline passes)──> Ended ──(auto-publish)──> Archived
+draft ──> live ──> ended ──> archived
 ```
+UI status derived from `status` + `startsAt/endsAt` (`deriveUiStatus`). No create/start/end/publish endpoints yet — requires role decision (see `docs/status.md`). Seed provides 4 contests.
 
 ---
 
-### Module 5: Leaderboard (FastAPI + Redis + Supabase Realtime)
+### Module 5: Leaderboard (Next) — [Implemented, on-demand]
 
-**Responsibility:** Compute and serve live contest rankings.
+**Responsibility:** Compute contest rankings.
+
+**Route:** `GET /api/rankings?contestId=` — requires `live|ended|archived`, sorts by `solved DESC, penalty ASC`.
 
 **Algorithm:**
 ```
 For each contestant:
-  solved_count = number of problems with AC
-  penalty = sum over problems:
-    if no AC: 0
-    if AC: time_of_first_ac_minutes + 20 * (wrong_attempts_before_ac)
-
-Sort by: (solved_count DESC, penalty ASC)
+  solved_count = problems with first AC
+  penalty = sum over solved problems:
+    minutes(first_AC - contest.startsAt) + 20 * wrong_before_first_AC
+Sort by (solved DESC, penalty ASC)
 ```
 
-**Live updates:** Leaderboard cached in Redis. On new AC verdict, cache invalidated. Supabase Realtime broadcasts new ranking to all clients.
+**Live updates:** computed per request from `submissions`; Redis cache invalidation + SSE is planned, not implemented.
 
 ---
 
-### Module 6: Frontend (Next.js + React)
+### Module 6: Admin (Next) — [Implemented]
 
-**Components:**
-- `ContestList` — browse available contests
-- `ProblemView` — display problem statement, sample I/O, input area
-- `SubmissionForm` — language dropdown, code textarea, submit button
-- `SubmissionStatus` — live update (Pending → Running → Verdict)
-- `Leaderboard` — real-time ranking via Realtime subscriptions
-- `SubmissionHistory` — user's past submissions with verdicts
+**Responsibility:** Admin-only overview and problem creation.
+
+**Routes:**
+```
+GET  /api/admin/summary     Counts + recent problems/users (admin: org:admin or users.role=admin)
+POST /api/admin/problems    Create problem (same gate)
+```
+
+UI: `app/admin/page.tsx` — fetches summary, shows 403 for non-admins, form to create problems. No contest management or user role editing yet.
+
+---
+
+### Module 7: Frontend (Next.js + React) — [Implemented]
+
+**Pages (see `docs/status.md` for access):**
+- `app/page.tsx` — landing
+- `app/dashboard/page.tsx` — dashboard (no auto-redirect)
+- `app/problems/page.tsx` / `app/problems/[id]/page.tsx` — archive + detail with Run/Submit
+- `app/contests/page.tsx` / `app/contests/[id]/page.tsx` / `app/contests/[id]/arena/page.tsx` — list/detail/arena
+- `app/rankings/page.tsx` — rankings
+- `app/submissions/[id]/page.tsx` — submission detail
+- `app/admin/page.tsx` — admin dashboard
+- `app/sign-in/[[...sign-in]]/page.tsx` / `app/sign-up/[[...sign-up]]/page.tsx` — Clerk catch-alls
+
+---
+
+## DB reference (authoritative)
+
+Neon Postgres via Drizzle — `db/schema.ts`. Enums: `contest_status`, `problem_difficulty`, `problem_status`, `submission_status`, `user_role` (`contestant|problem_setter|admin`). Tables: `users`, `problems`, `problem_test_cases`, `contests`, `contest_problems`, `contest_registrations`, `submissions` (+ legacy `notes`). Seeded: 8 problems, 32 cases, 4 contests, 16 links, zero fake submissions/registrations. See `docs/status.md` for full DDL summary.
