@@ -51,8 +51,8 @@ anything a user says in the moment, including "just push to main" (see [Git work
 | Frontend | Next.js 16.3.0, React 19.2.8, TypeScript, Tailwind CSS v4 (no `tailwind.config.js`; theming via `@theme inline` in `app/globals.css`) |
 | DB / ORM | Neon Postgres + Drizzle ORM (`db/schema.ts`, `db/index.ts`, `db/migrations/`) |
 | Auth | Clerk (`@clerk/nextjs` 7.x) |
-| Judge / API | Separate FastAPI service in `api/` (Python) |
-| Realtime (planned) | Supabase Realtime — not wired up yet |
+| Judge / API | Separate FastAPI service in `api/` (Python) — `POST /judge` (python only) |
+| Realtime (planned) | Redis cache/pub-sub → Next.js SSE — not wired up yet (not Supabase Realtime) |
 
 | Command | Purpose |
 |---|---|
@@ -111,9 +111,7 @@ NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/dashboard
   `proxy.ts` as-is, but add **resource-based auth checks** (`auth()` from `@clerk/nextjs/server`) inside
   server components, Server Actions, and Route Handlers as defense-in-depth. Server Actions and API routes
   bypass proxy matchers.
-- **The instance is single-session mode and organizations are DISABLED** on the Clerk instance. Do not add
-  org flows (`OrganizationSwitcher`, org creation, org memberships) — KOJ has no org model. If you think
-  orgs are needed, ask the user first.
+- **Clerk Organizations are ENABLED** on this instance. DB roles are `contestant | problem_setter | admin` (`user_role` enum); admin APIs accept Clerk `org:admin` **or** DB `admin` (see `docs/status.md`). Dashboard does not auto-redirect admins — `/admin` is separate and returns 403 for unauthorized users. There is **no** `contest_setter` role yet — contest creation is admin-only and not yet exposed; see `docs/status.md` for the recommended next decision before adding org flows.
 - **Never render `<SignInButton>` / `<SignUpButton>` unconditionally.** In single-session mode, rendering
   them while a user is signed in throws `cannot_render_single_session_enabled`. Gate them on auth state:
 
@@ -207,5 +205,5 @@ Before committing or pushing, all of these must be true:
 - [ ] No test files / fixtures / test config left behind
 - [ ] No secrets or env files staged
 - [ ] Diff is minimal and contains no AI slop
-- [ ] Auth flow respected: no unconditional `SignInButton`/`SignUpButton`, no org flows, proxy.ts intact
+- [ ] Auth flow respected: no unconditional `SignInButton`/`SignUpButton`, proxy.ts intact, `org:admin` gate as in `docs/status.md`
 - [ ] Work is on a feature branch with a PR open against `main` — never on `main` itself
