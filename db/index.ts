@@ -12,7 +12,6 @@ if (!url) {
 // in the same worker (HMR-safe; in dev the module is re-evaluated and we
 // detect an existing pool to avoid leaking connections).
 declare global {
-  // eslint-disable-next-line no-var
   var __koj_pg_pool: Pool | undefined;
 }
 
