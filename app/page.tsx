@@ -35,11 +35,11 @@ const features = [
   },
 ];
 
-const footerLinks = [
-  { label: "GitHub", href: "#" },
-  { label: "Documentation", href: "#" },
-  { label: "Status", href: "#" },
-  { label: "Privacy", href: "#" },
+const footerLinks: { label: string; href?: string }[] = [
+  { label: "GitHub" },
+  { label: "Documentation" },
+  { label: "Status" },
+  { label: "Privacy" },
 ];
 
 export default function LandingPage() {
@@ -148,15 +148,26 @@ export default function LandingPage() {
               &copy; 2024 IIIT Kottayam. Built for Competitive Excellence.
             </p>
             <div className="flex items-center gap-6">
-              {footerLinks.map((link) => (
-                <Link
-                  key={link.label}
-                  href={link.href}
-                  className="font-mono text-xs text-kjtext-muted hover:text-kjprimary transition-colors"
-                >
-                  {link.label}
-                </Link>
-              ))}
+              {footerLinks.map((link) =>
+                link.href ? (
+                  <Link
+                    key={link.label}
+                    href={link.href}
+                    className="font-mono text-xs text-kjtext-muted hover:text-kjprimary transition-colors"
+                  >
+                    {link.label}
+                  </Link>
+                ) : (
+                  <span
+                    key={link.label}
+                    title="Coming soon"
+                    className="font-mono text-xs text-kjtext-muted/50 cursor-not-allowed"
+                    aria-disabled="true"
+                  >
+                    {link.label}
+                  </span>
+                ),
+              )}
             </div>
           </div>
         </div>

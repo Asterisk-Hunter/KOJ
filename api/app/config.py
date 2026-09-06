@@ -37,6 +37,16 @@ class Settings(BaseSettings):
         description="TCP port the uvicorn server binds to.",
     )
 
+    JUDGE_INTERNAL_SECRET: str = Field(
+        default="",
+        description="Shared secret for internal /judge calls. Empty = judge disabled (returns 500).",
+    )
+
+    FRONTEND_URL: str = Field(
+        default="",
+        description="Production frontend origin for CORS (e.g. https://koj.vercel.app). Empty = localhost-only in dev.",
+    )
+
     @property
     def FASTAPI_URL(self) -> str:
         """Convenience: the http://host:port origin for CORS allow-lists."""
