@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useAuth } from "@clerk/nextjs";
+import Markdown from "react-markdown";
 import Navigation from "@/app/components/Navigation";
 
 const starter = `# Write your solution here
@@ -237,18 +238,26 @@ export default function ProblemDetailPage() {
               </span>
             </div>
             <h1 className="text-3xl font-mono font-bold text-kjtext mb-8">{problem.title}</h1>
-            {[
-              ["Problem Statement", problem.statement],
-              ["Input Format", problem.inputFormat],
-              ["Output Format", problem.outputFormat],
-              ["Constraints", problem.constraints],
-              ...(problem.explanation ? [["Explanation", problem.explanation] as const] : []),
-            ].map(([heading, text]) => (
+            {(
+              [
+                ["Problem Statement", problem.statement, true],
+                ["Input Format", problem.inputFormat, false],
+                ["Output Format", problem.outputFormat, false],
+                ["Constraints", problem.constraints, false],
+                ...(problem.explanation ? [["Explanation", problem.explanation, true] as const] : []),
+              ] as [string, string, boolean][]
+            ).map(([heading, text, md]) => (
               <section key={heading} className="mb-7">
                 <h2 className="text-xs uppercase tracking-widest font-mono text-kjprimary border-b border-kjborder pb-2 mb-3">
                   {heading}
                 </h2>
-                <p className="text-sm text-kjtext-muted leading-7">{text}</p>
+                {md ? (
+                  <div className="text-sm text-kjtext-muted leading-7 space-y-3 [&_pre]:bg-kjbg [&_pre]:border [&_pre]:border-kjborder [&_pre]:rounded [&_pre]:p-3 [&_pre]:overflow-x-auto [&_code]:font-mono [&_code]:text-[13px]">
+                    <Markdown>{text}</Markdown>
+                  </div>
+                ) : (
+                  <p className="text-sm text-kjtext-muted leading-7">{text}</p>
+                )}
               </section>
             ))}
             <div className="grid sm:grid-cols-2 gap-3 mb-7">

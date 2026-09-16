@@ -12,6 +12,7 @@ import ProblemManagerSection from "@/app/admin/ProblemManagerSection";
 import SubmissionsSection from "@/app/admin/SubmissionsSection";
 
 type Summary = {
+  role?: "admin" | "problem_setter" | "contest_setter";
   counts: { users: number; problems: number; contests: number; submissions: number };
   recentProblems: Array<{ id: number; title: string; difficulty: string; status: string; createdAt: string }>;
   recentUsers: Array<{ clerkId: string; username: string; email: string; role: string; createdAt: string }>;
@@ -153,8 +154,20 @@ export default function AdminPage() {
     <>
       <PageHeader
         eyebrow="Management / DB"
-        title="Admin Dashboard"
-        description="Manage the KOJ catalogue and users. Data is live from Neon via Drizzle."
+        title={
+          data?.role === "problem_setter"
+            ? "Problem Setter Dashboard"
+            : data?.role === "contest_setter"
+              ? "Contest Setter Dashboard"
+              : "Admin Dashboard"
+        }
+        description={
+          data?.role === "problem_setter"
+            ? "Create and manage your competitive programming problems and test cases."
+            : data?.role === "contest_setter"
+              ? "Create and schedule contests, manage problems and registrations."
+              : "Manage the KOJ catalogue, users, contests, and submissions. Data is live from Neon."
+        }
         action={{ label: "VIEW PROBLEMS", href: "/problems" }}
       />
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -177,7 +190,7 @@ export default function AdminPage() {
         {createMessage && <p className="mb-5 border border-kjprimary/20 bg-kjprimary/5 text-kjprimary rounded p-3 text-xs font-mono">{createMessage}</p>}
         {createError && <p className="mb-5 border border-red-500/20 bg-red-500/10 text-red-400 rounded p-3 text-xs font-mono">{createError}</p>}
 
-        <div className="grid xl:grid-cols-2 gap-6">
+        <div className={`grid gap-6 ${data?.role === "problem_setter" ? "grid-cols-1" : "xl:grid-cols-2"}`}>
           <section className="bg-kjsurface border border-kjborder rounded-lg overflow-hidden">
             <div className="px-5 py-4 border-b border-kjborder flex justify-between items-center">
               <h2 className="font-mono text-sm text-kjtext">Problem management</h2>
@@ -352,42 +365,44 @@ export default function AdminPage() {
             </form>
           </section>
 
-          <section className="bg-kjsurface border border-kjborder rounded-lg overflow-hidden h-fit">
-            <div className="px-5 py-4 border-b border-kjborder">
-              <h2 className="font-mono text-sm text-kjtext">User management</h2>
-            </div>
-            {!data && !loading && <p className="px-5 py-8 text-center text-xs font-mono text-kjtext-muted">No data.</p>}
-            {data && (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr>
-                      {["User", "Email", "Role"].map((heading) => (
-                        <th key={heading} className="px-5 py-3 text-left text-[11px] uppercase tracking-widest font-mono text-kjtext-muted">
-                          {heading}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.recentUsers.map((user) => (
-                      <tr key={user.clerkId} className="border-t border-kjborder/70">
-                        <td className="px-5 py-4 font-mono text-sm text-kjtext">{user.username}</td>
-                        <td className="px-5 py-4 text-sm text-kjtext-muted">{user.email}</td>
-                        <td className="px-5 py-4 text-xs font-mono text-kjprimary">{user.role}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+          {data?.role === "admin" && (
+            <section className="bg-kjsurface border border-kjborder rounded-lg overflow-hidden h-fit">
+              <div className="px-5 py-4 border-b border-kjborder">
+                <h2 className="font-mono text-sm text-kjtext">User management</h2>
               </div>
-            )}
-            {data && data.recentUsers.length === 0 && <p className="px-5 py-6 text-center text-xs font-mono text-kjtext-muted">No users.</p>}
-          </section>
+              {!data && !loading && <p className="px-5 py-8 text-center text-xs font-mono text-kjtext-muted">No data.</p>}
+              {data && (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr>
+                        {["User", "Email", "Role"].map((heading) => (
+                          <th key={heading} className="px-5 py-3 text-left text-[11px] uppercase tracking-widest font-mono text-kjtext-muted">
+                            {heading}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.recentUsers.map((user) => (
+                        <tr key={user.clerkId} className="border-t border-kjborder/70">
+                          <td className="px-5 py-4 font-mono text-sm text-kjtext">{user.username}</td>
+                          <td className="px-5 py-4 text-sm text-kjtext-muted">{user.email}</td>
+                          <td className="px-5 py-4 text-xs font-mono text-kjprimary">{user.role}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {data && data.recentUsers.length === 0 && <p className="px-5 py-6 text-center text-xs font-mono text-kjtext-muted">No users.</p>}
+            </section>
+          )}
         </div>
 
-        <ContestsSection />
-        <UsersSection />
-        <SubmissionsSection />
+        {(data?.role === "admin" || data?.role === "contest_setter") && <ContestsSection />}
+        {data?.role === "admin" && <UsersSection />}
+        {data?.role === "admin" && <SubmissionsSection />}
       </main>
     </>
   );

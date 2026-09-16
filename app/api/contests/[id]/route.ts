@@ -165,6 +165,7 @@ export async function GET(
     problemsCount: problemList.length,
     participants,
     registered,
+    inviteRequired: contest.inviteCode !== null,
     currentUserId: userId ?? null,
   });
 }

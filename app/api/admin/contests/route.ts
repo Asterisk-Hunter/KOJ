@@ -101,6 +101,16 @@ export async function POST(req: NextRequest) {
   if (typeof descriptionRaw !== "string") return jsonError("description must be a string", 400);
   if (descriptionRaw.length > 5000) return jsonError("description too long", 400);
 
+  const inviteRaw = b.inviteCode ?? b.invite_code ?? null;
+  let inviteCode: string | null = null;
+  if (inviteRaw !== null && inviteRaw !== "") {
+    if (typeof inviteRaw !== "string" || inviteRaw.trim().length === 0) {
+      return jsonError("inviteCode must be non-empty", 400);
+    }
+    if (inviteRaw.trim().length > 64) return jsonError("inviteCode too long", 400);
+    inviteCode = inviteRaw.trim();
+  }
+
   const startsAtRaw = b.startsAt;
   const endsAtRaw = b.endsAt;
   if (typeof startsAtRaw !== "string" || typeof endsAtRaw !== "string") {
@@ -167,6 +177,7 @@ export async function POST(req: NextRequest) {
       startsAt,
       endsAt,
       status: "draft",
+      inviteCode,
     })
     .returning({ id: contests.id });
 
