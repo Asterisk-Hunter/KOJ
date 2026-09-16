@@ -12,7 +12,7 @@
 
 ### College deployment
 - **Single Linux VM** (4 CPU, 8GB RAM) running Docker/containers, or
-- **Split:** Vercel (Next) + managed FastAPI host (Render/Railway/Fly) + Neon — current intended production (see Vercel section below)
+- **Split:** Vercel (Next) + Cloud Run (FastAPI judge) + Neon — current intended production (see Vercel section below)
 
 ---
 
@@ -69,7 +69,7 @@ Obsolete: `SUPABASE_URL`, `SUPABASE_ANON_KEY` — not used; KOJ uses Clerk + Neo
 
 **Required env vars (all empty in `.env.example`):** `DATABASE_URL` (Neon pooled + `sslmode=require`), `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up`, `NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/dashboard`, `NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/dashboard`, `FASTAPI_URL` (deployed FastAPI origin), `JUDGE_INTERNAL_SECRET` (must match on Next.js + FastAPI), `FRONTEND_URL` (Vercel URL for FastAPI CORS).
 
-**FastAPI separately:** Host on Render/Railway/Fly. Copy `api/.env.example` keys to its env (`DATABASE_URL`, `FASTAPI_HOST`, `FASTAPI_PORT`, `JUDGE_INTERNAL_SECRET`, `FRONTEND_URL`). Set `FRONTEND_URL=https://<vercel-app>.vercel.app` and ensure `JUDGE_INTERNAL_SECRET` is identical on both sides. CORS is tight — `allow_origins=[http://localhost:3000, FASTAPI_URL, FRONTEND_URL]` (never `*`); localhost remains for dev.
+**FastAPI separately:** Host on Cloud Run (`gcloud run deploy koj-judge --source ./api`). Copy `api/.env.example` keys to Cloud Run env vars (`DATABASE_URL`, `FASTAPI_HOST=0.0.0.0`, `JUDGE_INTERNAL_SECRET`, `FRONTEND_URL`). Set `FRONTEND_URL=https://<vercel-app>.vercel.app` and ensure `JUDGE_INTERNAL_SECRET` is identical on both sides. CORS is tight — `allow_origins=[http://localhost:3000, FASTAPI_URL, FRONTEND_URL]` (never `*`); localhost remains for dev.
 
 **Clerk:** In Clerk dashboard, set Sign-in/Sign-up URLs and fallback redirects to the same values. Mirror all `NEXT_PUBLIC_CLERK_*` vars in Vercel Project Settings → Environment Variables. Organizations are **enabled** — `org:admin` role is used for admin APIs.
 

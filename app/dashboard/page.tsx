@@ -28,8 +28,12 @@ function formatRemaining(endsAt: Date): string {
 }
 
 export default async function DashboardPage() {
-  // @ts-expect-error Clerk auth().protect() is valid at runtime; types lag behind Next 16 proxy renaming
-  await auth().protect();
+  const { userId } = await auth();
+  if (!userId) {
+    // proxy.ts already gates /dashboard; this is defense-in-depth for
+    // resource-based auth (see AGENTS.md — createRouteMatcher is deprecated).
+    return <Navigation />;
+  }
 
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);

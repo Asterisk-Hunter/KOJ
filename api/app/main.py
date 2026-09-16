@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from . import db
 from .config import settings
-from .judge import SUPPORTED_LANGUAGES, JudgeRequest, JudgeResponse, execute_judge
+from .judge import SUPPORTED_LANGUAGES, JudgeCase, JudgeRequest, JudgeResponse, execute_judge
 
 logging.basicConfig(
     level=logging.INFO,
@@ -72,6 +74,118 @@ def health() -> JSONResponse:
         "db": db_ok,
     }
     return JSONResponse(content=payload, status_code=200)
+
+
+class JudgeAsyncRequest(BaseModel):
+    submission_id: int
+
+
+@app.post("/judge-async")
+def judge_async_endpoint(
+    req: JudgeAsyncRequest,
+    x_judge_secret: str | None = Header(default=None, alias="X-Judge-Secret"),
+) -> JSONResponse:
+    """Async judge: fetch submission from DB, judge, write verdict back."""
+    if not settings.JUDGE_INTERNAL_SECRET:
+        raise HTTPException(status_code=500, detail="judge secret not configured")
+    if x_judge_secret != settings.JUDGE_INTERNAL_SECRET:
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+    now = datetime.now(timezone.utc)
+    total_tests = 0
+
+    try:
+        with db.get_connection() as conn:
+            with conn.cursor() as cur:
+                # 3. Load submission row
+                cur.execute(
+                    "SELECT id, problem_id, language, code FROM submissions "
+                    "WHERE id = %s AND status = 'running'",
+                    (req.submission_id,),
+                )
+                sub = cur.fetchone()
+                if sub is None:
+                    raise HTTPException(status_code=404, detail="submission not found or not in running state")
+
+                submission_id, problem_id, language, code = sub
+
+                # 5. Load problem metadata
+                cur.execute(
+                    "SELECT time_limit_ms, memory_limit_mb FROM problems WHERE id = %s",
+                    (problem_id,),
+                )
+                problem = cur.fetchone()
+                if problem is None:
+                    raise HTTPException(status_code=404, detail="problem not found")
+
+                time_limit_ms, memory_limit_mb = problem
+
+                # 6. Load test cases
+                cur.execute(
+                    "SELECT input, expected_output FROM problem_test_cases "
+                    "WHERE problem_id = %s ORDER BY position",
+                    (problem_id,),
+                )
+                rows = cur.fetchall()
+                total_tests = len(rows)
+
+        # 7. Build JudgeRequest and execute
+        cases = [JudgeCase(stdin=r[0], expected_stdout=r[1]) for r in rows]
+        judge_req = JudgeRequest(
+            language=language,
+            code=code,
+            cases=cases,
+            time_limit_ms=time_limit_ms,
+            memory_mb=memory_limit_mb,
+        )
+        result = execute_judge(judge_req)
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("judge-async error for submission %s", req.submission_id)
+        _update_submission_status(
+            req.submission_id, "runtime_error", 0, total_tests,
+            0, str(exc), now,
+        )
+        return JSONResponse(status_code=502, content={"status": "runtime_error"})
+
+    # 8. Update submission with verdict
+    _update_submission_status(
+        req.submission_id,
+        result.status,
+        result.passed_tests,
+        result.total_tests,
+        result.execution_time_ms,
+        result.error_message,
+        now,
+    )
+
+    # 9. Return 202
+    return JSONResponse(status_code=202, content={"status": result.status})
+
+
+def _update_submission_status(
+    submission_id: int,
+    status: str,
+    passed_tests: int,
+    total_tests: int,
+    execution_time_ms: int,
+    error_message: str | None,
+    completed_at: datetime,
+) -> None:
+    """Best-effort update of submission verdict."""
+    try:
+        with db.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE submissions SET status = %s, passed_tests = %s, "
+                    "total_tests = %s, execution_time_ms = %s, "
+                    "error_message = %s, completed_at = %s WHERE id = %s",
+                    (status, passed_tests, total_tests, execution_time_ms, error_message, completed_at, submission_id),
+                )
+    except Exception:
+        logger.exception("Failed to update submission %s status to %s", submission_id, status)
 
 
 @app.post("/judge", response_model=JudgeResponse)
