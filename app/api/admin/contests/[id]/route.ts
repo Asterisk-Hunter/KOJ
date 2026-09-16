@@ -7,7 +7,7 @@ import {
   contests,
   problems,
 } from "@/db/schema";
-import { jsonError, requireAdmin } from "@/app/api/admin/authz";
+import { jsonError, requireContestManager } from "@/app/api/admin/authz";
 import {
   lockLinkedProblems,
   nextStatuses,
@@ -31,7 +31,7 @@ export async function GET(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
-  const grant = await requireAdmin();
+  const grant = await requireContestManager();
   if (!grant.ok) return grant.response;
 
   const { id: idRaw } = await ctx.params;
@@ -86,7 +86,7 @@ export async function PATCH(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
-  const grant = await requireAdmin();
+  const grant = await requireContestManager();
   if (!grant.ok) return grant.response;
 
   const { id: idRaw } = await ctx.params;
@@ -201,7 +201,7 @@ export async function DELETE(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
-  const grant = await requireAdmin();
+  const grant = await requireContestManager();
   if (!grant.ok) return grant.response;
 
   const { id: idRaw } = await ctx.params;

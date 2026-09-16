@@ -214,9 +214,9 @@ Explicitly not implemented on this branch:
 
 ## Sprint 2 — `feat/srs-high-priority` (2026-09-16, unmerged)
 
-Role decision taken: **Option A — admin-only contests** (SRS BR-01 compliant; no `contest_setter` enum/Clerk changes).
+Role decision updated 2026-09-16: **Option B — dedicated `contest_setter` role** (team convention). `user_role` enum on live Neon now `contestant | problem_setter | contest_setter | admin` (idempotent `ALTER TYPE ... ADD VALUE`). Contest APIs gated on `requireContestManager()` (Clerk `org:admin`, best-effort `org:contest_setter`, or DB `admin`/`contest_setter`); problem APIs stay setter-gated, user/role management stays admin-only (BR-03). Still manual: create the `contest_setter` org role in the Clerk dashboard for org-path gating (DB role works today).
 
-- Contest CRUD: `POST/GET /api/admin/contests`, `PATCH/DELETE /api/admin/contests/[id]` with legal transitions `draft→live→ended→archived` (+`live→draft` unpublish before start, `archived→ended` reopen); add/remove problems (`draft`-only, BR-04); publish requires ≥1 problem; contest manager UI in `/admin`
+- Contest CRUD: `POST/GET /api/admin/contests`, `PATCH/DELETE /api/admin/contests/[id]` with legal transitions `draft→live→ended→archived` (+`live→draft` unpublish before start, `archived→ended` reopen); add/remove problems (`draft`-only, BR-04); publish requires ≥1 problem; contest manager UI in `/admin`. Gated to admins + `contest_setter`
 - Auto lifecycle: `settleExpiredContests()` runs on contest reads/writes/submissions — past-due `live` flips to `ended`, linked `contest_active` problems publish; client auto-refetches on countdown boundary cross
 - Problems: `GET/PATCH/DELETE /api/admin/problems/[id]` (draft↔published direct; `contest_active` owned by lifecycle; live-contest lock BR-08; setter-ownership checks) + problem delete button in `/admin`
 - Test cases: full CRUD under `/api/admin/problems/[id]/test-cases`, 10 MB/file cap (REQ-PROB-03), 100-case cap, live lock + management UI in `/admin` (per-problem expand: list/add/delete/sample-toggle)
