@@ -216,14 +216,29 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
         # limitation for the trusted college user base (see docs/status.md).
         enforce_as = req.language != "java" and _HAS_RESOURCE
 
-        def _limit_memory() -> None:
-            if _HAS_RESOURCE:
-                # resource unavailable on Windows, skipped silently
+        def _set_resource_limits() -> None:
+            if not _HAS_RESOURCE:
+                return
+            if enforce_as:
+                # Memory limit (REQ-JUDGE-06)
                 resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))  # type: ignore[attr-defined]
+            # CPU time limit in seconds (REQ-JUDGE-04)
+            cpu_s = max(1, int(req.time_limit_ms / 1000) + 1)
+            try:
+                resource.setrlimit(resource.RLIMIT_CPU, (cpu_s, cpu_s + 1))  # type: ignore[attr-defined]
+            except (ValueError, OSError):
+                pass
+            # Limit child processes to prevent fork bombs (REQ-JUDGE-07 / REQ-SAFE-03)
+            # Skipped for Java because the JVM requires multiple runtime threads.
+            if req.language != "java":
+                try:
+                    resource.setrlimit(resource.RLIMIT_NPROC, (32, 32))  # type: ignore[attr-defined]
+                except (ValueError, OSError):
+                    pass
 
         kwargs: dict = {}
-        if enforce_as:
-            kwargs["preexec_fn"] = _limit_memory
+        if _HAS_RESOURCE:
+            kwargs["preexec_fn"] = _set_resource_limits
 
         results: list[CaseResult] = []
         max_runtime = 0

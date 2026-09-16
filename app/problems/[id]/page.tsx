@@ -66,7 +66,16 @@ export default function ProblemDetailPage() {
   const [language, setLanguage] = useState("python");
   const [notice, setNotice] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
   const [verdicts, setVerdicts] = useState<VerdictRow[]>([]);
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const timer = setInterval(() => {
+      setCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [cooldown]);
 
   useEffect(() => {
     let cancelled = false;
@@ -145,7 +154,17 @@ export default function ProblemDetailPage() {
         executionTimeMs?: number | null;
         errorMessage?: string | null;
       };
-      if (!res.ok) throw new Error(data.error ?? `Failed (${res.status})`);
+      if (!res.ok) {
+        if (res.status === 429) {
+          const retryHeader = res.headers.get("Retry-After");
+          const retrySec = retryHeader ? parseInt(retryHeader, 10) : 30;
+          setCooldown(Number.isFinite(retrySec) && retrySec > 0 ? retrySec : 30);
+        }
+        throw new Error(data.error ?? `Failed (${res.status})`);
+      }
+      if (mode === "submit") {
+        setCooldown(30);
+      }
       const parts: string[] = [];
       if (typeof data.passedTests === "number" && typeof data.totalTests === "number")
         parts.push(`${data.passedTests}/${data.totalTests}`);
@@ -290,10 +309,10 @@ export default function ProblemDetailPage() {
               </button>
               <button
                 onClick={() => handleSubmit("submit")}
-                disabled={submitting}
+                disabled={submitting || cooldown > 0}
                 className="bg-kjprimary text-kjbg font-mono font-bold text-xs px-5 py-2 rounded hover:glow-sm disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {submitting ? "SUBMITTING…" : "SUBMIT"}
+                {submitting ? "SUBMITTING…" : cooldown > 0 ? `WAIT ${cooldown}s` : "SUBMIT"}
               </button>
             </div>
             {notice && (
