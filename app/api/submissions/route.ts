@@ -15,7 +15,6 @@ import { settleExpiredContests } from "@/app/api/contests/lifecycle";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
 
 type SubmitMode = "run" | "submit";
 
@@ -250,38 +249,21 @@ export async function POST(req: NextRequest) {
     .set({ status: "running", startedAt: new Date() })
     .where(eq(submissions.id, submissionId));
 
-  // Call FastAPI /judge — fallback is dev-only; prod must set FASTAPI_URL
+  // Fire-and-forget async judge via Cloud Run
   const fastApiUrl = process.env.FASTAPI_URL ?? "http://127.0.0.1:8000";
   const judgeSecret = process.env.JUDGE_INTERNAL_SECRET ?? "";
-  const judgeUrl = `${fastApiUrl.replace(/\/$/, "")}/judge`;
 
-  const judgeCases = caseRows.map((c) => ({
-    stdin: c.input,
-    expected_stdout: c.expectedOutput,
-  }));
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 55000);
-
-  let judgeRes: Response;
   try {
-    judgeRes = await fetch(judgeUrl, {
+    await fetch(`${fastApiUrl.replace(/\/$/, "")}/judge-async`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "X-Judge-Secret": judgeSecret,
       },
-      body: JSON.stringify({
-        language,
-        code,
-        cases: judgeCases,
-        time_limit_ms: problem.timeLimitMs,
-        memory_mb: problem.memoryLimitMb,
-      }),
-      signal: controller.signal,
+      body: JSON.stringify({ submission_id: submissionId }),
+      signal: AbortSignal.timeout(5000),
     });
   } catch {
-    clearTimeout(timeoutId);
     await db
       .update(submissions)
       .set({
@@ -292,61 +274,11 @@ export async function POST(req: NextRequest) {
       .where(eq(submissions.id, submissionId));
     return jsonError("judge unavailable", 502);
   }
-  clearTimeout(timeoutId);
 
-  if (!judgeRes.ok) {
-    // Map judge errors to runtime_error in DB except 422/401
-    const text = await judgeRes.text().catch(() => "");
-    await db
-      .update(submissions)
-      .set({
-        status: "runtime_error",
-        errorMessage: text.slice(0, 2048) || "judge unavailable",
-        completedAt: new Date(),
-      })
-      .where(eq(submissions.id, submissionId));
-    // If judge returned 401/422 etc, propagate as 502 per spec (judge unavailable)
-    return jsonError("judge unavailable", 502);
-  }
-
-  type JudgeResponse = {
-    status: string;
-    passed_tests: number;
-    total_tests: number;
-    execution_time_ms: number;
-    error_message: string | null;
-    cases: unknown;
-  };
-
-  const data = (await judgeRes.json()) as JudgeResponse;
-
-  // Validate judge response shape minimally
-  const status = data.status as typeof submissions.$inferSelect.status;
-  const passedTests = typeof data.passed_tests === "number" ? data.passed_tests : 0;
-  const totalTests = typeof data.total_tests === "number" ? data.total_tests : caseRows.length;
-  const executionTimeMs = typeof data.execution_time_ms === "number" ? data.execution_time_ms : 0;
-  const errorMessage = data.error_message ?? null;
-
-  await db
-    .update(submissions)
-    .set({
-      status,
-      passedTests,
-      totalTests,
-      executionTimeMs,
-      errorMessage,
-      completedAt: new Date(),
-    })
-    .where(eq(submissions.id, submissionId));
-
-  return NextResponse.json({
-    id: submissionId,
-    status,
-    passedTests,
-    totalTests,
-    executionTimeMs,
-    errorMessage,
-  });
+  return NextResponse.json(
+    { id: submissionId, status: "running" },
+    { status: 202 },
+  );
 }
 
 export async function GET(req: NextRequest) {
