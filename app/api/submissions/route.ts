@@ -11,6 +11,7 @@ import {
   submissions,
   users,
 } from "@/db/schema";
+import { settleExpiredContests } from "@/app/api/contests/lifecycle";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -81,6 +82,9 @@ export async function POST(req: NextRequest) {
 
   const effectiveContestId: number | null = contestId ?? null;
 
+  // Settle past-due live contests before enforcing contest windows.
+  await settleExpiredContests();
+
   // Load problem
   const problemRows = await db
     .select()
@@ -135,6 +139,25 @@ export async function POST(req: NextRequest) {
   } else {
     if (problem.status !== "published") {
       return jsonError("problem not available for practice", 403);
+    }
+  }
+
+  // Rate limit: max 1 submission per 30s per user+problem (REQ-RATE-01/02).
+  // Applies to both run and submit modes — both consume judge capacity.
+  const recentRows = await db
+    .select({ submittedAt: submissions.submittedAt })
+    .from(submissions)
+    .where(and(eq(submissions.userId, userId), eq(submissions.problemId, problemId)))
+    .orderBy(desc(submissions.submittedAt))
+    .limit(1);
+  if (recentRows.length > 0 && recentRows[0].submittedAt) {
+    const elapsedSec = (Date.now() - recentRows[0].submittedAt.getTime()) / 1000;
+    if (elapsedSec < 30) {
+      const retryAfter = Math.max(1, Math.ceil(30 - elapsedSec));
+      return NextResponse.json(
+        { error: "rate limited: 1 submission per 30 seconds per problem" },
+        { status: 429, headers: { "Retry-After": String(retryAfter) } },
+      );
     }
   }
 

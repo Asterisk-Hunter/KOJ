@@ -21,7 +21,7 @@
 - **Registration:** `POST /api/contests/[id]/register` — implemented, requires sign-in and live contest
 - **Visibility rules:** before start / during / after derived per contest; enforcement in `POST /api/submissions` (live + registered + problem in contest)
 - **Timed enforcement:** submissions rejected if contest not `live` — implemented
-- **[Planned] Contest creation / editing / publishing:** no `POST /api/contests` or `PATCH /contests/[id]/start|end` yet; contests come from seed (4 contests, 16 links) and direct DB. Requires role decision above.
+- **Contest creation / editing / publishing:** [Implemented on `feat/srs-high-priority`] admin-only `POST/GET /api/admin/contests`, `PATCH/DELETE /api/admin/contests/[id]` (publish/unpublish/end/archive transitions), add/remove problems via `/api/admin/contests/[id]/problems`, contest manager UI in `/admin`. Past-due `live` contests auto-flip to `ended` (lazy settle on contest reads/writes) and linked problems publish to the archive.
 
 ### Code Submission & Judging — [Implemented, Python only]
 - **Submission UI:** `app/problems/[id]/page.tsx` and `app/contests/[id]/arena/page.tsx` — language selector (python only), code editor, Run (samples) vs Submit (all cases)
