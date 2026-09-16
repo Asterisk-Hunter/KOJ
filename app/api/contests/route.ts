@@ -3,6 +3,7 @@ import { auth } from "@clerk/nextjs/server";
 import { asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contestRegistrations, contests } from "@/db/schema";
+import { settleExpiredContests } from "@/app/api/contests/lifecycle";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,6 +35,9 @@ function deriveUiStatus(
 
 export async function GET() {
   const { userId } = await auth();
+
+  // Lazy automatic end handling: past-due live contests flip to ended first.
+  await settleExpiredContests();
 
   const contestRows = await db
     .select()

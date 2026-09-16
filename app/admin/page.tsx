@@ -5,8 +5,14 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import PageHeader from "@/app/components/PageHeader";
 import StatCard from "@/app/components/StatCard";
+import ContestsSection from "@/app/admin/ContestsSection";
+import UsersSection from "@/app/admin/UsersSection";
+import ProblemTestCases from "@/app/admin/ProblemTestCases";
+import ProblemManagerSection from "@/app/admin/ProblemManagerSection";
+import SubmissionsSection from "@/app/admin/SubmissionsSection";
 
 type Summary = {
+  role?: "admin" | "problem_setter" | "contest_setter";
   counts: { users: number; problems: number; contests: number; submissions: number };
   recentProblems: Array<{ id: number; title: string; difficulty: string; status: string; createdAt: string }>;
   recentUsers: Array<{ clerkId: string; username: string; email: string; role: string; createdAt: string }>;
@@ -42,6 +48,9 @@ export default function AdminPage() {
   const [createMessage, setCreateMessage] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [expandedTests, setExpandedTests] = useState<number | null>(null);
+  const [editingProblemId, setEditingProblemId] = useState<number | null>(null);
 
   async function fetchSummary() {
     setLoading(true);
@@ -115,12 +124,50 @@ export default function AdminPage() {
     }
   }
 
+  async function handleDeleteProblem(id: number) {
+    if (
+      !window.confirm(
+        `Delete problem #${id}? Only problems with no contest links and no submissions can be deleted.`,
+      )
+    ) {
+      return;
+    }
+    setDeletingId(id);
+    setCreateMessage(null);
+    setCreateError(null);
+    try {
+      const res = await fetch(`/api/admin/problems/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(j?.error ?? `delete failed (${res.status})`);
+      }
+      setCreateMessage(`Deleted problem #${id}`);
+      void fetchSummary();
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : "delete failed");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   return (
     <>
       <PageHeader
         eyebrow="Management / DB"
-        title="Admin Dashboard"
-        description="Manage the KOJ catalogue and users. Data is live from Neon via Drizzle."
+        title={
+          data?.role === "problem_setter"
+            ? "Problem Setter Dashboard"
+            : data?.role === "contest_setter"
+              ? "Contest Setter Dashboard"
+              : "Admin Dashboard"
+        }
+        description={
+          data?.role === "problem_setter"
+            ? "Create and manage your competitive programming problems and test cases."
+            : data?.role === "contest_setter"
+              ? "Create and schedule contests, manage problems and registrations."
+              : "Manage the KOJ catalogue, users, contests, and submissions. Data is live from Neon."
+        }
         action={{ label: "VIEW PROBLEMS", href: "/problems" }}
       />
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -143,7 +190,7 @@ export default function AdminPage() {
         {createMessage && <p className="mb-5 border border-kjprimary/20 bg-kjprimary/5 text-kjprimary rounded p-3 text-xs font-mono">{createMessage}</p>}
         {createError && <p className="mb-5 border border-red-500/20 bg-red-500/10 text-red-400 rounded p-3 text-xs font-mono">{createError}</p>}
 
-        <div className="grid xl:grid-cols-2 gap-6">
+        <div className={`grid gap-6 ${data?.role === "problem_setter" ? "grid-cols-1" : "xl:grid-cols-2"}`}>
           <section className="bg-kjsurface border border-kjborder rounded-lg overflow-hidden">
             <div className="px-5 py-4 border-b border-kjborder flex justify-between items-center">
               <h2 className="font-mono text-sm text-kjtext">Problem management</h2>
@@ -154,16 +201,82 @@ export default function AdminPage() {
             )}
             {data &&
               data.recentProblems.map((problem) => (
-                <div key={problem.id} className="px-5 py-4 border-b border-kjborder/70 flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm text-kjtext">{problem.title}</p>
-                    <p className="text-xs font-mono text-kjtext-muted mt-1">
-                      #{String(problem.id).padStart(3, "0")} · {problem.status} · {problem.difficulty}
-                    </p>
+                <div key={problem.id} className="px-5 py-4 border-b border-kjborder/70">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm text-kjtext">{problem.title}</p>
+                      <p className="text-xs font-mono text-kjtext-muted mt-1">
+                        #{String(problem.id).padStart(3, "0")} · {problem.status} · {problem.difficulty}
+                      </p>
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                      {problem.status === "draft" && (
+                        <button
+                          onClick={async () => {
+                            const res = await fetch(`/api/admin/problems/${problem.id}`, {
+                              method: "PATCH",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ status: "published" }),
+                            });
+                            if (res.ok) void fetchSummary();
+                          }}
+                          className="border border-kjprimary/30 rounded px-3 py-1.5 text-[11px] font-mono text-kjprimary hover:bg-kjprimary/10"
+                        >
+                          PUBLISH
+                        </button>
+                      )}
+                      {problem.status === "published" && (
+                        <button
+                          onClick={async () => {
+                            const res = await fetch(`/api/admin/problems/${problem.id}`, {
+                              method: "PATCH",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ status: "draft" }),
+                            });
+                            if (res.ok) void fetchSummary();
+                          }}
+                          className="border border-yellow-500/30 rounded px-3 py-1.5 text-[11px] font-mono text-yellow-400 hover:bg-yellow-500/10"
+                        >
+                          UNPUBLISH
+                        </button>
+                      )}
+                      {problem.status === "contest_active" && (
+                        <span className="border border-kjborder rounded px-3 py-1.5 text-[11px] font-mono text-kjtext-muted opacity-50">
+                          LOCKED
+                        </span>
+                      )}
+                      <button
+                        onClick={() => setEditingProblemId((prev) => (prev === problem.id ? null : problem.id))}
+                        className="border border-kjborder rounded px-3 py-1.5 text-[11px] font-mono text-kjtext-muted hover:text-kjprimary"
+                      >
+                        {editingProblemId === problem.id ? "CLOSE" : "EDIT"}
+                      </button>
+                      <button
+                        onClick={() => setExpandedTests((prev) => (prev === problem.id ? null : problem.id))}
+                        className="border border-kjborder rounded px-3 py-1.5 text-[11px] font-mono text-kjtext-muted"
+                      >
+                        {expandedTests === problem.id ? "HIDE" : "TESTS"}
+                      </button>
+                      <Link href={`/problems/${problem.id}`} className="border border-kjborder rounded px-3 py-1.5 text-[11px] font-mono text-kjtext-muted">
+                        VIEW
+                      </Link>
+                      <button
+                        onClick={() => void handleDeleteProblem(problem.id)}
+                        disabled={deletingId === problem.id}
+                        className="border border-kjborder rounded px-3 py-1.5 text-[11px] font-mono text-kjtext-muted hover:text-red-400 disabled:opacity-50"
+                      >
+                        {deletingId === problem.id ? "…" : "DEL"}
+                      </button>
+                    </div>
                   </div>
-                  <Link href={`/problems/${problem.id}`} className="border border-kjborder rounded px-3 py-1.5 text-[11px] font-mono text-kjtext-muted">
-                    VIEW
-                  </Link>
+                  {editingProblemId === problem.id && (
+                    <ProblemManagerSection
+                      problemId={problem.id}
+                      onClose={() => setEditingProblemId(null)}
+                      onSaved={() => void fetchSummary()}
+                    />
+                  )}
+                  {expandedTests === problem.id && <ProblemTestCases problemId={problem.id} />}
                 </div>
               ))}
             <form onSubmit={handleCreate} className="p-5 space-y-3 bg-kjbg/30">
@@ -252,38 +365,44 @@ export default function AdminPage() {
             </form>
           </section>
 
-          <section className="bg-kjsurface border border-kjborder rounded-lg overflow-hidden h-fit">
-            <div className="px-5 py-4 border-b border-kjborder">
-              <h2 className="font-mono text-sm text-kjtext">User management</h2>
-            </div>
-            {!data && !loading && <p className="px-5 py-8 text-center text-xs font-mono text-kjtext-muted">No data.</p>}
-            {data && (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr>
-                      {["User", "Email", "Role"].map((heading) => (
-                        <th key={heading} className="px-5 py-3 text-left text-[11px] uppercase tracking-widest font-mono text-kjtext-muted">
-                          {heading}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.recentUsers.map((user) => (
-                      <tr key={user.clerkId} className="border-t border-kjborder/70">
-                        <td className="px-5 py-4 font-mono text-sm text-kjtext">{user.username}</td>
-                        <td className="px-5 py-4 text-sm text-kjtext-muted">{user.email}</td>
-                        <td className="px-5 py-4 text-xs font-mono text-kjprimary">{user.role}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+          {data?.role === "admin" && (
+            <section className="bg-kjsurface border border-kjborder rounded-lg overflow-hidden h-fit">
+              <div className="px-5 py-4 border-b border-kjborder">
+                <h2 className="font-mono text-sm text-kjtext">User management</h2>
               </div>
-            )}
-            {data && data.recentUsers.length === 0 && <p className="px-5 py-6 text-center text-xs font-mono text-kjtext-muted">No users.</p>}
-          </section>
+              {!data && !loading && <p className="px-5 py-8 text-center text-xs font-mono text-kjtext-muted">No data.</p>}
+              {data && (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr>
+                        {["User", "Email", "Role"].map((heading) => (
+                          <th key={heading} className="px-5 py-3 text-left text-[11px] uppercase tracking-widest font-mono text-kjtext-muted">
+                            {heading}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.recentUsers.map((user) => (
+                        <tr key={user.clerkId} className="border-t border-kjborder/70">
+                          <td className="px-5 py-4 font-mono text-sm text-kjtext">{user.username}</td>
+                          <td className="px-5 py-4 text-sm text-kjtext-muted">{user.email}</td>
+                          <td className="px-5 py-4 text-xs font-mono text-kjprimary">{user.role}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {data && data.recentUsers.length === 0 && <p className="px-5 py-6 text-center text-xs font-mono text-kjtext-muted">No users.</p>}
+            </section>
+          )}
         </div>
+
+        {(data?.role === "admin" || data?.role === "contest_setter") && <ContestsSection />}
+        {data?.role === "admin" && <UsersSection />}
+        {data?.role === "admin" && <SubmissionsSection />}
       </main>
     </>
   );

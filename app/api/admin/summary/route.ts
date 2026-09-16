@@ -1,52 +1,22 @@
 import { NextResponse } from "next/server";
-import { auth } from "@clerk/nextjs/server";
 import { desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { contests, problems, submissions, users } from "@/db/schema";
+import { requireStaff } from "@/app/api/admin/authz";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function jsonError(message: string, status: number) {
-  return NextResponse.json({ error: message }, { status });
-}
-
-async function isAuthorized(userId: string): Promise<boolean> {
-  const authObj = await auth();
-  // Clerk org:admin check
-  let clerkAdmin = false;
-  try {
-    const hasFn = (authObj as unknown as { has?: (arg: unknown) => Promise<boolean> | boolean }).has;
-    if (typeof hasFn === "function") {
-      const res = hasFn.call(authObj, { role: "org:admin" });
-      clerkAdmin = res instanceof Promise ? await res : Boolean(res);
-    }
-  } catch {
-    clerkAdmin = false;
-  }
-  if (clerkAdmin) return true;
-
-  const rows = await db.select().from(users).where(eq(users.clerkId, userId)).limit(1);
-  if (rows.length > 0 && rows[0].role === "admin") return true;
-  return false;
-}
-
 export async function GET() {
-  const { userId } = await auth();
-  if (!userId) {
-    return jsonError("unauthorized", 401);
-  }
-  const authorized = await isAuthorized(userId);
-  if (!authorized) {
-    return jsonError("forbidden", 403);
-  }
+  const grant = await requireStaff();
+  if (!grant.ok) return grant.response;
 
   const [usersCountRow] = await db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(users);
   const [problemsCountRow] = await db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(problems);
   const [contestsCountRow] = await db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(contests);
   const [submissionsCountRow] = await db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(submissions);
 
-  const recentProblems = await db
+  const problemQuery = db
     .select({
       id: problems.id,
       title: problems.title,
@@ -54,23 +24,33 @@ export async function GET() {
       status: problems.status,
       createdAt: problems.createdAt,
     })
-    .from(problems)
-    .orderBy(desc(problems.createdAt))
-    .limit(5);
+    .from(problems);
 
-  const recentUsers = await db
-    .select({
-      clerkId: users.clerkId,
-      username: users.username,
-      email: users.email,
-      role: users.role,
-      createdAt: users.createdAt,
-    })
-    .from(users)
-    .orderBy(desc(users.createdAt))
-    .limit(5);
+  const recentProblems = await (
+    grant.role === "problem_setter"
+      ? problemQuery.where(eq(problems.authorId, grant.userId))
+      : problemQuery
+  )
+    .orderBy(desc(problems.createdAt))
+    .limit(10);
+
+  const recentUsers =
+    grant.role === "admin"
+      ? await db
+          .select({
+            clerkId: users.clerkId,
+            username: users.username,
+            email: users.email,
+            role: users.role,
+            createdAt: users.createdAt,
+          })
+          .from(users)
+          .orderBy(desc(users.createdAt))
+          .limit(5)
+      : [];
 
   return NextResponse.json({
+    role: grant.role,
     counts: {
       users: usersCountRow?.count ?? 0,
       problems: problemsCountRow?.count ?? 0,

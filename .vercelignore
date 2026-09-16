@@ -1,0 +1,6 @@
+# Vercel hosts the Next.js frontend only. The Python judge service in the
+# top-level api/ dir deploys separately to Cloud Run (see api/Dockerfile) —
+# never bundle it into Vercel builds (it triggers Python detection and
+# shadows Next.js). Leading slash: only the root api/, NOT app/api/
+# (our Next.js Route Handlers).
+/api/

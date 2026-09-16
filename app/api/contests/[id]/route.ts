@@ -3,6 +3,7 @@ import { auth } from "@clerk/nextjs/server";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contestRegistrations, contests, problems } from "@/db/schema";
+import { settleExpiredContests } from "@/app/api/contests/lifecycle";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -55,6 +56,7 @@ export async function GET(
   const { id: idRaw } = await ctx.params;
   if (!idRaw || typeof idRaw !== "string") return jsonError("invalid id", 400);
 
+  await settleExpiredContests();
   const contest = await findContest(idRaw);
   if (!contest) return jsonError("contest not found", 404);
 
@@ -163,6 +165,7 @@ export async function GET(
     problemsCount: problemList.length,
     participants,
     registered,
+    inviteRequired: contest.inviteCode !== null,
     currentUserId: userId ?? null,
   });
 }
