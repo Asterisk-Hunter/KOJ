@@ -92,6 +92,32 @@ export async function requireSetter(): Promise<SetterGrant> {
   return { ok: false, response: jsonError("forbidden", 403) };
 }
 
+export type StaffRole = "admin" | "problem_setter" | "contest_setter";
+
+export type StaffGrant =
+  | { ok: true; userId: string; role: StaffRole }
+  | { ok: false; response: NextResponse };
+
+/**
+ * Staff gate: admin, problem_setter, or contest_setter.
+ */
+export async function requireStaff(): Promise<StaffGrant> {
+  const { userId } = await auth();
+  if (!userId) return { ok: false, response: jsonError("unauthorized", 401) };
+  if (await clerkIsOrgAdmin()) return { ok: true, userId, role: "admin" };
+  if (await clerkHasOrgRole("org:contest_setter")) return { ok: true, userId, role: "contest_setter" };
+  const rows = await db
+    .select({ role: users.role })
+    .from(users)
+    .where(eq(users.clerkId, userId))
+    .limit(1);
+  const r = rows.length > 0 ? rows[0].role : null;
+  if (r === "admin" || r === "contest_setter" || r === "problem_setter") {
+    return { ok: true, userId, role: r as StaffRole };
+  }
+  return { ok: false, response: jsonError("forbidden", 403) };
+}
+
 /**
  * Ensure a `users` row exists for a Clerk user id (lazy-create from Clerk,
  * same shape as the submissions/register routes). Needed because admin

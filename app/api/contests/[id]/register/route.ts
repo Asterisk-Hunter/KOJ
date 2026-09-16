@@ -49,7 +49,7 @@ async function findContest(idRaw: string) {
 }
 
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
   const { userId } = await auth();
@@ -61,6 +61,21 @@ export async function POST(
   await settleExpiredContests();
   const contest = await findContest(idRaw);
   if (!contest) return jsonError("contest not found", 404);
+
+  // Invite-based registration (REQ-CONT-02/06): contests with an invite
+  // code require the matching code; others are open enrollment.
+  if (contest.inviteCode !== null) {
+    let inviteCode: unknown = null;
+    try {
+      const body = (await req.json()) as Record<string, unknown>;
+      inviteCode = body.inviteCode ?? body.invite_code ?? null;
+    } catch {
+      inviteCode = null;
+    }
+    if (typeof inviteCode !== "string" || inviteCode !== contest.inviteCode) {
+      return jsonError("invalid invite code", 403);
+    }
+  }
 
   const now = new Date();
   const uiStatus = deriveUiStatus(contest.status, contest.startsAt, contest.endsAt, now);

@@ -46,7 +46,7 @@ export default function ContestsSection() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<number, ContestDetail>>({});
-  const [form, setForm] = useState({ title: "", description: "", slug: "", startsAt: "", endsAt: "" });
+  const [form, setForm] = useState({ title: "", description: "", slug: "", startsAt: "", endsAt: "", inviteCode: "" });
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [addProblemId, setAddProblemId] = useState<Record<number, string>>({});
@@ -110,13 +110,14 @@ export default function ContestsSection() {
           slug: form.slug.trim() === "" ? undefined : form.slug.trim(),
           startsAt: new Date(form.startsAt).toISOString(),
           endsAt: new Date(form.endsAt).toISOString(),
+          inviteCode: form.inviteCode.trim() === "" ? undefined : form.inviteCode.trim(),
         };
         const r = await callJson("/api/admin/contests", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-        if (r.ok) setForm({ title: "", description: "", slug: "", startsAt: "", endsAt: "" });
+        if (r.ok) setForm({ title: "", description: "", slug: "", startsAt: "", endsAt: "", inviteCode: "" });
         return { ...r, message: r.ok ? `Created contest #${(r.body as { id?: number })?.id}` : r.message };
       } finally {
         setCreating(false);
@@ -363,6 +364,16 @@ export default function ContestsSection() {
             placeholder="slug (auto)"
             className={inputCls}
           />
+          <input
+            value={form.inviteCode}
+            onChange={(e) => setForm({ ...form, inviteCode: e.target.value })}
+            placeholder="invite code (open if empty)"
+            maxLength={64}
+            className={inputCls}
+          />
+          <span className="text-[11px] font-mono text-kjtext-muted self-center">empty = open enrollment</span>
+        </div>
+        <div className="grid sm:grid-cols-2 gap-3">
           <label className="text-[11px] font-mono text-kjtext-muted">
             STARTS
             <input

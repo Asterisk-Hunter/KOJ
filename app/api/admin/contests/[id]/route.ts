@@ -64,6 +64,7 @@ export async function GET(
     startsAt: contest.startsAt.toISOString(),
     endsAt: contest.endsAt.toISOString(),
     status: contest.status,
+    inviteCode: contest.inviteCode,
     problems: links,
     registrations: regs.length,
   });
@@ -75,6 +76,7 @@ type PatchBody = {
   startsAt?: unknown;
   endsAt?: unknown;
   status?: unknown;
+  inviteCode?: unknown;
 };
 
 /**
@@ -172,6 +174,19 @@ export async function PATCH(
     if (typeof b.description !== "string") return jsonError("description must be a string", 400);
     if (b.description.length > 5000) return jsonError("description too long", 400);
     patch.description = b.description;
+  }
+  if (b.inviteCode !== undefined) {
+    if (b.inviteCode === null) {
+      patch.inviteCode = null;
+    } else if (
+      typeof b.inviteCode !== "string" ||
+      b.inviteCode.trim().length === 0 ||
+      b.inviteCode.trim().length > 64
+    ) {
+      return jsonError("inviteCode must be a string 1..64 chars or null", 400);
+    } else {
+      patch.inviteCode = b.inviteCode.trim();
+    }
   }
 
   let startsAt = contest.startsAt;

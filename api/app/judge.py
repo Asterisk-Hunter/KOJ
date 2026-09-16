@@ -37,6 +37,7 @@ Verdict = Literal[
     "memory_limit_exceeded",
     "runtime_error",
     "compilation_error",
+    "presentation_error",
 ]
 
 
@@ -89,6 +90,13 @@ def _normalize_output(s: str) -> list[str]:
 
 def _outputs_equal(actual: str, expected: str) -> bool:
     return _normalize_output(actual) == _normalize_output(expected)
+
+
+def _whitespace_only_diff(actual: str, expected: str) -> bool:
+    # True when outputs match after removing ALL whitespace: the program is
+    # logically correct but formatted wrong -> presentation_error (REQ-JUDGE-11)
+    strip = lambda s: "".join(s.split())
+    return strip(actual) == strip(expected) and not _outputs_equal(actual, expected)
 
 
 def _ce_response(message: str, total: int) -> JudgeResponse:
@@ -321,6 +329,21 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
                             stderr=stderr_trunc,
                         )
                     )
+                elif _whitespace_only_diff(proc.stdout, case.expected_stdout):
+                    verdict = "presentation_error"
+                    if first_error is None:
+                        aggregate = verdict
+                        first_error = None
+                    results.append(
+                        CaseResult(
+                            index=idx,
+                            passed=False,
+                            verdict=verdict,
+                            runtime_ms=elapsed_ms,
+                            stdout=stdout_trunc,
+                            stderr=stderr_trunc,
+                        )
+                    )
                 else:
                     verdict = "wrong_answer"
                     if first_error is None:
@@ -385,12 +408,11 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
         elif total == 0:
             aggregate = "accepted"
 
-        # error_message is first error's message truncated 2KB, except WA has no message
+        # error_message is first error's message truncated 2KB, except
+        # accepted/wrong_answer/presentation_error which carry no message
         error_message: str | None = None
-        if aggregate != "accepted" and aggregate != "wrong_answer":
+        if aggregate not in ("accepted", "wrong_answer", "presentation_error"):
             error_message = _truncate(first_error or "", 2048) if first_error else None
-        elif aggregate == "wrong_answer":
-            error_message = None
 
         return JudgeResponse(
             status=aggregate,
