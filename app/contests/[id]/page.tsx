@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Navigation from "@/app/components/Navigation";
 
 type UiStatus = "Active" | "Registration Open" | "Upcoming" | "Finished";
@@ -74,6 +74,7 @@ export default function ContestDetailPage() {
   const [now, setNow] = useState(() => Date.now());
   const [registering, setRegistering] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const boundaryReloaded = useRef(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -103,6 +104,23 @@ export default function ContestDetailPage() {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
+
+  // Automatic start/end handling client-side: when the countdown crosses the
+  // start/end boundary, refetch once so status + problems update by themselves.
+  useEffect(() => {
+    if (!contest || boundaryReloaded.current) return;
+    const boundary =
+      contest.status === "Active"
+        ? new Date(contest.endsAt).getTime()
+        : contest.status === "Registration Open" || contest.status === "Upcoming"
+          ? new Date(contest.startsAt).getTime()
+          : null;
+    if (boundary !== null && now >= boundary) {
+      boundaryReloaded.current = true;
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      void load();
+    }
+  }, [now, contest, load]);
 
   const countdown = useMemo(() => {
     if (!contest) return "00:00:00";

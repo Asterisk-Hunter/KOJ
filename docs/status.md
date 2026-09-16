@@ -212,6 +212,23 @@ Explicitly not implemented on this branch:
 
 ---
 
+## Sprint 2 — `feat/srs-high-priority` (2026-09-16, unmerged)
+
+Role decision taken: **Option A — admin-only contests** (SRS BR-01 compliant; no `contest_setter` enum/Clerk changes).
+
+- Contest CRUD: `POST/GET /api/admin/contests`, `PATCH/DELETE /api/admin/contests/[id]` with legal transitions `draft→live→ended→archived` (+`live→draft` unpublish before start, `archived→ended` reopen); add/remove problems (`draft`-only, BR-04); publish requires ≥1 problem; contest manager UI in `/admin`
+- Auto lifecycle: `settleExpiredContests()` runs on contest reads/writes/submissions — past-due `live` flips to `ended`, linked `contest_active` problems publish; client auto-refetches on countdown boundary cross
+- Problems: `GET/PATCH/DELETE /api/admin/problems/[id]` (draft↔published direct; `contest_active` owned by lifecycle; live-contest lock BR-08; setter-ownership checks) + problem delete button in `/admin`
+- Test cases: full CRUD under `/api/admin/problems/[id]/test-cases`, 10 MB/file cap (REQ-PROB-03), 100-case cap, live lock
+- Users: `GET/PATCH /api/admin/users` (search/filter/role change, self-demotion refused) + role-management UI in `/admin`
+- Rate limiting: `POST /api/submissions` → 429 + `Retry-After` after 1 submission / 30s / problem (REQ-RATE-01/02)
+- Webhooks: `POST /api/webhooks/clerk` (Svix-verified, no new deps; user created/updated/deleted sync with anonymize-on-delete; org events acked, roles stay admin-managed). Needs `CLERK_WEBHOOK_SECRET`
+- Realtime: `GET /api/contests/[id]/events` SSE version ticker (2s) + rankings auto-refetch while live; Redis pub/sub stays the v2 path for cross-instance fan-out
+- Observability: `GET /api/admin/metrics` (verdict distribution, 24h latency, judge-down count, recent failures)
+- Still open: invite-code registration (needs `invite_code` column + migration against live Neon — not attempted without DB access), test-case/problem edit UI, C++/Java judge, production FastAPI deploy, Redis/SSE fan-out, test suites
+
+---
+
 ## Links
 
 - Overview: `docs/overview.md`

@@ -5,6 +5,8 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import PageHeader from "@/app/components/PageHeader";
 import StatCard from "@/app/components/StatCard";
+import ContestsSection from "@/app/admin/ContestsSection";
+import UsersSection from "@/app/admin/UsersSection";
 
 type Summary = {
   counts: { users: number; problems: number; contests: number; submissions: number };
@@ -42,6 +44,7 @@ export default function AdminPage() {
   const [createMessage, setCreateMessage] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   async function fetchSummary() {
     setLoading(true);
@@ -115,6 +118,32 @@ export default function AdminPage() {
     }
   }
 
+  async function handleDeleteProblem(id: number) {
+    if (
+      !window.confirm(
+        `Delete problem #${id}? Only problems with no contest links and no submissions can be deleted.`,
+      )
+    ) {
+      return;
+    }
+    setDeletingId(id);
+    setCreateMessage(null);
+    setCreateError(null);
+    try {
+      const res = await fetch(`/api/admin/problems/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(j?.error ?? `delete failed (${res.status})`);
+      }
+      setCreateMessage(`Deleted problem #${id}`);
+      void fetchSummary();
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : "delete failed");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -161,9 +190,18 @@ export default function AdminPage() {
                       #{String(problem.id).padStart(3, "0")} · {problem.status} · {problem.difficulty}
                     </p>
                   </div>
-                  <Link href={`/problems/${problem.id}`} className="border border-kjborder rounded px-3 py-1.5 text-[11px] font-mono text-kjtext-muted">
-                    VIEW
-                  </Link>
+                  <div className="flex gap-2 shrink-0">
+                    <Link href={`/problems/${problem.id}`} className="border border-kjborder rounded px-3 py-1.5 text-[11px] font-mono text-kjtext-muted">
+                      VIEW
+                    </Link>
+                    <button
+                      onClick={() => void handleDeleteProblem(problem.id)}
+                      disabled={deletingId === problem.id}
+                      className="border border-kjborder rounded px-3 py-1.5 text-[11px] font-mono text-kjtext-muted hover:text-red-400 disabled:opacity-50"
+                    >
+                      {deletingId === problem.id ? "…" : "DEL"}
+                    </button>
+                  </div>
                 </div>
               ))}
             <form onSubmit={handleCreate} className="p-5 space-y-3 bg-kjbg/30">
@@ -284,6 +322,9 @@ export default function AdminPage() {
             {data && data.recentUsers.length === 0 && <p className="px-5 py-6 text-center text-xs font-mono text-kjtext-muted">No users.</p>}
           </section>
         </div>
+
+        <ContestsSection />
+        <UsersSection />
       </main>
     </>
   );

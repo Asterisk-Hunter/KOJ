@@ -3,6 +3,7 @@ import { auth, clerkClient } from "@clerk/nextjs/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { contestRegistrations, contests, users } from "@/db/schema";
+import { settleExpiredContests } from "@/app/api/contests/lifecycle";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -57,6 +58,7 @@ export async function POST(
   const { id: idRaw } = await ctx.params;
   if (!idRaw || typeof idRaw !== "string") return jsonError("invalid id", 400);
 
+  await settleExpiredContests();
   const contest = await findContest(idRaw);
   if (!contest) return jsonError("contest not found", 404);
 
