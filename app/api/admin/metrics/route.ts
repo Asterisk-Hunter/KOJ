@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { and, desc, eq, gte, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { contests, submissions } from "@/db/schema";
+import { contests, submissions, users } from "@/db/schema";
 import { requireAdmin } from "@/app/api/admin/authz";
 
 export const runtime = "nodejs";
@@ -71,6 +71,22 @@ export async function GET() {
       .groupBy(contests.status),
   ]);
 
+  const recentSubmissions = await db
+    .select({
+      id: submissions.id,
+      username: users.username,
+      language: submissions.language,
+      problemId: submissions.problemId,
+      contestId: submissions.contestId,
+      status: submissions.status,
+      executionTimeMs: submissions.executionTimeMs,
+      submittedAt: submissions.submittedAt,
+    })
+    .from(submissions)
+    .innerJoin(users, eq(submissions.userId, users.clerkId))
+    .orderBy(desc(submissions.submittedAt))
+    .limit(10);
+
   const byStatus: Record<string, number> = {};
   for (const r of allTime) byStatus[r.status] = r.count;
   const last24hByStatus: Record<string, number> = {};
@@ -97,6 +113,16 @@ export async function GET() {
         : Math.round(avgRow[0].avgMs),
     judgeUnavailableLast24h: judgeDown24h[0]?.count ?? 0,
     contestsByStatus: Object.fromEntries(contestRow.map((r) => [r.status, r.count])),
+    recentSubmissions: recentSubmissions.map((s) => ({
+      id: s.id,
+      username: s.username,
+      language: s.language,
+      problemId: s.problemId,
+      contestId: s.contestId,
+      status: s.status,
+      executionTimeMs: s.executionTimeMs,
+      submittedAt: s.submittedAt?.toISOString() ?? null,
+    })),
     recentFailures: failures.map((f) => ({
       id: f.id,
       problemId: f.problemId,

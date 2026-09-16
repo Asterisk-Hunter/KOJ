@@ -61,14 +61,15 @@ export async function GET(req: NextRequest) {
       username: u.username,
       email: u.email,
       role: u.role,
+      suspended: u.suspended,
       createdAt: u.createdAt.toISOString(),
     })),
   });
 }
 
 /**
- * Admin: change a user's role (REQ-AUTH-04 / BR-03).
- * Refuses self-demotion so an admin cannot lock themselves out.
+ * Admin: change a user's role (REQ-AUTH-04 / BR-03) and/or suspended flag.
+ * Refuses self-changes so an admin cannot lock themselves out.
  */
 export async function PATCH(req: NextRequest) {
   const grant = await requireAdmin();
@@ -86,19 +87,38 @@ export async function PATCH(req: NextRequest) {
   if (typeof clerkId !== "string" || clerkId.length === 0) {
     return jsonError("clerkId is required", 400);
   }
-  const role = parseRole(b.role);
-  if (!role) {
-    return jsonError("role must be contestant, problem_setter, or admin", 400);
-  }
   if (clerkId === grant.userId) {
-    return jsonError("cannot change your own role", 400);
+    return jsonError("cannot change your own record", 400);
+  }
+
+  const patch: Partial<typeof users.$inferInsert> = { updatedAt: new Date() };
+  if (b.role !== undefined) {
+    const role = parseRole(b.role);
+    if (!role) {
+      return jsonError("role must be contestant, problem_setter, or admin", 400);
+    }
+    patch.role = role;
+  }
+  if (b.suspended !== undefined) {
+    if (typeof b.suspended !== "boolean") {
+      return jsonError("suspended must be a boolean", 400);
+    }
+    patch.suspended = b.suspended;
+  }
+  if (patch.role === undefined && patch.suspended === undefined) {
+    return jsonError("role or suspended is required", 400);
   }
 
   const updated = await db
     .update(users)
-    .set({ role, updatedAt: new Date() })
+    .set(patch)
     .where(eq(users.clerkId, clerkId))
-    .returning({ clerkId: users.clerkId, username: users.username, role: users.role });
+    .returning({
+      clerkId: users.clerkId,
+      username: users.username,
+      role: users.role,
+      suspended: users.suspended,
+    });
   if (updated.length === 0) return jsonError("user not found", 404);
 
   return NextResponse.json({ user: updated[0] });
