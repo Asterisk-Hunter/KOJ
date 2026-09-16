@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contestRegistrations, contests, problems } from "@/db/schema";
-import { ensureUserRow, jsonError, requireAdmin } from "@/app/api/admin/authz";
+import { ensureUserRow, jsonError, requireContestManager } from "@/app/api/admin/authz";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,7 +31,7 @@ async function uniqueSlug(base: string): Promise<string> {
 
 /** Admin: list every contest (including drafts) with problem/participant counts. */
 export async function GET() {
-  const grant = await requireAdmin();
+  const grant = await requireContestManager();
   if (!grant.ok) return grant.response;
 
   const contestRows = await db
@@ -80,7 +80,7 @@ export async function GET() {
  * Optionally links `problemIds` — each must exist and be `draft` (BR-04).
  */
 export async function POST(req: NextRequest) {
-  const grant = await requireAdmin();
+  const grant = await requireContestManager();
   if (!grant.ok) return grant.response;
 
   let body: unknown;

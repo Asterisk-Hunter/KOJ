@@ -11,18 +11,22 @@ export function jsonError(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
 }
 
-async function clerkIsOrgAdmin(): Promise<boolean> {
+async function clerkHasOrgRole(role: string): Promise<boolean> {
   try {
     const authObj = await auth();
     const hasFn = (
       authObj as unknown as { has?: (arg: unknown) => Promise<boolean> | boolean }
     ).has;
     if (typeof hasFn !== "function") return false;
-    const res = hasFn.call(authObj, { role: "org:admin" });
+    const res = hasFn.call(authObj, { role });
     return res instanceof Promise ? await res : Boolean(res);
   } catch {
     return false;
   }
+}
+
+async function clerkIsOrgAdmin(): Promise<boolean> {
+  return clerkHasOrgRole("org:admin");
 }
 
 export type AdminGrant = { ok: true; userId: string } | { ok: false; response: NextResponse };
@@ -44,6 +48,29 @@ export async function requireAdmin(): Promise<AdminGrant> {
 export type SetterGrant =
   | { ok: true; userId: string; dbRole: string | null }
   | { ok: false; response: NextResponse };
+
+/**
+ * Contest-manager gate: Clerk `org:admin` (or a custom `org:contest_setter`
+ * org role once created in the Clerk dashboard) OR Neon `users.role` of
+ * `admin` / `contest_setter`. Problem management stays on requireSetter;
+ * user/role management stays on requireAdmin (BR-03).
+ */
+export async function requireContestManager(): Promise<AdminGrant> {
+  const { userId } = await auth();
+  if (!userId) return { ok: false, response: jsonError("unauthorized", 401) };
+  if (await clerkIsOrgAdmin()) return { ok: true, userId };
+  // Best-effort: false until the custom org role exists in the dashboard.
+  if (await clerkHasOrgRole("org:contest_setter")) return { ok: true, userId };
+  const rows = await db
+    .select({ role: users.role })
+    .from(users)
+    .where(eq(users.clerkId, userId))
+    .limit(1);
+  if (rows.length > 0 && (rows[0].role === "admin" || rows[0].role === "contest_setter")) {
+    return { ok: true, userId };
+  }
+  return { ok: false, response: jsonError("forbidden", 403) };
+}
 
 /**
  * Problem-setter gate: `org:admin` counts as admin; otherwise the Neon

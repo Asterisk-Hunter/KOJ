@@ -8,6 +8,8 @@ import StatCard from "@/app/components/StatCard";
 import ContestsSection from "@/app/admin/ContestsSection";
 import UsersSection from "@/app/admin/UsersSection";
 import ProblemTestCases from "@/app/admin/ProblemTestCases";
+import ProblemManagerSection from "@/app/admin/ProblemManagerSection";
+import SubmissionsSection from "@/app/admin/SubmissionsSection";
 
 type Summary = {
   counts: { users: number; problems: number; contests: number; submissions: number };
@@ -47,6 +49,7 @@ export default function AdminPage() {
   const [creating, setCreating] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [expandedTests, setExpandedTests] = useState<number | null>(null);
+  const [editingProblemId, setEditingProblemId] = useState<number | null>(null);
 
   async function fetchSummary() {
     setLoading(true);
@@ -194,6 +197,47 @@ export default function AdminPage() {
                       </p>
                     </div>
                     <div className="flex gap-2 shrink-0">
+                      {problem.status === "draft" && (
+                        <button
+                          onClick={async () => {
+                            const res = await fetch(`/api/admin/problems/${problem.id}`, {
+                              method: "PATCH",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ status: "published" }),
+                            });
+                            if (res.ok) void fetchSummary();
+                          }}
+                          className="border border-kjprimary/30 rounded px-3 py-1.5 text-[11px] font-mono text-kjprimary hover:bg-kjprimary/10"
+                        >
+                          PUBLISH
+                        </button>
+                      )}
+                      {problem.status === "published" && (
+                        <button
+                          onClick={async () => {
+                            const res = await fetch(`/api/admin/problems/${problem.id}`, {
+                              method: "PATCH",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ status: "draft" }),
+                            });
+                            if (res.ok) void fetchSummary();
+                          }}
+                          className="border border-yellow-500/30 rounded px-3 py-1.5 text-[11px] font-mono text-yellow-400 hover:bg-yellow-500/10"
+                        >
+                          UNPUBLISH
+                        </button>
+                      )}
+                      {problem.status === "contest_active" && (
+                        <span className="border border-kjborder rounded px-3 py-1.5 text-[11px] font-mono text-kjtext-muted opacity-50">
+                          LOCKED
+                        </span>
+                      )}
+                      <button
+                        onClick={() => setEditingProblemId((prev) => (prev === problem.id ? null : problem.id))}
+                        className="border border-kjborder rounded px-3 py-1.5 text-[11px] font-mono text-kjtext-muted hover:text-kjprimary"
+                      >
+                        {editingProblemId === problem.id ? "CLOSE" : "EDIT"}
+                      </button>
                       <button
                         onClick={() => setExpandedTests((prev) => (prev === problem.id ? null : problem.id))}
                         className="border border-kjborder rounded px-3 py-1.5 text-[11px] font-mono text-kjtext-muted"
@@ -212,6 +256,13 @@ export default function AdminPage() {
                       </button>
                     </div>
                   </div>
+                  {editingProblemId === problem.id && (
+                    <ProblemManagerSection
+                      problemId={problem.id}
+                      onClose={() => setEditingProblemId(null)}
+                      onSaved={() => void fetchSummary()}
+                    />
+                  )}
                   {expandedTests === problem.id && <ProblemTestCases problemId={problem.id} />}
                 </div>
               ))}
@@ -336,6 +387,7 @@ export default function AdminPage() {
 
         <ContestsSection />
         <UsersSection />
+        <SubmissionsSection />
       </main>
     </>
   );

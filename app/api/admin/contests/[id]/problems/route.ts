@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contests, problems } from "@/db/schema";
-import { jsonError, requireAdmin } from "@/app/api/admin/authz";
+import { jsonError, requireContestManager } from "@/app/api/admin/authz";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,7 +19,7 @@ export async function POST(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
-  const grant = await requireAdmin();
+  const grant = await requireContestManager();
   if (!grant.ok) return grant.response;
 
   const { id: idRaw } = await ctx.params;
@@ -84,7 +84,7 @@ export async function DELETE(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
-  const grant = await requireAdmin();
+  const grant = await requireContestManager();
   if (!grant.ok) return grant.response;
 
   const { id: idRaw } = await ctx.params;
