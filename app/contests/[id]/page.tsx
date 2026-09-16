@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Navigation from "@/app/components/Navigation";
 
 type UiStatus = "Active" | "Registration Open" | "Upcoming" | "Finished";
@@ -30,6 +30,7 @@ type ContestDetail = {
   problemsCount: number;
   participants: number;
   registered: boolean;
+  inviteRequired: boolean;
   currentUserId: string | null;
 };
 
@@ -74,6 +75,8 @@ export default function ContestDetailPage() {
   const [now, setNow] = useState(() => Date.now());
   const [registering, setRegistering] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [inviteCode, setInviteCode] = useState("");
+  const boundaryReloaded = useRef(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -104,6 +107,23 @@ export default function ContestDetailPage() {
     return () => clearInterval(t);
   }, []);
 
+  // Automatic start/end handling client-side: when the countdown crosses the
+  // start/end boundary, refetch once so status + problems update by themselves.
+  useEffect(() => {
+    if (!contest || boundaryReloaded.current) return;
+    const boundary =
+      contest.status === "Active"
+        ? new Date(contest.endsAt).getTime()
+        : contest.status === "Registration Open" || contest.status === "Upcoming"
+          ? new Date(contest.startsAt).getTime()
+          : null;
+    if (boundary !== null && now >= boundary) {
+      boundaryReloaded.current = true;
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      void load();
+    }
+  }, [now, contest, load]);
+
   const countdown = useMemo(() => {
     if (!contest) return "00:00:00";
     const target =
@@ -128,6 +148,8 @@ export default function ContestDetailPage() {
     try {
       const res = await fetch(`/api/contests/${encodeURIComponent(contest.id)}/register`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(contest.inviteRequired ? { inviteCode } : {}),
       });
       const data = (await res.json()) as { error?: string };
       if (!res.ok) throw new Error(data.error ?? `Failed (${res.status})`);
@@ -238,13 +260,23 @@ export default function ContestDetailPage() {
             <div className="bg-kjsurface border border-kjborder rounded-lg p-5">
               <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted mb-4">Actions</h2>
               {showRegister ? (
-                <button
-                  onClick={() => void handleRegister()}
-                  disabled={contest.registered || registering}
-                  className="w-full bg-kjprimary text-kjbg font-mono font-bold text-xs px-4 py-3 rounded disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {contest.registered ? "REGISTERED" : registering ? "REGISTERING…" : "REGISTER NOW"}
-                </button>
+                <>
+                  {contest.inviteRequired && !contest.registered && (
+                    <input
+                      value={inviteCode}
+                      onChange={(e) => setInviteCode(e.target.value)}
+                      placeholder="Invite code"
+                      className="w-full mb-3 bg-kjbg border border-kjborder rounded px-4 py-3 text-xs font-mono text-kjtext placeholder:text-kjtext-muted/50"
+                    />
+                  )}
+                  <button
+                    onClick={() => void handleRegister()}
+                    disabled={contest.registered || registering}
+                    className="w-full bg-kjprimary text-kjbg font-mono font-bold text-xs px-4 py-3 rounded disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {contest.registered ? "REGISTERED" : registering ? "REGISTERING…" : "REGISTER NOW"}
+                  </button>
+                </>
               ) : null}
               {canEnterArena ? (
                 <Link

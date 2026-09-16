@@ -41,6 +41,8 @@ export default function RankingsPage() {
   const [data, setData] = useState<RankingsResponse | null>(null);
   const [rankingsLoading, setRankingsLoading] = useState(false);
   const [rankingsError, setRankingsError] = useState<string | null>(null);
+  const [liveRefresh, setLiveRefresh] = useState(false);
+  const isLiveContest = data?.contest.status === "live";
 
   const fetchContests = useCallback(async () => {
     setContestsLoading(true);
@@ -131,6 +133,27 @@ export default function RankingsPage() {
     else setData(null);
   }, [selectedId, fetchRankings]);
 
+  // Live leaderboard: while the contest is live, subscribe to the SSE version
+  // ticker and refetch standings only when the version actually changes.
+  useEffect(() => {
+    if (!selectedId || !isLiveContest) {
+      setLiveRefresh(false);
+      return;
+    }
+    const es = new EventSource(`/api/contests/${encodeURIComponent(selectedId)}/events`);
+    let lastVersion: string | null = null;
+    setLiveRefresh(true);
+    es.addEventListener("version", (ev) => {
+      const v = (ev as MessageEvent).data as string;
+      if (lastVersion !== null && v !== lastVersion) void fetchRankings(selectedId);
+      lastVersion = v;
+    });
+    return () => {
+      es.close();
+      setLiveRefresh(false);
+    };
+  }, [selectedId, isLiveContest, fetchRankings]);
+
   const contestLabel = data?.contest ? `${data.contest.title} · ${data.contest.status}` : contests.find((c) => String(c.id) === selectedId)?.title ?? (selectedId ? `Contest #${selectedId}` : "Select a contest");
   const isLive = data?.contest.status === "live";
   const isEnded = data?.contest.status === "ended";
@@ -182,7 +205,7 @@ export default function RankingsPage() {
           <span
             className={`border rounded px-4 py-3 text-xs font-mono ${isLive ? "border-kjprimary/30 bg-kjprimary/10 text-kjprimary" : isEnded ? "border-kjborder bg-kjsurface text-kjtext-muted" : "border-kjborder bg-kjsurface text-kjtext-muted"}`}
           >
-            {isLive ? "● LIVE / DB" : isEnded ? "■ ENDED / DB" : "○ DB"}
+            {isLive ? (liveRefresh ? "● LIVE / AUTO-REFRESH" : "● LIVE / DB") : isEnded ? "■ ENDED / DB" : "○ DB"}
           </span>
         </div>
 

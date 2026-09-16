@@ -21,12 +21,12 @@
 - **Registration:** `POST /api/contests/[id]/register` — implemented, requires sign-in and live contest
 - **Visibility rules:** before start / during / after derived per contest; enforcement in `POST /api/submissions` (live + registered + problem in contest)
 - **Timed enforcement:** submissions rejected if contest not `live` — implemented
-- **[Planned] Contest creation / editing / publishing:** no `POST /api/contests` or `PATCH /contests/[id]/start|end` yet; contests come from seed (4 contests, 16 links) and direct DB. Requires role decision above.
+- **Contest creation / editing / publishing:** [Implemented on `feat/srs-high-priority`] admin-only `POST/GET /api/admin/contests`, `PATCH/DELETE /api/admin/contests/[id]` (publish/unpublish/end/archive transitions), add/remove problems via `/api/admin/contests/[id]/problems`, contest manager UI in `/admin`. Past-due `live` contests auto-flip to `ended` (lazy settle on contest reads/writes) and linked problems publish to the archive.
 
-### Code Submission & Judging — [Implemented, Python only]
-- **Submission UI:** `app/problems/[id]/page.tsx` and `app/contests/[id]/arena/page.tsx` — language selector (python only), code editor, Run (samples) vs Submit (all cases)
+### Code Submission & Judging — [Implemented: Python, C, C++, Java]
+- **Submission UI:** `app/problems/[id]/page.tsx` and `app/contests/[id]/arena/page.tsx` — language selector (python/c/c++/java), code editor, Run (samples) vs Submit (all cases)
 - **Submission flow:** `POST /api/submissions` validates auth/ids/code/mode → inserts `pending→running` → calls FastAPI `POST /judge` → persists verdict to Neon → returns result (see `docs/status.md` pipeline)
-- **Judge module:** `api/app/judge.py` — `py_compile` check, `subprocess.run` per case with `RLIMIT_AS` (POSIX) + wall timeout `time_limit_ms+2s`, whitespace-normalized comparison, verdicts `AC/WA/TLE/MLE/RE/CE`
+- **Judge module:** `api/app/judge.py` — per-language prepare (py_compile / gcc / g++ / javac), isolated temp workdir per submission, `subprocess.run` per case with `RLIMIT_AS` (POSIX, except Java — heap capped via `-Xmx`) + wall timeout `time_limit_ms+2s`, whitespace-normalized comparison, verdicts `AC/WA/TLE/MLE/RE/CE`
 - **Verdict types:** `accepted`, `wrong_answer`, `time_limit_exceeded`, `memory_limit_exceeded`, `runtime_error`, `compilation_error` — mapped to `submission_status`
 - **Multiple submissions:** all stored; `GET /api/submissions?problemId=&contestId=` lists caller's history
 

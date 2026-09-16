@@ -38,11 +38,13 @@ export const submissionStatus = pgEnum("submission_status", [
   "memory_limit_exceeded",
   "runtime_error",
   "compilation_error",
+  "presentation_error",
 ]);
 
 export const userRole = pgEnum("user_role", [
   "contestant",
   "problem_setter",
+  "contest_setter",
   "admin",
 ]);
 
@@ -51,6 +53,7 @@ export const users = pgTable("users", {
   username: text("username").notNull().unique(),
   email: text("email").notNull(),
   role: userRole("role").notNull().default("contestant"),
+  suspended: boolean("suspended").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -97,6 +100,7 @@ export const contests = pgTable("contests", {
   startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
   endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
   status: contestStatus("status").notNull().default("draft"),
+  inviteCode: text("invite_code"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

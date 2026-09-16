@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useAuth } from "@clerk/nextjs";
+import Markdown from "react-markdown";
 import Navigation from "@/app/components/Navigation";
 
 const starter = `# Write your solution here
@@ -63,9 +64,19 @@ export default function ProblemDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [code, setCode] = useState(starter);
+  const [language, setLanguage] = useState("python");
   const [notice, setNotice] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
   const [verdicts, setVerdicts] = useState<VerdictRow[]>([]);
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const timer = setInterval(() => {
+      setCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [cooldown]);
 
   useEffect(() => {
     let cancelled = false;
@@ -124,7 +135,7 @@ export default function ProblemDetailPage() {
     try {
       const payload: Record<string, unknown> = {
         problemId: problem.id,
-        language: "python",
+        language,
         code,
         mode,
       };
@@ -144,7 +155,17 @@ export default function ProblemDetailPage() {
         executionTimeMs?: number | null;
         errorMessage?: string | null;
       };
-      if (!res.ok) throw new Error(data.error ?? `Failed (${res.status})`);
+      if (!res.ok) {
+        if (res.status === 429) {
+          const retryHeader = res.headers.get("Retry-After");
+          const retrySec = retryHeader ? parseInt(retryHeader, 10) : 30;
+          setCooldown(Number.isFinite(retrySec) && retrySec > 0 ? retrySec : 30);
+        }
+        throw new Error(data.error ?? `Failed (${res.status})`);
+      }
+      if (mode === "submit") {
+        setCooldown(30);
+      }
       const parts: string[] = [];
       if (typeof data.passedTests === "number" && typeof data.totalTests === "number")
         parts.push(`${data.passedTests}/${data.totalTests}`);
@@ -217,18 +238,26 @@ export default function ProblemDetailPage() {
               </span>
             </div>
             <h1 className="text-3xl font-mono font-bold text-kjtext mb-8">{problem.title}</h1>
-            {[
-              ["Problem Statement", problem.statement],
-              ["Input Format", problem.inputFormat],
-              ["Output Format", problem.outputFormat],
-              ["Constraints", problem.constraints],
-              ...(problem.explanation ? [["Explanation", problem.explanation] as const] : []),
-            ].map(([heading, text]) => (
+            {(
+              [
+                ["Problem Statement", problem.statement, true],
+                ["Input Format", problem.inputFormat, false],
+                ["Output Format", problem.outputFormat, false],
+                ["Constraints", problem.constraints, false],
+                ...(problem.explanation ? [["Explanation", problem.explanation, true] as const] : []),
+              ] as [string, string, boolean][]
+            ).map(([heading, text, md]) => (
               <section key={heading} className="mb-7">
                 <h2 className="text-xs uppercase tracking-widest font-mono text-kjprimary border-b border-kjborder pb-2 mb-3">
                   {heading}
                 </h2>
-                <p className="text-sm text-kjtext-muted leading-7">{text}</p>
+                {md ? (
+                  <div className="text-sm text-kjtext-muted leading-7 space-y-3 [&_pre]:bg-kjbg [&_pre]:border [&_pre]:border-kjborder [&_pre]:rounded [&_pre]:p-3 [&_pre]:overflow-x-auto [&_code]:font-mono [&_code]:text-[13px]">
+                    <Markdown>{text}</Markdown>
+                  </div>
+                ) : (
+                  <p className="text-sm text-kjtext-muted leading-7">{text}</p>
+                )}
               </section>
             ))}
             <div className="grid sm:grid-cols-2 gap-3 mb-7">
@@ -261,7 +290,17 @@ export default function ProblemDetailPage() {
           <section className="bg-kjsurface/40 border border-kjborder rounded-lg p-4 lg:p-5 h-fit lg:sticky lg:top-20">
             <div className="flex items-center justify-between border-b border-kjborder pb-3 mb-3">
               <p className="text-xs uppercase tracking-widest font-mono text-kjprimary">Submit solution</p>
-              <span className="bg-kjbg border border-kjborder rounded px-3 py-2 text-xs font-mono text-kjprimary">Python</span>
+              <select
+                value={language}
+                onChange={(event) => setLanguage(event.target.value)}
+                className="bg-kjbg border border-kjborder rounded px-3 py-2 text-xs font-mono text-kjprimary"
+                aria-label="Select language"
+              >
+                <option value="python">Python</option>
+                <option value="c">C</option>
+                <option value="c++">C++</option>
+                <option value="java">Java</option>
+              </select>
             </div>
             <textarea
               value={code}
@@ -279,10 +318,10 @@ export default function ProblemDetailPage() {
               </button>
               <button
                 onClick={() => handleSubmit("submit")}
-                disabled={submitting}
+                disabled={submitting || cooldown > 0}
                 className="bg-kjprimary text-kjbg font-mono font-bold text-xs px-5 py-2 rounded hover:glow-sm disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {submitting ? "SUBMITTING…" : "SUBMIT"}
+                {submitting ? "SUBMITTING…" : cooldown > 0 ? `WAIT ${cooldown}s` : "SUBMIT"}
               </button>
             </div>
             {notice && (
