@@ -43,6 +43,7 @@ export const submissionStatus = pgEnum("submission_status", [
 export const userRole = pgEnum("user_role", [
   "contestant",
   "problem_setter",
+  "contest_setter",
   "admin",
 ]);
 
@@ -51,6 +52,7 @@ export const users = pgTable("users", {
   username: text("username").notNull().unique(),
   email: text("email").notNull(),
   role: userRole("role").notNull().default("contestant"),
+  suspended: boolean("suspended").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

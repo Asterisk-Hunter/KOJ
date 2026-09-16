@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 
 from . import db
 from .config import settings
-from .judge import JudgeRequest, JudgeResponse, execute_judge
+from .judge import SUPPORTED_LANGUAGES, JudgeRequest, JudgeResponse, execute_judge
 
 logging.basicConfig(
     level=logging.INFO,
@@ -84,6 +84,9 @@ def judge_endpoint(
         raise HTTPException(status_code=500, detail="judge secret not configured")
     if x_judge_secret != settings.JUDGE_INTERNAL_SECRET:
         raise HTTPException(status_code=401, detail="unauthorized")
-    if req.language != "python":
-        raise HTTPException(status_code=422, detail="only python is supported")
+    if req.language not in SUPPORTED_LANGUAGES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"supported languages: {', '.join(SUPPORTED_LANGUAGES)}",
+        )
     return execute_judge(req)

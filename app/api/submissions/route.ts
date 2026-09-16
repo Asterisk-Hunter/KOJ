@@ -62,9 +62,13 @@ export async function POST(req: NextRequest) {
       return jsonError("contestId must be a positive integer or null", 400);
     }
   }
-  // Validate language
-  if (typeof language !== "string" || language !== "python") {
-    return jsonError("only python is supported", 400);
+  // Validate language (SRS REQ-JUDGE-02 v1 set)
+  const SUPPORTED_LANGUAGES = ["python", "c", "c++", "java"] as const;
+  if (
+    typeof language !== "string" ||
+    !(SUPPORTED_LANGUAGES as readonly string[]).includes(language)
+  ) {
+    return jsonError("supported languages: python, c, c++, java", 400);
   }
   // Validate code
   if (typeof code !== "string" || code.trim().length === 0) {
@@ -192,6 +196,16 @@ export async function POST(req: NextRequest) {
     } catch {
       return jsonError("failed to resolve user", 500);
     }
+  }
+
+  // Suspended users cannot submit (run or submit mode).
+  const suspensionRows = await db
+    .select({ suspended: users.suspended })
+    .from(users)
+    .where(eq(users.clerkId, userId))
+    .limit(1);
+  if (suspensionRows.length > 0 && suspensionRows[0].suspended) {
+    return jsonError("account suspended", 403);
   }
 
   // Load cases ordered by position

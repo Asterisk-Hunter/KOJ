@@ -7,6 +7,7 @@ import PageHeader from "@/app/components/PageHeader";
 import StatCard from "@/app/components/StatCard";
 import ContestsSection from "@/app/admin/ContestsSection";
 import UsersSection from "@/app/admin/UsersSection";
+import ProblemTestCases from "@/app/admin/ProblemTestCases";
 
 type Summary = {
   counts: { users: number; problems: number; contests: number; submissions: number };
@@ -45,6 +46,7 @@ export default function AdminPage() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [expandedTests, setExpandedTests] = useState<number | null>(null);
 
   async function fetchSummary() {
     setLoading(true);
@@ -183,25 +185,34 @@ export default function AdminPage() {
             )}
             {data &&
               data.recentProblems.map((problem) => (
-                <div key={problem.id} className="px-5 py-4 border-b border-kjborder/70 flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm text-kjtext">{problem.title}</p>
-                    <p className="text-xs font-mono text-kjtext-muted mt-1">
-                      #{String(problem.id).padStart(3, "0")} · {problem.status} · {problem.difficulty}
-                    </p>
+                <div key={problem.id} className="px-5 py-4 border-b border-kjborder/70">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm text-kjtext">{problem.title}</p>
+                      <p className="text-xs font-mono text-kjtext-muted mt-1">
+                        #{String(problem.id).padStart(3, "0")} · {problem.status} · {problem.difficulty}
+                      </p>
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                      <button
+                        onClick={() => setExpandedTests((prev) => (prev === problem.id ? null : problem.id))}
+                        className="border border-kjborder rounded px-3 py-1.5 text-[11px] font-mono text-kjtext-muted"
+                      >
+                        {expandedTests === problem.id ? "HIDE" : "TESTS"}
+                      </button>
+                      <Link href={`/problems/${problem.id}`} className="border border-kjborder rounded px-3 py-1.5 text-[11px] font-mono text-kjtext-muted">
+                        VIEW
+                      </Link>
+                      <button
+                        onClick={() => void handleDeleteProblem(problem.id)}
+                        disabled={deletingId === problem.id}
+                        className="border border-kjborder rounded px-3 py-1.5 text-[11px] font-mono text-kjtext-muted hover:text-red-400 disabled:opacity-50"
+                      >
+                        {deletingId === problem.id ? "…" : "DEL"}
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex gap-2 shrink-0">
-                    <Link href={`/problems/${problem.id}`} className="border border-kjborder rounded px-3 py-1.5 text-[11px] font-mono text-kjtext-muted">
-                      VIEW
-                    </Link>
-                    <button
-                      onClick={() => void handleDeleteProblem(problem.id)}
-                      disabled={deletingId === problem.id}
-                      className="border border-kjborder rounded px-3 py-1.5 text-[11px] font-mono text-kjtext-muted hover:text-red-400 disabled:opacity-50"
-                    >
-                      {deletingId === problem.id ? "…" : "DEL"}
-                    </button>
-                  </div>
+                  {expandedTests === problem.id && <ProblemTestCases problemId={problem.id} />}
                 </div>
               ))}
             <form onSubmit={handleCreate} className="p-5 space-y-3 bg-kjbg/30">

@@ -1,7 +1,13 @@
-"""Python-only judge: compile check + per-case execution + output comparison."""
+"""Multi-language judge: compile (if needed) + per-case execution + output comparison.
+
+Supported v1 languages: python, c, c++, java (SRS REQ-JUDGE-02).
+Each submission runs in its own temporary working directory containing
+only the files required for judging (REQ-JUDGE-08).
+"""
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -19,6 +25,10 @@ try:
     _HAS_RESOURCE = True
 except ImportError:  # pragma: no cover - Windows
     _HAS_RESOURCE = False  # resource unavailable on Windows, memory limit skipped silently
+
+SUPPORTED_LANGUAGES: tuple[str, ...] = ("python", "c", "c++", "java")
+
+COMPILE_TIMEOUT_S = 30.0
 
 Verdict = Literal[
     "accepted",
@@ -81,80 +91,139 @@ def _outputs_equal(actual: str, expected: str) -> bool:
     return _normalize_output(actual) == _normalize_output(expected)
 
 
+def _ce_response(message: str, total: int) -> JudgeResponse:
+    msg = _truncate(message, 2048)
+    cases = [
+        CaseResult(
+            index=idx,
+            passed=False,
+            verdict="compilation_error",
+            runtime_ms=0,
+            stdout="",
+            stderr=_truncate(msg, 4096),
+        )
+        for idx in range(total)
+    ]
+    return JudgeResponse(
+        status="compilation_error",
+        passed_tests=0,
+        total_tests=total,
+        execution_time_ms=0,
+        error_message=msg,
+        cases=cases,
+    )
+
+
+def _compile(source: Path, argv: list[str]) -> str | None:
+    """Run a compiler; return None on success or the stderr on failure."""
+    if shutil.which(argv[0]) is None:
+        return f"compiler not installed: {argv[0]}"
+    try:
+        proc = subprocess.run(
+            argv,
+            cwd=source.parent,
+            capture_output=True,
+            text=True,
+            timeout=COMPILE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return "compilation timed out"
+    if proc.returncode != 0:
+        return proc.stderr.strip() or f"compilation failed (exit {proc.returncode})"
+    return None
+
+
+def _prepare(language: str, code: str, workdir: Path, memory_mb: int) -> tuple[list[str], str | None]:
+    """Write sources, compile if needed. Returns (run_cmd, compile_error)."""
+    if language == "python":
+        src = workdir / "solution.py"
+        src.write_text(code, encoding="utf-8")
+        try:
+            py_compile.compile(str(src), doraise=True)
+        except py_compile.PyCompileError as e:
+            return [], str(e)
+        except SyntaxError as e:
+            return [], str(e)
+        return [sys.executable, str(src)], None
+
+    if language == "c":
+        src = workdir / "solution.c"
+        src.write_text(code, encoding="utf-8")
+        err = _compile(src, ["gcc", "-O2", "-std=c11", "-o", "solution", "solution.c"])
+        if err is not None:
+            return [], err
+        return [str(workdir / "solution")], None
+
+    if language == "c++":
+        src = workdir / "solution.cpp"
+        src.write_text(code, encoding="utf-8")
+        err = _compile(src, ["g++", "-O2", "-std=c++17", "-o", "solution", "solution.cpp"])
+        if err is not None:
+            return [], err
+        return [str(workdir / "solution")], None
+
+    if language == "java":
+        if "class Solution" not in code:
+            return [], "Java submissions must declare 'public class Solution'"
+        src = workdir / "Solution.java"
+        src.write_text(code, encoding="utf-8")
+        err = _compile(src, ["javac", "Solution.java"])
+        if err is not None:
+            return [], err
+        heap_mb = max(64, memory_mb * 3 // 4)
+        return [
+            "java",
+            f"-Xmx{heap_mb}M",
+            "-Xss256k",
+            "-XX:ReservedCodeCacheSize=64M",
+            "-XX:MaxMetaspaceSize=96M",
+            "-cp",
+            str(workdir),
+            "Solution",
+        ], None
+
+    return [], f"Unsupported language: {language}"
+
+
+def _is_oom(language: str, stderr: str) -> bool:
+    if "MemoryError" in stderr:
+        return True
+    if language == "java" and "OutOfMemoryError" in stderr:
+        return True
+    if language == "c++" and "bad_alloc" in stderr:
+        return True
+    return False
+
+
 def execute_judge(req: JudgeRequest) -> JudgeResponse:
-    # Validate language
-    # Caller should have already returned 422, but keep as safety
-    if req.language != "python":
-        # This will be handled at route level; here we treat as runtime error
+    if req.language not in SUPPORTED_LANGUAGES:
+        # Caller should have already returned 422, but keep as safety
         raise ValueError("Unsupported language")
 
-    # Syntax check via py_compile
-    tmp_path: Path | None = None
-    tmp_file = None
-    try:
-        tmp_file = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".py", delete=False, encoding="utf-8"
-        )
-        tmp_file.write(req.code)
-        tmp_file.flush()
-        tmp_file.close()
-        tmp_path = Path(tmp_file.name)
-        try:
-            py_compile.compile(str(tmp_path), doraise=True)
-        except py_compile.PyCompileError as e:
-            msg = _truncate(str(e), 2048)
-            # Build compilation_error response
-            cases: list[CaseResult] = []
-            for idx, _ in enumerate(req.cases):
-                cases.append(
-                    CaseResult(
-                        index=idx,
-                        passed=False,
-                        verdict="compilation_error",
-                        runtime_ms=0,
-                        stdout="",
-                        stderr=_truncate(msg, 4096),
-                    )
-                )
-            return JudgeResponse(
-                status="compilation_error",
-                passed_tests=0,
-                total_tests=len(req.cases),
-                execution_time_ms=0,
-                error_message=msg,
-                cases=cases,
-            )
-        except SyntaxError as e:
-            msg = _truncate(str(e), 2048)
-            cases = []
-            for idx, _ in enumerate(req.cases):
-                cases.append(
-                    CaseResult(
-                        index=idx,
-                        passed=False,
-                        verdict="compilation_error",
-                        runtime_ms=0,
-                        stdout="",
-                        stderr=_truncate(msg, 4096),
-                    )
-                )
-            return JudgeResponse(
-                status="compilation_error",
-                passed_tests=0,
-                total_tests=len(req.cases),
-                execution_time_ms=0,
-                error_message=msg,
-                cases=cases,
-            )
+    with tempfile.TemporaryDirectory(prefix="koj-judge-") as tmp:
+        workdir = Path(tmp)
+        run_cmd, compile_error = _prepare(req.language, req.code, workdir, req.memory_mb)
+        if compile_error is not None:
+            return _ce_response(compile_error, len(req.cases))
 
         # Run each case
         wall_timeout = req.time_limit_ms / 1000 + 2.0
         memory_bytes = req.memory_mb * 1024 * 1024
+        # Java is exempt from RLIMIT_AS: a modern JVM reserves gigabytes of
+        # virtual address space at startup, so an AS cap kills it before main().
+        # Heap is still hard-capped via -Xmx above, and OutOfMemoryError maps
+        # to memory_limit_exceeded. Native/thread abuse remains a documented
+        # limitation for the trusted college user base (see docs/status.md).
+        enforce_as = req.language != "java" and _HAS_RESOURCE
 
         def _limit_memory() -> None:
             if _HAS_RESOURCE:
                 # resource unavailable on Windows, skipped silently
                 resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))  # type: ignore[attr-defined]
+
+        kwargs: dict = {}
+        if enforce_as:
+            kwargs["preexec_fn"] = _limit_memory
 
         results: list[CaseResult] = []
         max_runtime = 0
@@ -164,18 +233,13 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
         for idx, case in enumerate(req.cases):
             start = time.monotonic()
             try:
-                preexec = _limit_memory if _HAS_RESOURCE else None
-                # On Windows preexec_fn is not supported, so we only pass it on POSIX
-                kwargs: dict = {}
-                if _HAS_RESOURCE:
-                    kwargs["preexec_fn"] = _limit_memory
-
                 proc = subprocess.run(
-                    [sys.executable, str(tmp_path)],
+                    run_cmd,
                     input=case.stdin,
                     capture_output=True,
                     text=True,
                     timeout=wall_timeout,
+                    cwd=str(workdir),
                     **kwargs,
                 )
                 elapsed_ms = int((time.monotonic() - start) * 1000)
@@ -191,10 +255,8 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
                     max_runtime = elapsed_ms
 
                 if proc.returncode != 0:
-                    # Heuristic: if stderr mentions MemoryError, map to memory_limit_exceeded
-                    # Otherwise runtime_error
                     verdict: Verdict
-                    if "MemoryError" in proc.stderr:
+                    if _is_oom(req.language, proc.stderr):
                         verdict = "memory_limit_exceeded"
                     else:
                         verdict = "runtime_error"
@@ -323,16 +385,3 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
             error_message=error_message,
             cases=results,
         )
-
-    finally:
-        if tmp_path is not None:
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except Exception:
-                pass
-        # NamedTemporaryFile on Windows needs manual cleanup if not deleted
-        if tmp_file is not None and tmp_path is None:
-            try:
-                Path(tmp_file.name).unlink(missing_ok=True)
-            except Exception:
-                pass

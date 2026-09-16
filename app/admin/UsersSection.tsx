@@ -8,6 +8,7 @@ type AdminUser = {
   username: string;
   email: string;
   role: string;
+  suspended: boolean;
   createdAt: string;
 };
 
@@ -48,6 +49,26 @@ export default function UsersSection() {
     void load();
   }, [load]);
 
+  async function handleSuspend(clerkId: string, suspended: boolean) {
+    setBusy(clerkId);
+    setNotice(null);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/users", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clerkId, suspended }),
+      });
+      const j = (await res.json().catch(() => null)) as { error?: string } | null;
+      if (!res.ok) throw new Error(j?.error ?? `failed (${res.status})`);
+      setNotice(suspended ? `Suspended ${clerkId.slice(0, 12)}…` : `Reinstated ${clerkId.slice(0, 12)}…`);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "update failed");
+    } finally {
+      setBusy(null);
+    }
+  }
   async function handleRoleChange(clerkId: string, role: string) {
     setBusy(clerkId);
     setNotice(null);
@@ -114,7 +135,7 @@ export default function UsersSection() {
           <table className="w-full">
             <thead>
               <tr>
-                {["User", "Email", "Role", ""].map((heading) => (
+                {["User", "Email", "Role", "Status", ""].map((heading) => (
                   <th
                     key={heading}
                     className="px-5 py-3 text-left text-[11px] uppercase tracking-widest font-mono text-kjtext-muted"
@@ -130,6 +151,19 @@ export default function UsersSection() {
                   <td className="px-5 py-3 font-mono text-sm text-kjtext">{user.username}</td>
                   <td className="px-5 py-3 text-sm text-kjtext-muted">{user.email}</td>
                   <td className="px-5 py-3 text-xs font-mono text-kjprimary">{user.role}</td>
+                  <td className="px-5 py-3">
+                    <button
+                      onClick={() => void handleSuspend(user.clerkId, !user.suspended)}
+                      disabled={busy === user.clerkId}
+                      className={`border rounded px-3 py-1.5 text-[11px] font-mono disabled:opacity-50 ${
+                        user.suspended
+                          ? "border-red-500/40 text-red-400"
+                          : "border-kjborder text-kjtext-muted hover:text-kjtext"
+                      }`}
+                    >
+                      {user.suspended ? "SUSPENDED" : "ACTIVE"}
+                    </button>
+                  </td>
                   <td className="px-5 py-3">
                     <select
                       value={user.role}

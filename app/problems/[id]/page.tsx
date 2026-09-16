@@ -63,6 +63,7 @@ export default function ProblemDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [code, setCode] = useState(starter);
+  const [language, setLanguage] = useState("python");
   const [notice, setNotice] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [verdicts, setVerdicts] = useState<VerdictRow[]>([]);
@@ -124,7 +125,7 @@ export default function ProblemDetailPage() {
     try {
       const payload: Record<string, unknown> = {
         problemId: problem.id,
-        language: "python",
+        language,
         code,
         mode,
       };
@@ -261,7 +262,17 @@ export default function ProblemDetailPage() {
           <section className="bg-kjsurface/40 border border-kjborder rounded-lg p-4 lg:p-5 h-fit lg:sticky lg:top-20">
             <div className="flex items-center justify-between border-b border-kjborder pb-3 mb-3">
               <p className="text-xs uppercase tracking-widest font-mono text-kjprimary">Submit solution</p>
-              <span className="bg-kjbg border border-kjborder rounded px-3 py-2 text-xs font-mono text-kjprimary">Python</span>
+              <select
+                value={language}
+                onChange={(event) => setLanguage(event.target.value)}
+                className="bg-kjbg border border-kjborder rounded px-3 py-2 text-xs font-mono text-kjprimary"
+                aria-label="Select language"
+              >
+                <option value="python">Python</option>
+                <option value="c">C</option>
+                <option value="c++">C++</option>
+                <option value="java">Java</option>
+              </select>
             </div>
             <textarea
               value={code}
