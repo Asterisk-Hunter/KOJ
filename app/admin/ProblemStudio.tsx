@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import Markdown from "react-markdown";
 import { pairPolygonTestFiles } from "@/app/api/admin/problems/import/parser";
 
@@ -82,8 +83,101 @@ const SAMPLE_CC_JSON = JSON.stringify(
   2,
 );
 
+const STARTER_TEMPLATES: Record<string, Partial<ProblemForm>> = {
+  icpc: {
+    title: "Array Sum Pair",
+    difficulty: "easy",
+    tags: "arrays, two-pointers, math",
+    timeLimitMs: "1000",
+    memoryLimitMb: "256",
+    statement: `You are given an array $A$ of $N$ integers and an integer target $X$.
+
+Your task is to determine whether there exist two distinct indices $i$ and $j$ ($1 \\le i < j \\le N$) such that:
+$$ A_i + A_j = X $$
+
+If such a pair exists, output any valid pair of 1-based indices $i$ and $j$. If multiple pairs exist, output any one. If no such pair exists, output \`-1\`.`,
+    inputFormat: `The first line contains an integer $T$ ($1 \\le T \\le 100$) — the number of test cases.
+For each test case:
+- The first line contains two integers $N$ and $X$.
+- The second line contains $N$ space-separated integers $A_1, A_2, \\dots, A_N$.`,
+    outputFormat: `For each test case, output two space-separated indices $i$ and $j$, or \`-1\` if no valid pair exists.`,
+    constraints: `- $1 \\le T \\le 100$
+- $2 \\le N \\le 2 \\times 10^5$
+- $1 \\le A_i, X \\le 10^9$
+- The sum of $N$ over all test cases does not exceed $2 \\times 10^5$.`,
+    explanation: `For the first testcase, $A_1 + A_2 = 2 + 7 = 9 = X$, so indices 1 and 2 are returned.`,
+    testCases: [
+      { input: "2\n5 9\n2 7 11 15 1\n3 10\n1 2 3\n", expectedOutput: "1 2\n-1\n", isSample: true, position: 0 },
+      { input: "1\n4 6\n3 3 1 2\n", expectedOutput: "1 2\n", isSample: false, position: 1 },
+    ],
+  },
+  leetcode: {
+    title: "Valid Parentheses Sequence",
+    difficulty: "easy",
+    tags: "stack, strings",
+    timeLimitMs: "1000",
+    memoryLimitMb: "256",
+    statement: `Given a string $s$ containing just the characters \`'('\`, \`')'\`, \`'{'\`, \`'}'\`, \`'['\` and \`']'\`, determine if the input string is valid.
+
+An input string is valid if:
+1. Open brackets must be closed by the same type of brackets.
+2. Open brackets must be closed in the correct order.
+3. Every close bracket has a corresponding open bracket of the same type.`,
+    inputFormat: `A single line containing the string $s$.`,
+    outputFormat: `Print \`true\` if the sequence is valid, or \`false\` otherwise.`,
+    constraints: `- $1 \\le |s| \\le 10^4$
+- $s$ consists of parentheses only \`'()[]{}'\`.`,
+    explanation: `Sample 1: "()[]{}" is valid since every bracket is closed in proper nesting order.`,
+    testCases: [
+      { input: "()[]{}\n", expectedOutput: "true\n", isSample: true, position: 0 },
+      { input: "(]\n", expectedOutput: "false\n", isSample: true, position: 1 },
+      { input: "([{}])\n", expectedOutput: "true\n", isSample: false, position: 2 },
+    ],
+  },
+  graph: {
+    title: "Shortest Path in Graph",
+    difficulty: "medium",
+    tags: "graphs, bfs, shortest-path",
+    timeLimitMs: "2000",
+    memoryLimitMb: "256",
+    statement: `You are given an unweighted, undirected graph with $N$ vertices numbered $1$ to $N$ and $M$ edges.
+
+Find the length of the shortest path from vertex $1$ to vertex $N$ (the minimum number of edges traversed). If vertex $N$ is not reachable from vertex $1$, output \`-1\`.`,
+    inputFormat: `The first line contains two integers $N$ and $M$ — the number of vertices and edges.
+The next $M$ lines each contain two integers $u$ and $v$ ($1 \\le u, v \\le N$, $u \\ne v$) denoting an undirected edge between $u$ and $v$.`,
+    outputFormat: `Print a single integer — the shortest distance from vertex 1 to vertex $N$, or \`-1\` if unreachable.`,
+    constraints: `- $2 \\le N \\le 10^5$
+- $1 \\le M \\le 2 \\times 10^5$
+- The graph contains no self-loops.`,
+    explanation: `Path 1 -> 2 -> 4 traverses 2 edges.`,
+    testCases: [
+      { input: "4 3\n1 2\n2 4\n1 3\n", expectedOutput: "2\n", isSample: true, position: 0 },
+      { input: "3 1\n1 2\n", expectedOutput: "-1\n", isSample: true, position: 1 },
+    ],
+  },
+  math: {
+    title: "Modulo Exponential Power",
+    difficulty: "easy",
+    tags: "math, number-theory, binary-exponentiation",
+    timeLimitMs: "1000",
+    memoryLimitMb: "256",
+    statement: `Given three positive integers $A$, $B$, and $M$, calculate:
+$$ (A^B) \\pmod{M} $$
+using fast binary modular exponentiation in $O(\\log B)$ time.`,
+    inputFormat: `A single line containing three space-separated integers $A$, $B$, and $M$.`,
+    outputFormat: `Print $(A^B) \\pmod{M}$.`,
+    constraints: `- $1 \\le A, B \\le 10^{18}$
+- $2 \\le M \\le 10^9 + 7$`,
+    explanation: `2^10 = 1024. 1024 mod 1000 = 24.`,
+    testCases: [
+      { input: "2 10 1000\n", expectedOutput: "24\n", isSample: true, position: 0 },
+      { input: "3 5 13\n", expectedOutput: "9\n", isSample: true, position: 1 },
+    ],
+  },
+};
+
 interface ProblemStudioProps {
-  onProblemCreated?: () => void;
+  onProblemCreated?: (created?: { id: number; title: string }) => void;
   onCancel?: () => void;
 }
 
@@ -102,6 +196,10 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
   const [submitting, setSubmitting] = useState(false);
   const [statusNotice, setStatusNotice] = useState<string | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
+
+  // Success celebration state
+  const [createdSuccess, setCreatedSuccess] = useState<{ id: number; title: string; count?: number } | null>(null);
+  const [copiedLink, setCopiedLink] = useState(false);
 
   const [form, setForm] = useState<ProblemForm>({
     title: "",
@@ -163,6 +261,27 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
     setStatusNotice(`Successfully loaded "${parsed.title}" with ${parsed.testCases?.length || 0} test cases into Studio.`);
   }
 
+  // Load starter template
+  function handleApplyTemplate(key: string) {
+    const t = STARTER_TEMPLATES[key];
+    if (!t) return;
+    setForm((prev) => ({
+      ...prev,
+      title: t.title ?? prev.title,
+      difficulty: (t.difficulty as Difficulty) ?? prev.difficulty,
+      tags: t.tags ?? prev.tags,
+      timeLimitMs: t.timeLimitMs ?? prev.timeLimitMs,
+      memoryLimitMb: t.memoryLimitMb ?? prev.memoryLimitMb,
+      statement: t.statement ?? prev.statement,
+      inputFormat: t.inputFormat ?? prev.inputFormat,
+      outputFormat: t.outputFormat ?? prev.outputFormat,
+      constraints: t.constraints ?? prev.constraints,
+      explanation: t.explanation ?? prev.explanation,
+      testCases: t.testCases ?? prev.testCases,
+    }));
+    setStatusNotice(`Loaded "${t.title}" starter template with test cases.`);
+  }
+
   // Handle Import & Fetch
   async function handleFetchImport(autoPublish = false) {
     setImporting(true);
@@ -206,8 +325,14 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
       }
 
       if (autoPublish && data.problemId) {
-        setStatusNotice(`🚀 Successfully imported and published problem #${data.problemId}: "${data.problem?.title}"!`);
-        if (onProblemCreated) onProblemCreated();
+        const created = {
+          id: data.problemId,
+          title: data.problem?.title ?? `Problem #${data.problemId}`,
+          count: data.problem?.testCases?.length,
+        };
+        setCreatedSuccess(created);
+        setStatusNotice(`🚀 Successfully imported and published problem #${data.problemId}: "${created.title}"!`);
+        if (onProblemCreated) onProblemCreated(created);
         return;
       }
 
@@ -258,24 +383,12 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
         throw new Error(data.error ?? `Failed to save problem (${res.status})`);
       }
 
-      setStatusNotice(`✓ Problem #${data.id} saved as ${status.toUpperCase()} with ${data.testCaseCount ?? 0} test cases!`);
-
-      // Reset form
-      setForm({
-        title: "",
-        statement: "",
-        inputFormat: "",
-        outputFormat: "",
-        constraints: "",
-        explanation: "",
-        difficulty: "easy",
-        tags: "arrays",
-        timeLimitMs: "1000",
-        memoryLimitMb: "256",
-        testCases: [],
-      });
-
-      if (onProblemCreated) onProblemCreated();
+      if (data.id) {
+        const created = { id: data.id, title: payload.title, count: data.testCaseCount };
+        setCreatedSuccess(created);
+        setStatusNotice(`✓ Problem #${data.id} saved as ${status.toUpperCase()} with ${data.testCaseCount ?? 0} test cases!`);
+        if (onProblemCreated) onProblemCreated(created);
+      }
     } catch (err) {
       setStatusError(err instanceof Error ? err.message : "Failed to save problem");
     } finally {
@@ -283,15 +396,17 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
     }
   }
 
-  // Quick tag toggle
-  function handleAddTag(tag: string) {
+  // Quick tag toggle (adds if missing, removes if present)
+  function handleToggleTag(tag: string) {
     const current = form.tags
       .split(",")
-      .map((t) => t.trim())
+      .map((t) => t.trim().toLowerCase())
       .filter(Boolean);
-    if (!current.includes(tag)) {
-      setForm({ ...form, tags: [...current, tag].join(", ") });
-    }
+    const tagLower = tag.toLowerCase();
+    const next = current.includes(tagLower)
+      ? current.filter((t) => t !== tagLower)
+      : [...current, tagLower];
+    setForm({ ...form, tags: next.join(", ") });
   }
 
   // Inline Test Case Add
@@ -468,6 +583,84 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
         </div>
       )}
 
+      {/* Celebration Hero Box when a problem is created or imported */}
+      {createdSuccess && (
+        <div className="m-5 p-5 rounded-xl border-2 border-kjprimary/50 bg-gradient-to-br from-kjprimary/10 via-kjsurface to-kjbg text-kjtext shadow-2xl space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-kjprimary animate-ping" />
+              <span className="text-xs font-bold uppercase tracking-widest text-kjprimary bg-kjprimary/20 px-2.5 py-0.5 rounded-full border border-kjprimary/30">
+                Problem Published & Live
+              </span>
+            </div>
+            <span className="text-xs font-mono text-kjtext-muted">
+              Assigned ID: <strong className="text-kjprimary">#{createdSuccess.id}</strong>
+            </span>
+          </div>
+
+          <div>
+            <h3 className="text-lg font-bold font-mono text-kjtext">
+              {createdSuccess.title}
+            </h3>
+            <p className="text-xs text-kjtext-muted mt-0.5">
+              Problem is now live in the KOJ catalogue. Contestants can solve it in the arena, view statement, test against samples, and submit.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5 pt-1">
+            <Link
+              href={`/problems/${createdSuccess.id}`}
+              className="bg-kjprimary text-kjbg hover:glow-sm font-bold text-xs px-4 py-2 rounded-lg flex items-center gap-1.5 transition-all shadow-md"
+            >
+              <span>🚀 OPEN IN SOLVING ARENA</span>
+              <span>→</span>
+            </Link>
+            <button
+              type="button"
+              onClick={() => {
+                if (typeof window !== "undefined") {
+                  void navigator.clipboard.writeText(`${window.location.origin}/problems/${createdSuccess.id}`);
+                  setCopiedLink(true);
+                  setTimeout(() => setCopiedLink(false), 2000);
+                }
+              }}
+              className="border border-kjborder bg-kjsurface hover:border-kjprimary/60 text-xs px-3.5 py-2 rounded-lg font-mono transition-colors text-kjtext cursor-pointer"
+            >
+              {copiedLink ? "✓ LINK COPIED!" : "📋 COPY PROBLEM LINK"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setCreatedSuccess(null);
+                setForm({
+                  title: "",
+                  statement: "",
+                  inputFormat: "",
+                  outputFormat: "",
+                  constraints: "",
+                  explanation: "",
+                  difficulty: "easy",
+                  tags: "arrays",
+                  timeLimitMs: "1000",
+                  memoryLimitMb: "256",
+                  testCases: [],
+                });
+                setActiveTab("studio");
+              }}
+              className="border border-kjborder bg-kjsurface hover:text-kjprimary text-xs px-3.5 py-2 rounded-lg font-mono transition-colors text-kjtext-muted cursor-pointer"
+            >
+              ➕ CREATE ANOTHER
+            </button>
+            <Link
+              href="/problems"
+              className="text-xs text-kjtext-muted hover:text-kjtext px-2 py-2 font-mono underline transition-colors"
+            >
+              ← Back to Problem Archive
+            </Link>
+          </div>
+        </div>
+      )}
+
       {/* TAB 1: 1-CLICK IMPORTER */}
       {activeTab === "importer" && (
         <div className="p-6 space-y-6">
@@ -505,7 +698,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                   className={`p-3 rounded-lg border text-left transition-all cursor-pointer ${
                     importSource === src.id
                       ? "border-kjprimary bg-kjprimary/10 shadow-sm"
-                      : "border-kjborder/60 bg-kjsurface hover:border-kjborder"
+                      : "border-kjborder/60 bg-kjsurface hover:border-kjprimary/40"
                   }`}
                 >
                   <div className="flex items-center gap-2 text-xs font-bold text-kjtext">
@@ -632,6 +825,66 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
       {/* TAB 2: PROBLEM AUTHORING STUDIO */}
       {activeTab === "studio" && (
         <div className="p-6 space-y-6">
+          {/* Starter Templates Toolbar */}
+          <div className="border border-kjborder/70 rounded-lg p-3 bg-kjbg/40 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[11px] uppercase tracking-wider text-kjprimary font-bold">
+                ⚡ Starter Templates:
+              </span>
+              <button
+                type="button"
+                onClick={() => handleApplyTemplate("icpc")}
+                className="text-xs border border-kjborder hover:border-kjprimary/70 bg-kjsurface px-2.5 py-1 rounded text-kjtext-muted hover:text-kjtext transition-colors cursor-pointer"
+              >
+                🏆 Standard ICPC / CF
+              </button>
+              <button
+                type="button"
+                onClick={() => handleApplyTemplate("leetcode")}
+                className="text-xs border border-kjborder hover:border-kjprimary/70 bg-kjsurface px-2.5 py-1 rounded text-kjtext-muted hover:text-kjtext transition-colors cursor-pointer"
+              >
+                🟡 LeetCode Style
+              </button>
+              <button
+                type="button"
+                onClick={() => handleApplyTemplate("graph")}
+                className="text-xs border border-kjborder hover:border-kjprimary/70 bg-kjsurface px-2.5 py-1 rounded text-kjtext-muted hover:text-kjtext transition-colors cursor-pointer"
+              >
+                🌲 Graph & Shortest Path
+              </button>
+              <button
+                type="button"
+                onClick={() => handleApplyTemplate("math")}
+                className="text-xs border border-kjborder hover:border-kjprimary/70 bg-kjsurface px-2.5 py-1 rounded text-kjtext-muted hover:text-kjtext transition-colors cursor-pointer"
+              >
+                📐 Math & Exponentiation
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setForm({
+                  title: "",
+                  statement: "",
+                  inputFormat: "",
+                  outputFormat: "",
+                  constraints: "",
+                  explanation: "",
+                  difficulty: "easy",
+                  tags: "arrays",
+                  timeLimitMs: "1000",
+                  memoryLimitMb: "256",
+                  testCases: [],
+                });
+                setStatusNotice("Form cleared.");
+              }}
+              className="text-[10px] text-kjtext-muted hover:text-red-400 border border-kjborder/60 hover:border-red-500/40 px-2 py-0.5 rounded transition-colors cursor-pointer"
+            >
+              Clear Form
+            </button>
+          </div>
+
           {/* Subheader Toolbar */}
           <div className="flex items-center justify-between border-b border-kjborder pb-3 flex-wrap gap-3">
             <div className="flex items-center gap-2">
@@ -739,18 +992,28 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                 </div>
 
                 {/* Quick Tag Pills */}
-                <div className="flex flex-wrap gap-1 items-center">
+                <div className="flex flex-wrap gap-1.5 items-center">
                   <span className="text-[10px] text-kjtext-muted mr-1">Quick tags:</span>
-                  {COMMON_TAGS.map((tag) => (
-                    <button
-                      key={tag}
-                      type="button"
-                      onClick={() => handleAddTag(tag)}
-                      className="text-[10px] px-1.5 py-0.5 rounded border border-kjborder/60 bg-kjsurface/60 text-kjtext-muted hover:text-kjprimary hover:border-kjprimary transition-colors cursor-pointer"
-                    >
-                      +{tag}
-                    </button>
-                  ))}
+                  {COMMON_TAGS.map((tag) => {
+                    const isSelected = form.tags
+                      .split(",")
+                      .map((t) => t.trim().toLowerCase())
+                      .includes(tag.toLowerCase());
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => handleToggleTag(tag)}
+                        className={`text-[10px] px-2 py-0.5 rounded border transition-colors cursor-pointer ${
+                          isSelected
+                            ? "border-kjprimary bg-kjprimary/20 text-kjprimary font-bold shadow-xs"
+                            : "border-kjborder/60 bg-kjsurface/60 text-kjtext-muted hover:text-kjprimary hover:border-kjprimary"
+                        }`}
+                      >
+                        {isSelected ? "✓ " : "+"}{tag}
+                      </button>
+                    );
+                  })}
                 </div>
 
                 {/* Statement Editor */}
@@ -1089,7 +1352,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
               </button>
             </div>
             <span className="text-[11px] text-kjtext-muted hidden sm:inline">
-              {bulkMode === "polygon" ? "Supports Polygon (01, 01.a), (.in, .out, .ans)" : "Comma or tab-delimited text"}
+              {bulkMode === "polygon" ? "Supports Polygon (.a), ICPC (.in/.out), CSV & JSON" : "Comma or tab-delimited text"}
             </span>
           </div>
 
@@ -1127,10 +1390,10 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                 <div className="space-y-2 pointer-events-none">
                   <div className="text-3xl">📥</div>
                   <div className="text-xs font-bold text-kjtext uppercase tracking-wider">
-                    Drag & Drop Polygon / ICPC Test Case Files Here
+                    Drag & Drop Polygon, ICPC, CSV, or JSON Test Files Here
                   </div>
                   <div className="text-[11px] text-kjtext-muted max-w-lg mx-auto">
-                    Select all files at once (e.g. <code className="text-kjprimary">01, 01.a</code>, <code className="text-kjprimary">1.in, 1.out, 1.ans</code>, or <code className="text-kjprimary">input1.txt, output1.txt</code>). KOJ auto-pairs matching inputs & outputs.
+                    Select all files at once (e.g. <code className="text-kjprimary">01, 01.a</code>, <code className="text-kjprimary">1.in, 1.out</code>, <code className="text-kjprimary">tests.csv</code>, or <code className="text-kjprimary">cases.json</code>). KOJ auto-pairs inputs & outputs and parses structured datasets.
                   </div>
                   <div className="pt-2">
                     <span className="inline-block px-3 py-1 bg-kjsurface border border-kjborder rounded text-[11px] text-kjprimary font-bold">

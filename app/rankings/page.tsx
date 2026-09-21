@@ -175,7 +175,7 @@ export default function RankingsPage() {
     }
   }, []);
 
-  // After contests load, select from URL param or default to first contest
+  // After contests load, select from URL param or default to active/first contest
   useEffect(() => {
     if (contests.length === 0) return;
     const urlContestId =
@@ -185,7 +185,8 @@ export default function RankingsPage() {
     if (urlContestId && contests.some((c) => String(c.id) === urlContestId)) {
       setSelectedId(urlContestId);
     } else if (!selectedId) {
-      setSelectedId(String(contests[0].id));
+      const active = contests.find((c) => c.status === "Active");
+      setSelectedId(String(active ? active.id : contests[0].id));
     }
   }, [contests, selectedId]);
 

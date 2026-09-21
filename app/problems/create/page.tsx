@@ -32,7 +32,11 @@ export default function ProblemCreatePage() {
         )}
 
         <ProblemStudio
-          onProblemCreated={() => router.push("/problems")}
+          onProblemCreated={(created) => {
+            if (created?.id && typeof window !== "undefined") {
+              window.scrollTo({ top: 0, behavior: "smooth" });
+            }
+          }}
           onCancel={() => router.push("/problems")}
         />
       </main>

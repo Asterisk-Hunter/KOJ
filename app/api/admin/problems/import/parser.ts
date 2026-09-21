@@ -274,7 +274,89 @@ export function parseCompetitiveCompanion(json: Record<string, unknown>): Parsed
   };
 }
 
-/** Parse CSV / Delimited test cases */
+/** Tokenize CSV / TSV text respecting double-quotes and escaped quotes */
+export function parseCsvRows(text: string): string[][] {
+  const rows: string[][] = [];
+  let currentRow: string[] = [];
+  let currentField = "";
+  let inQuotes = false;
+  let i = 0;
+
+  // Detect delimiter: if first non-empty line has tabs and no commas outside quotes, use '\t', else ','
+  const firstLine = text.split(/\r?\n/)[0] || "";
+  const delimiter = !firstLine.includes(",") && firstLine.includes("\t") ? "\t" : ",";
+
+  while (i < text.length) {
+    const char = text[i];
+    const nextChar = text[i + 1];
+
+    if (inQuotes) {
+      if (char === '"' && nextChar === '"') {
+        currentField += '"';
+        i += 2;
+        continue;
+      } else if (char === '"') {
+        inQuotes = false;
+        i++;
+        continue;
+      } else {
+        currentField += char;
+        i++;
+        continue;
+      }
+    }
+
+    if (char === '"') {
+      inQuotes = true;
+      i++;
+      continue;
+    }
+
+    if (char === delimiter) {
+      currentRow.push(currentField.trim());
+      currentField = "";
+      i++;
+      continue;
+    }
+
+    if (char === "\r") {
+      if (nextChar === "\n") i++;
+      currentRow.push(currentField.trim());
+      currentField = "";
+      if (currentRow.some((f) => f.length > 0)) {
+        rows.push(currentRow);
+      }
+      currentRow = [];
+      i++;
+      continue;
+    }
+
+    if (char === "\n") {
+      currentRow.push(currentField.trim());
+      currentField = "";
+      if (currentRow.some((f) => f.length > 0)) {
+        rows.push(currentRow);
+      }
+      currentRow = [];
+      i++;
+      continue;
+    }
+
+    currentField += char;
+    i++;
+  }
+
+  if (currentField.length > 0 || currentRow.length > 0) {
+    currentRow.push(currentField.trim());
+    if (currentRow.some((f) => f.length > 0)) {
+      rows.push(currentRow);
+    }
+  }
+
+  return rows;
+}
+
+/** Parse CSV / TSV / Delimited test cases */
 export function parseTestCasesFromText(text: string): ParsedTestCase[] {
   const cases: ParsedTestCase[] = [];
   const trimmed = text.trim();
@@ -283,7 +365,6 @@ export function parseTestCasesFromText(text: string): ParsedTestCase[] {
   // Check if delimited by block markers:
   // === INPUT === or --- INPUT ---
   if (/(=+|-+)\s*INPUT/i.test(trimmed)) {
-    // Parse delimiter blocks
     const pattern = /(?:(?:INPUT|IN)[\s:=*-]*\n([\s\S]*?))\n+(?:(?:OUTPUT|EXPECTED|OUT)[\s:=*-]*\n([\s\S]*?))(?=(?:\n+(=+|-+)\s*(?:INPUT|TEST|CASE)|$))/gi;
     let match: RegExpExecArray | null;
     let pos = 0;
@@ -302,27 +383,31 @@ export function parseTestCasesFromText(text: string): ParsedTestCase[] {
     if (cases.length > 0) return cases;
   }
 
-  // Parse CSV / TSV
-  const lines = trimmed.split("\n");
+  // Parse using CSV / TSV tokenizer
+  const rows = parseCsvRows(trimmed);
   let startIndex = 0;
-  // Check header
-  if (lines[0].toLowerCase().includes("input") && (lines[0].toLowerCase().includes("output") || lines[0].toLowerCase().includes("expected"))) {
-    startIndex = 1;
+  if (rows.length > 0) {
+    const firstRow = rows[0].map((c) => c.toLowerCase());
+    if (
+      firstRow.some((c) => c.includes("input") || c.includes("stdin")) &&
+      firstRow.some((c) => c.includes("output") || c.includes("expected") || c.includes("stdout"))
+    ) {
+      startIndex = 1;
+    }
   }
 
-  for (let i = startIndex; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
+  for (let i = startIndex; i < rows.length; i++) {
+    const parts = rows[i];
+    if (parts.length >= 2 && (parts[0].length > 0 || parts[1].length > 0)) {
+      const rawIn = parts[0].replace(/\\n/g, "\n");
+      const rawOut = parts[1].replace(/\\n/g, "\n");
+      const isSample = parts[2]
+        ? parts[2].toLowerCase() === "true" || parts[2] === "1" || parts[2].toLowerCase() === "sample"
+        : cases.length === 0;
 
-    // Split on tab or comma (considering quotes)
-    const delimiter = line.includes("\t") ? "\t" : ",";
-    const parts = line.split(delimiter).map((p) => p.replace(/^["']|["']$/g, "").replace(/\\n/g, "\n").trim());
-
-    if (parts.length >= 2 && parts[0] && parts[1]) {
-      const isSample = parts[2] ? parts[2].toLowerCase() === "true" || parts[2] === "1" : cases.length === 0;
       cases.push({
-        input: parts[0] + (parts[0].endsWith("\n") ? "" : "\n"),
-        expectedOutput: parts[1] + (parts[1].endsWith("\n") ? "" : "\n"),
+        input: rawIn.endsWith("\n") ? rawIn : rawIn + "\n",
+        expectedOutput: rawOut.endsWith("\n") ? rawOut : rawOut + "\n",
         isSample,
         position: cases.length,
       });
@@ -457,6 +542,76 @@ export function pairPolygonTestFiles(
   const paired: ParsedTestCase[] = [];
   const matchedFiles = new Set<string>();
 
+  // 1. Process structured bulk files (CSV, TSV, JSON) directly
+  for (const [fileName, item] of fileMap.entries()) {
+    const ext = (fileName.split(".").pop() || "").toLowerCase();
+
+    // JSON array or Competitive Companion format
+    if (ext === "json") {
+      try {
+        const parsed = JSON.parse(item.content);
+        if (Array.isArray(parsed)) {
+          let count = 0;
+          for (const entry of parsed) {
+            if (entry && typeof entry === "object") {
+              const inp = String(entry.input ?? entry.stdin ?? "");
+              const out = String(entry.expectedOutput ?? entry.output ?? entry.stdout ?? "");
+              if (inp || out) {
+                paired.push({
+                  input: inp.endsWith("\n") ? inp : inp + "\n",
+                  expectedOutput: out.endsWith("\n") ? out : out + "\n",
+                  isSample: Boolean(entry.isSample ?? entry.sample ?? count === 0),
+                  position: paired.length,
+                });
+                count++;
+              }
+            }
+          }
+          if (count > 0) {
+            matchedFiles.add(fileName);
+            continue;
+          }
+        } else if (parsed && typeof parsed === "object" && Array.isArray(parsed.tests)) {
+          let count = 0;
+          for (const entry of parsed.tests) {
+            const inp = String(entry.input ?? "");
+            const out = String(entry.output ?? "");
+            if (inp || out) {
+              paired.push({
+                input: inp.endsWith("\n") ? inp : inp + "\n",
+                expectedOutput: out.endsWith("\n") ? out : out + "\n",
+                isSample: count === 0,
+                position: paired.length,
+              });
+              count++;
+            }
+          }
+          if (count > 0) {
+            matchedFiles.add(fileName);
+            continue;
+          }
+        }
+      } catch {
+        // Not a testcase json, leave to standard pairing
+      }
+    }
+
+    // CSV / TSV file
+    if (ext === "csv" || ext === "tsv") {
+      const csvCases = parseTestCasesFromText(item.content);
+      if (csvCases.length > 0) {
+        for (const tc of csvCases) {
+          paired.push({
+            ...tc,
+            position: paired.length,
+          });
+        }
+        matchedFiles.add(fileName);
+        continue;
+      }
+    }
+  }
+
   type Candidate = {
     baseKey: string;
     kind: "input" | "output";
@@ -468,6 +623,8 @@ export function pairPolygonTestFiles(
   const outputs = new Map<string, Candidate>();
 
   for (const [fileName, item] of fileMap.entries()) {
+    if (matchedFiles.has(fileName)) continue;
+
     // 1. Polygon format: e.g. "01.a" is output for "01"
     if (fileName.endsWith(".a")) {
       const key = fileName.slice(0, -2);
@@ -514,7 +671,7 @@ export function pairPolygonTestFiles(
     return a.baseKey.localeCompare(b.baseKey, undefined, { numeric: true, sensitivity: "base" });
   });
 
-  let pos = 0;
+  let pos = paired.length;
   for (const inItem of inputs) {
     const outItem = outputs.get(inItem.baseKey);
     if (outItem) {
