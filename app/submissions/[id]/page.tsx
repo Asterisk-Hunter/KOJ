@@ -66,6 +66,11 @@ export default function SubmissionStatusPage() {
     try {
       const res = await fetch(`/api/submissions/${encodeURIComponent(id)}`, { cache: "no-store" });
       if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          setError("__AUTH_REQUIRED__");
+          setLoading(false);
+          return;
+        }
         const j = (await res.json().catch(() => null)) as { error?: string } | null;
         throw new Error(j?.error ?? `failed (${res.status})`);
       }
@@ -151,6 +156,30 @@ export default function SubmissionStatusPage() {
   }
 
   if (error) {
+    if (error === "__AUTH_REQUIRED__") {
+      return (
+        <>
+          <Navigation />
+          <main className="pt-20 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            <Link href="/problems" className="text-xs font-mono text-kjtext-muted hover:text-kjprimary">
+              ← Back to problems
+            </Link>
+            <div className="mt-8 bg-kjsurface border border-kjborder rounded-lg p-10 text-center max-w-md mx-auto">
+              <p className="text-sm font-mono text-kjtext mb-2">Sign in required</p>
+              <p className="text-xs font-mono text-kjtext-muted mb-5">
+                You need to be signed in to view this submission. This submission may belong to another user.
+              </p>
+              <Link
+                href="/sign-in"
+                className="inline-block bg-kjprimary text-kjbg font-mono font-bold text-xs px-6 py-2.5 rounded hover:glow-sm transition-all"
+              >
+                SIGN IN →
+              </Link>
+            </div>
+          </main>
+        </>
+      );
+    }
     return (
       <>
         <Navigation />
@@ -158,7 +187,9 @@ export default function SubmissionStatusPage() {
           <Link href="/problems" className="text-xs font-mono text-kjtext-muted hover:text-kjprimary">
             ← Back to problems
           </Link>
-          <div className="mt-6 border border-red-500/30 bg-red-500/10 rounded p-4 text-xs font-mono text-red-400">Error: {error}</div>
+          <div className="mt-6 border border-red-500/30 bg-red-500/10 rounded p-4 text-xs font-mono text-red-400">
+            {error}
+          </div>
         </main>
       </>
     );
@@ -169,7 +200,21 @@ export default function SubmissionStatusPage() {
       <>
         <Navigation />
         <main className="pt-20 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <p className="text-xs font-mono text-kjtext-muted">Submission not found.</p>
+          <Link href="/problems" className="text-xs font-mono text-kjtext-muted hover:text-kjprimary">
+            ← Back to problems
+          </Link>
+          <div className="mt-8 bg-kjsurface border border-kjborder rounded-lg p-10 text-center max-w-md mx-auto">
+            <p className="text-sm font-mono text-kjtext mb-2">Submission not found</p>
+            <p className="text-xs font-mono text-kjtext-muted mb-5">
+              This submission may have been deleted or the ID is invalid.
+            </p>
+            <Link
+              href="/submissions"
+              className="inline-block border border-kjborder text-kjprimary hover:border-kjprimary font-mono text-xs px-4 py-2 rounded transition-colors"
+            >
+              View my submissions →
+            </Link>
+          </div>
         </main>
       </>
     );
@@ -179,7 +224,10 @@ export default function SubmissionStatusPage() {
     <>
       <Navigation />
       <main className="pt-20 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <Link href={problem ? `/problems/${problem.id}` : "/problems"} className="text-xs font-mono text-kjtext-muted hover:text-kjprimary">
+        <Link
+          href={problem ? `/problems/${problem.id}${submission.contestId ? `?contestId=${submission.contestId}` : ""}` : "/problems"}
+          className="text-xs font-mono text-kjtext-muted hover:text-kjprimary"
+        >
           ← Return to problem
         </Link>
         <div className="mt-6 flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4">
@@ -187,7 +235,7 @@ export default function SubmissionStatusPage() {
             <p className="text-xs uppercase tracking-widest font-mono text-kjprimary">Submission monitor</p>
             <h1 className="text-3xl font-mono font-bold text-kjtext mt-2">Submission #{submission.id}</h1>
           </div>
-          <span className={`font-mono text-sm ${statusInfo?.color}`}>{statusInfo?.label}</span>
+          <span className={`font-mono text-sm font-bold ${statusInfo?.color}`}>{statusInfo?.label}</span>
         </div>
 
         <section className="mt-8 bg-kjsurface border border-kjborder rounded-lg p-6">
@@ -221,8 +269,17 @@ export default function SubmissionStatusPage() {
                     : "--"}
               </span>
             </div>
-            <div className="h-2 rounded bg-kjbg overflow-hidden">
-              <div className="h-full bg-kjprimary transition-all duration-700" style={{ width: `${progress}%` }} />
+            <div className="h-2.5 rounded bg-kjbg overflow-hidden">
+              <div
+                className={`h-full transition-all duration-700 rounded ${
+                  submission.status === "accepted"
+                    ? "bg-gradient-to-r from-green-500 to-green-400"
+                    : TERMINAL.has(submission.status) && submission.status !== "accepted"
+                      ? "bg-gradient-to-r from-red-500 to-red-400"
+                      : "bg-kjprimary"
+                }`}
+                style={{ width: `${progress}%` }}
+              />
             </div>
           </div>
         </section>
@@ -269,8 +326,18 @@ export default function SubmissionStatusPage() {
           </pre>
         </section>
 
-        {PENDING.has(submission.status) && <p className="mt-4 text-xs font-mono text-kjtext-muted animate-pulse">Live update via SSE — waiting for verdict…</p>}
-        {isTerminal && <p className="mt-4 text-xs font-mono text-kjtext-muted">Terminal verdict reached.</p>}
+        {PENDING.has(submission.status) && (
+          <div className="mt-4 flex items-center gap-2 text-xs font-mono text-kjtext-muted">
+            <span className="inline-block w-2 h-2 bg-yellow-400 rounded-full animate-pulse" />
+            Live update via SSE — waiting for verdict…
+          </div>
+        )}
+        {isTerminal && (
+          <div className="mt-4 flex items-center gap-2 text-xs font-mono text-kjtext-muted">
+            <span className={`inline-block w-2 h-2 rounded-full ${submission.status === "accepted" ? "bg-green-400" : "bg-red-400"}`} />
+            Terminal verdict reached.
+          </div>
+        )}
       </main>
     </>
   );

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Navigation from "@/app/components/Navigation";
 
 type UiStatus = "Active" | "Registration Open" | "Upcoming" | "Finished";
 
@@ -79,22 +80,28 @@ export default function ContestArenaPage() {
 
   if (loading) {
     return (
-      <main className="max-w-5xl mx-auto px-4 py-16">
-        <div className="bg-kjsurface/40 border border-kjborder rounded-lg p-8 text-sm font-mono text-kjtext-muted">
-          Loading arena…
-        </div>
-      </main>
+      <>
+        <Navigation />
+        <main className="pt-20 max-w-5xl mx-auto px-4 py-8">
+          <div className="bg-kjsurface/40 border border-kjborder rounded-lg p-8 text-sm font-mono text-kjtext-muted">
+            Loading arena…
+          </div>
+        </main>
+      </>
     );
   }
 
   if (error || !contest) {
     return (
-      <main className="max-w-5xl mx-auto px-4 py-16">
-        <p className="text-sm font-mono text-red-400">{error ?? "Contest not found"}</p>
-        <Link href="/contests" className="inline-block mt-6 text-xs font-mono text-kjprimary hover:underline">
-          ← Back to contests
-        </Link>
-      </main>
+      <>
+        <Navigation />
+        <main className="pt-20 max-w-5xl mx-auto px-4 py-8">
+          <p className="text-sm font-mono text-red-400">{error ?? "Contest not found"}</p>
+          <Link href="/contests" className="inline-block mt-6 text-xs font-mono text-kjprimary hover:underline">
+            ← Back to contests
+          </Link>
+        </main>
+      </>
     );
   }
 
@@ -103,99 +110,121 @@ export default function ContestArenaPage() {
 
   if (!isLive) {
     return (
-      <main className="max-w-5xl mx-auto px-4 py-16">
-        <p className="text-xs font-mono text-kjprimary tracking-widest mb-3">ARENA / {contest.status.toUpperCase()}</p>
-        <h1 className="text-3xl font-mono text-kjtext">{contest.title}</h1>
-        <div className="mt-6 bg-kjsurface border border-kjborder rounded-lg p-6">
-          <p className="text-sm font-mono text-kjtext">Contest is not live.</p>
-          <p className="text-xs font-mono text-kjtext-muted mt-2">
-            {contest.status === "Finished"
-              ? "This contest has ended. View results from the contest page."
-              : `Contest status: ${contest.status}. Arena opens when the contest is live.`}
-          </p>
-          <Link
-            href={`/contests/${encodeURIComponent(contest.id)}`}
-            className="inline-block mt-6 border border-kjborder px-4 py-2 rounded text-xs font-mono text-kjprimary"
-          >
-            ← Contest details
-          </Link>
-        </div>
-      </main>
+      <>
+        <Navigation />
+        <main className="pt-20 max-w-5xl mx-auto px-4 py-8">
+          <p className="text-xs font-mono text-kjprimary tracking-widest mb-3">ARENA / {contest.status.toUpperCase()}</p>
+          <h1 className="text-3xl font-mono text-kjtext">{contest.title}</h1>
+          <div className="mt-6 bg-kjsurface border border-kjborder rounded-lg p-6">
+            <p className="text-sm font-mono text-kjtext">Contest is not live.</p>
+            <p className="text-xs font-mono text-kjtext-muted mt-2">
+              {contest.status === "Finished"
+                ? "This contest has ended. View results from the contest page."
+                : `Contest status: ${contest.status}. Arena opens when the contest is live.`}
+            </p>
+            <Link
+              href={`/contests/${encodeURIComponent(contest.id)}`}
+              className="inline-block mt-6 border border-kjborder px-4 py-2 rounded text-xs font-mono text-kjprimary hover:border-kjprimary transition-colors"
+            >
+              ← Contest details
+            </Link>
+          </div>
+        </main>
+      </>
     );
   }
 
   if (!isRegistered) {
     return (
-      <main className="max-w-5xl mx-auto px-4 py-16">
-        <p className="text-xs font-mono text-kjprimary tracking-widest mb-3">LIVE ARENA / REGISTRATION REQUIRED</p>
-        <h1 className="text-3xl font-mono text-kjtext">{contest.title}</h1>
-        <div className="mt-6 bg-kjsurface border border-kjborder rounded-lg p-6">
-          <p className="text-sm font-mono text-kjtext">You are not registered for this contest.</p>
-          <p className="text-xs font-mono text-kjtext-muted mt-2">
-            Registration is required to enter the arena and submit solutions.
-          </p>
-          <Link
-            href={`/contests/${encodeURIComponent(contest.id)}`}
-            className="inline-block mt-6 bg-kjprimary text-kjbg font-mono font-bold text-xs px-4 py-2 rounded"
-          >
-            GO TO REGISTRATION →
-          </Link>
-        </div>
-      </main>
+      <>
+        <Navigation />
+        <main className="pt-20 max-w-5xl mx-auto px-4 py-8">
+          <p className="text-xs font-mono text-kjprimary tracking-widest mb-3">LIVE ARENA / REGISTRATION REQUIRED</p>
+          <h1 className="text-3xl font-mono text-kjtext">{contest.title}</h1>
+          <div className="mt-6 bg-kjsurface border border-kjborder rounded-lg p-6">
+            <p className="text-sm font-mono text-kjtext">You are not registered for this contest.</p>
+            <p className="text-xs font-mono text-kjtext-muted mt-2">
+              Registration is required to enter the arena and submit solutions.
+            </p>
+            <Link
+              href={`/contests/${encodeURIComponent(contest.id)}`}
+              className="inline-block mt-6 bg-kjprimary text-kjbg font-mono font-bold text-xs px-4 py-2 rounded hover:glow-sm transition-all"
+            >
+              GO TO REGISTRATION →
+            </Link>
+          </div>
+        </main>
+      </>
     );
   }
 
   const sorted = contest.problems.slice().sort((a, b) => a.position - b.position);
 
   return (
-    <main className="max-w-5xl mx-auto px-4 py-16">
-      <p className="text-xs font-mono text-kjprimary tracking-widest mb-3">LIVE ARENA</p>
-      <h1 className="text-3xl font-mono text-kjtext">{contest.title}</h1>
-      <p className="text-kjtext-muted mt-3 text-sm">{contest.description || "—"}</p>
-      <div className="mt-8 grid md:grid-cols-2 gap-4">
-        <div className="bg-kjsurface border border-kjborder rounded-lg p-5">
-          <h2 className="font-mono text-kjtext mb-4">Problem queue</h2>
-          {sorted.length === 0 ? (
-            <p className="text-sm font-mono text-kjtext-muted">No problems in this contest.</p>
-          ) : (
-            sorted.map((p, idx) => {
-              const letter = String.fromCharCode(65 + idx);
-              return (
-                <Link
-                  key={p.id}
-                  href={`/problems/${p.id}?contestId=${contest.numericId}`}
-                  className="flex justify-between items-center border-b border-kjborder py-3 text-sm text-kjtext hover:text-kjprimary"
-                >
-                  <span>
-                    {letter} · {p.title}
-                  </span>
-                  <span className="text-xs text-kjprimary border border-kjborder rounded px-2 py-0.5">OPEN</span>
-                </Link>
-              );
-            })
-          )}
+    <>
+      <Navigation />
+      <main className="pt-20 max-w-5xl mx-auto px-4 py-8">
+        <p className="text-xs font-mono text-kjprimary tracking-widest mb-3">LIVE ARENA</p>
+        <h1 className="text-3xl font-mono text-kjtext">{contest.title}</h1>
+        <p className="text-kjtext-muted mt-3 text-sm">{contest.description || "—"}</p>
+        <div className="mt-8 grid md:grid-cols-2 gap-4">
+          <div className="bg-kjsurface border border-kjborder rounded-lg p-5">
+            <h2 className="font-mono text-kjtext mb-4 text-sm">Problem queue</h2>
+            {sorted.length === 0 ? (
+              <div className="text-center py-6">
+                <p className="text-sm font-mono text-kjtext-muted">No problems in this contest.</p>
+                <p className="text-xs font-mono text-kjtext-muted/60 mt-1">Check back later or contact the contest organizer.</p>
+              </div>
+            ) : (
+              sorted.map((p, idx) => {
+                const letter = String.fromCharCode(65 + idx);
+                return (
+                  <Link
+                    key={p.id}
+                    href={`/problems/${p.id}?contestId=${contest.numericId}`}
+                    className="flex justify-between items-center border-b border-kjborder py-3 text-sm text-kjtext hover:text-kjprimary transition-colors group"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="font-mono text-kjtext-muted w-5 text-center">{letter}</span>
+                      <span>{p.title}</span>
+                      <span className={`text-[11px] font-mono border rounded px-1.5 py-0.5 ${
+                        p.difficulty === "easy"
+                          ? "text-green-400 border-green-400/20"
+                          : p.difficulty === "medium"
+                            ? "text-yellow-400 border-yellow-400/20"
+                            : "text-red-400 border-red-400/20"
+                      }`}>
+                        {p.difficulty}
+                      </span>
+                    </div>
+                    <span className="text-xs text-kjprimary border border-kjborder rounded px-2 py-0.5 group-hover:border-kjprimary transition-colors">OPEN</span>
+                  </Link>
+                );
+              })
+            )}
+          </div>
+          <div className="bg-kjsurface border border-kjborder rounded-lg p-5">
+            <h2 className="font-mono text-kjtext mb-4 text-sm">Contest panel</h2>
+            <p className="font-mono text-3xl text-kjprimary text-glow tabular-nums">{timeRemaining}</p>
+            <p className="text-sm text-kjtext-muted mt-3">
+              {contest.problemsCount} problems · scoring is solved count, then penalty.
+            </p>
+            <p className="text-xs font-mono text-kjtext-muted mt-2">{contest.participants} participants registered</p>
+            <Link
+              href={`/rankings?contestId=${contest.numericId}`}
+              className="inline-block mt-6 border border-kjborder px-4 py-2 rounded text-xs font-mono text-kjprimary hover:border-kjprimary transition-colors"
+            >
+              LEADERBOARD →
+            </Link>
+          </div>
         </div>
-        <div className="bg-kjsurface border border-kjborder rounded-lg p-5">
-          <h2 className="font-mono text-kjtext mb-4">Contest panel</h2>
-          <p className="font-mono text-3xl text-kjprimary">{timeRemaining}</p>
-          <p className="text-sm text-kjtext-muted mt-3">
-            {contest.problemsCount} problems · scoring is solved count, then penalty.
-          </p>
-          <p className="text-xs font-mono text-kjtext-muted mt-2">{contest.participants} participants registered</p>
-          <Link
-            href={`/rankings?contestId=${contest.numericId}`}
-            className="inline-block mt-6 border border-kjborder px-4 py-2 rounded text-xs font-mono text-kjprimary"
-          >
-            LEADERBOARD →
-          </Link>
-        </div>
-      </div>
-      <Link
-        href={`/contests/${encodeURIComponent(contest.id)}`}
-        className="inline-block mt-8 text-xs font-mono text-kjtext-muted hover:text-kjprimary"
-      >
-        ← Contest details
-      </Link>
-    </main>
+        <Link
+          href={`/contests/${encodeURIComponent(contest.id)}`}
+          className="inline-block mt-8 text-xs font-mono text-kjtext-muted hover:text-kjprimary"
+        >
+          ← Contest details
+        </Link>
+      </main>
+    </>
   );
 }

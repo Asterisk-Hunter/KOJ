@@ -1,6 +1,7 @@
 "use client";
 
 /* eslint-disable react-hooks/set-state-in-effect */
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import PageHeader from "@/app/components/PageHeader";
 
@@ -198,7 +199,7 @@ export default function RankingsPage() {
               <select
                 value={selectedId}
                 onChange={(event) => setSelectedId(event.target.value)}
-                className="bg-kjsurface border border-kjborder rounded px-4 py-3 text-sm font-mono text-kjtext"
+                className="bg-kjsurface border border-kjborder rounded px-4 py-3 text-sm font-mono text-kjtext focus:border-kjprimary focus:outline-none"
                 aria-label="Select contest"
               >
                 {contests.map((item) => (
@@ -214,12 +215,13 @@ export default function RankingsPage() {
                   onChange={(event) => setSelectedId(event.target.value)}
                   placeholder="Contest ID (numeric)"
                   inputMode="numeric"
-                  className="bg-kjsurface border border-kjborder rounded px-4 py-3 text-sm font-mono text-kjtext placeholder:text-kjtext-muted/50 w-48"
+                  className="bg-kjsurface border border-kjborder rounded px-4 py-3 text-sm font-mono text-kjtext placeholder:text-kjtext-muted/50 w-48 focus:border-kjprimary focus:outline-none"
                   aria-label="Contest ID"
                 />
                 <button
                   onClick={() => void fetchRankings(selectedId)}
-                  className="border border-kjprimary/30 bg-kjprimary/10 text-kjprimary rounded px-4 py-3 text-xs font-mono"
+                  disabled={!selectedId.trim()}
+                  className="border border-kjprimary/30 bg-kjprimary/10 text-kjprimary rounded px-4 py-3 text-xs font-mono disabled:opacity-50 disabled:cursor-not-allowed hover:bg-kjprimary/20 transition-colors"
                 >
                   LOAD
                 </button>
@@ -243,16 +245,25 @@ export default function RankingsPage() {
 
         {!rankingsLoading && !rankingsError && !data && !selectedId && (
           <div className="border border-kjborder bg-kjsurface rounded p-8 text-center">
-            <p className="text-sm font-mono text-kjtext-muted">Select a contest or enter a numeric contest ID to view standings.</p>
+            <p className="text-sm font-mono text-kjtext-muted mb-1">No contest selected</p>
+            <p className="text-xs font-mono text-kjtext-muted/60">
+              Choose a contest from the dropdown above, or enter a numeric contest ID to view standings.
+            </p>
           </div>
         )}
 
         {!rankingsLoading && !rankingsError && data && data.rows.length === 0 && (
           <div className="border border-kjborder bg-kjsurface rounded p-8 text-center">
-            <p className="text-sm font-mono text-kjtext-muted">No submissions for this contest yet.</p>
-            <p className="text-xs font-mono text-kjtext-muted mt-2">
-              Contest: {data.contest.title} · {data.rows.length} participants
+            <p className="text-sm font-mono text-kjtext-muted mb-1">No submissions yet</p>
+            <p className="text-xs font-mono text-kjtext-muted/60 mb-4">
+              {data.contest.title} — no participants have submitted solutions yet.
             </p>
+            <Link
+              href={`/contests`}
+              className="inline-block border border-kjborder text-kjprimary hover:border-kjprimary font-mono text-xs px-4 py-2 rounded transition-colors"
+            >
+              Browse contests →
+            </Link>
           </div>
         )}
 
@@ -264,7 +275,9 @@ export default function RankingsPage() {
                   {["Rank", "Username", ...data.problems.map((p) => p.label), "Solved", "Penalty"].map((heading) => (
                     <th
                       key={heading}
-                      className="px-5 py-4 text-left text-[11px] uppercase tracking-widest font-mono text-kjtext-muted"
+                      className={`px-5 py-4 text-[11px] uppercase tracking-widest font-mono text-kjtext-muted ${
+                        heading === "Solved" || heading === "Penalty" ? "text-right" : "text-left"
+                      }`}
                     >
                       {heading}
                     </th>
@@ -273,8 +286,8 @@ export default function RankingsPage() {
               </thead>
               <tbody>
                 {data.rows.map((row) => (
-                  <tr key={row.userId} className="border-t border-kjborder/70">
-                    <td className="px-5 py-4 font-mono text-kjprimary">{String(row.rank).padStart(2, "0")}</td>
+                  <tr key={row.userId} className="border-t border-kjborder/70 hover:bg-kjsurface/50 transition-colors">
+                    <td className="px-5 py-4 font-mono text-kjprimary font-bold">{String(row.rank).padStart(2, "0")}</td>
                     <td className="px-5 py-4 font-mono text-kjtext">{row.username}</td>
                     {row.perProblem.map((p, index) => (
                       <td
@@ -285,8 +298,8 @@ export default function RankingsPage() {
                         {p.status}
                       </td>
                     ))}
-                    <td className="px-5 py-4 font-mono text-kjtext">{row.solvedCount}</td>
-                    <td className="px-5 py-4 font-mono text-kjtext-muted">{row.penalty} min</td>
+                    <td className="px-5 py-4 font-mono text-right font-bold text-green-400">{row.solvedCount}</td>
+                    <td className="px-5 py-4 font-mono text-right text-kjtext-muted tabular-nums">{row.penalty} min</td>
                   </tr>
                 ))}
               </tbody>

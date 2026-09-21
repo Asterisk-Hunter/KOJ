@@ -355,7 +355,7 @@ export default function ProblemDetailPage() {
               ) : (
                 problem.samples.map((s, idx) => (
                   <div key={idx} className="grid sm:grid-cols-2 gap-3 font-mono">
-                    <pre className="bg-kjbg border border-kjborder rounded p-4 text-xs text-kjtext whitespace-pre-wrap">
+                    <div className="bg-kjbg border border-kjborder rounded p-4 text-xs text-kjtext whitespace-pre-wrap">
                       <div className="flex justify-between items-center mb-2">
                         <span className="text-kjtext-muted">SAMPLE INPUT{problem.samples.length > 1 ? ` #${idx + 1}` : ""}</span>
                         <button
@@ -365,14 +365,32 @@ export default function ProblemDetailPage() {
                             setCopiedSample(`in-${idx}`);
                             setTimeout(() => setCopiedSample(null), 1500);
                           }}
-                          className="text-[10px] uppercase font-mono text-kjprimary hover:underline cursor-pointer"
+                          className={`flex items-center gap-1 text-[10px] uppercase font-mono px-1.5 py-0.5 rounded transition-colors cursor-pointer ${
+                            copiedSample === `in-${idx}`
+                              ? "text-green-400 bg-green-400/10"
+                              : "text-kjprimary hover:bg-kjprimary/10"
+                          }`}
                         >
-                          {copiedSample === `in-${idx}` ? "Copied!" : "Copy"}
+                          {copiedSample === `in-${idx}` ? (
+                            <>
+                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                              </svg>
+                              Copied
+                            </>
+                          ) : (
+                            <>
+                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                              </svg>
+                              Copy
+                            </>
+                          )}
                         </button>
                       </div>
                       {s.input}
-                    </pre>
-                    <pre className="bg-kjbg border border-kjborder rounded p-4 text-xs text-kjtext whitespace-pre-wrap">
+                    </div>
+                    <div className="bg-kjbg border border-kjborder rounded p-4 text-xs text-kjtext whitespace-pre-wrap">
                       <div className="flex justify-between items-center mb-2">
                         <span className="text-kjtext-muted">SAMPLE OUTPUT{problem.samples.length > 1 ? ` #${idx + 1}` : ""}</span>
                         <button
@@ -382,13 +400,31 @@ export default function ProblemDetailPage() {
                             setCopiedSample(`out-${idx}`);
                             setTimeout(() => setCopiedSample(null), 1500);
                           }}
-                          className="text-[10px] uppercase font-mono text-kjprimary hover:underline cursor-pointer"
+                          className={`flex items-center gap-1 text-[10px] uppercase font-mono px-1.5 py-0.5 rounded transition-colors cursor-pointer ${
+                            copiedSample === `out-${idx}`
+                              ? "text-green-400 bg-green-400/10"
+                              : "text-kjprimary hover:bg-kjprimary/10"
+                          }`}
                         >
-                          {copiedSample === `out-${idx}` ? "Copied!" : "Copy"}
+                          {copiedSample === `out-${idx}` ? (
+                            <>
+                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                              </svg>
+                              Copied
+                            </>
+                          ) : (
+                            <>
+                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                              </svg>
+                              Copy
+                            </>
+                          )}
                         </button>
                       </div>
                       {s.expectedOutput}
-                    </pre>
+                    </div>
                   </div>
                 ))
               )}
@@ -409,35 +445,97 @@ export default function ProblemDetailPage() {
                 <option value="java">Java</option>
               </select>
             </div>
-            <textarea
-              value={codeByLang[language] ?? STARTERS[language] ?? ""}
-              onChange={(event) => {
-                const val = event.target.value;
-                setCodeByLang((prev) => ({ ...prev, [language]: val }));
-              }}
-              spellCheck={false}
-              className="w-full min-h-[360px] resize-y bg-kjbg border border-kjborder rounded p-4 text-sm leading-6 font-mono text-kjtext focus:border-kjprimary focus:outline-none"
-            />
+            <div className="relative">
+              <textarea
+                value={codeByLang[language] ?? STARTERS[language] ?? ""}
+                onChange={(event) => {
+                  const val = event.target.value;
+                  setCodeByLang((prev) => ({ ...prev, [language]: val }));
+                }}
+                onKeyDown={(event) => {
+                  // Tab inserts 4 spaces instead of moving focus
+                  if (event.key === "Tab") {
+                    event.preventDefault();
+                    const ta = event.currentTarget;
+                    const start = ta.selectionStart;
+                    const end = ta.selectionEnd;
+                    const val = ta.value;
+                    const newVal = val.substring(0, start) + "    " + val.substring(end);
+                    setCodeByLang((prev) => ({ ...prev, [language]: newVal }));
+                    // Restore cursor position after React re-render
+                    requestAnimationFrame(() => {
+                      ta.selectionStart = ta.selectionEnd = start + 4;
+                    });
+                  }
+                  // Ctrl+Enter to submit
+                  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                    event.preventDefault();
+                    handleSubmit("submit");
+                  }
+                }}
+                spellCheck={false}
+                className="w-full min-h-[360px] resize-y bg-kjbg border border-kjborder rounded p-4 text-sm leading-6 font-mono text-kjtext focus:border-kjprimary focus:outline-none"
+              />
+              <span className="absolute bottom-2 right-3 text-[10px] font-mono text-kjtext-muted/50 select-none">
+                {(codeByLang[language] ?? STARTERS[language] ?? "").split("\n").length} lines · Ctrl+Enter to submit
+              </span>
+            </div>
             <div className="flex gap-3 mt-4">
               <button
                 onClick={() => handleSubmit("run")}
                 disabled={submitting}
-                className="border border-kjborder text-kjtext font-mono text-xs px-4 py-2 rounded hover:border-kjprimary hover:text-kjprimary disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                className="border border-kjborder text-kjtext font-mono text-xs px-4 py-2 rounded hover:border-kjprimary hover:text-kjprimary disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-colors"
               >
-                {submitting ? "RUNNING…" : "RUN SAMPLE"}
+                {submitting ? (
+                  <span className="flex items-center gap-2">
+                    <span className="inline-block w-3 h-3 border-2 border-kjtext-muted/30 border-t-kjtext-muted rounded-full animate-spin" />
+                    RUNNING…
+                  </span>
+                ) : (
+                  "RUN SAMPLE"
+                )}
               </button>
               <button
                 onClick={() => handleSubmit("submit")}
                 disabled={submitting || cooldown > 0}
-                className="bg-kjprimary text-kjbg font-mono font-bold text-xs px-5 py-2 rounded hover:glow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                className="bg-kjprimary text-kjbg font-mono font-bold text-xs px-5 py-2 rounded hover:glow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-all"
               >
-                {submitting ? "SUBMITTING…" : cooldown > 0 ? `WAIT ${cooldown}s` : "SUBMIT"}
+                {submitting ? (
+                  <span className="flex items-center gap-2">
+                    <span className="inline-block w-3 h-3 border-2 border-kjbg/30 border-t-kjbg rounded-full animate-spin" />
+                    SUBMITTING…
+                  </span>
+                ) : cooldown > 0 ? (
+                  <span className="flex items-center gap-2">
+                    <span className="inline-block w-3 h-3 border-2 border-kjbg/30 border-t-kjbg rounded-full animate-spin" />
+                    WAIT {cooldown}s
+                  </span>
+                ) : (
+                  "SUBMIT"
+                )}
               </button>
             </div>
+            {/* Cooldown progress bar */}
+            {cooldown > 0 && (
+              <div className="mt-3 h-1 bg-kjbg rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-kjprimary/40 transition-all duration-1000 ease-linear"
+                  style={{ width: `${(cooldown / 30) * 100}%` }}
+                />
+              </div>
+            )}
             {notice && (
-              <p className="mt-4 border border-kjprimary/20 bg-kjprimary/5 rounded p-3 text-xs font-mono text-kjprimary break-words">
+              <div className={`mt-4 border rounded p-3 text-xs font-mono break-words ${
+                notice.includes("ACCEPTED") || notice.includes("accepted")
+                  ? "border-green-400/20 bg-green-400/5 text-green-400"
+                  : notice.includes("judging") || notice.includes("running") || notice.includes("pending")
+                    ? "border-yellow-400/20 bg-yellow-400/5 text-yellow-400"
+                    : notice.includes("WRONG") || notice.includes("TLE") || notice.includes("MLE") || notice.includes("ERROR") || notice.includes("error")
+                      ? "border-red-400/20 bg-red-400/5 text-red-400"
+                      : "border-kjprimary/20 bg-kjprimary/5 text-kjprimary"
+              }`}>
                 {notice}
-              </p>
+              </div>
             )}
             <div className="mt-7">
               <div className="flex justify-between mb-3">
@@ -448,13 +546,17 @@ export default function ProblemDetailPage() {
               </div>
               <div className="space-y-1 text-xs font-mono">
                 {!isLoaded ? (
-                  <p className="text-kjtext-muted">Loading…</p>
+                  <p className="text-kjtext-muted py-2">Loading…</p>
                 ) : !isSignedIn ? (
-                  <p className="text-kjtext-muted">
-                    Sign in to see your submissions and run code.
-                  </p>
+                  <div className="bg-kjbg/50 border border-kjborder rounded p-3 text-center">
+                    <p className="text-kjtext-muted mb-2">Sign in to see your submissions and run code.</p>
+                    <Link href="/sign-in" className="text-kjprimary hover:underline text-[11px]">Sign in →</Link>
+                  </div>
                 ) : verdicts.length === 0 ? (
-                  <p className="text-kjtext-muted">No submissions yet.</p>
+                  <div className="bg-kjbg/50 border border-kjborder rounded p-3 text-center">
+                    <p className="text-kjtext-muted">No submissions yet.</p>
+                    <p className="text-kjtext-muted/60 mt-1 text-[11px]">Write your solution and hit Submit above.</p>
+                  </div>
                 ) : (
                   verdicts.map((v) => (
                     <Link
