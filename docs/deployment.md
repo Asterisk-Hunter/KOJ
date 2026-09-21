@@ -1,107 +1,210 @@
-# Deployment
+# Deployment Guide
 
-## Target environments
-
-### Local development
-```bash
-├── Neon Postgres (serverless, via DATABASE_URL)
-├── Next.js frontend (npm run dev, port 3000)
-└── FastAPI judge (uvicorn --reload, port 8000, runs judge as subprocess)
-# Redis — planned, not yet running
-```
-
-### College deployment
-- **Single Linux VM** (4 CPU, 8GB RAM) running Docker/containers, or
-- **Split:** Vercel (Next) + Cloud Run (FastAPI judge) + Neon — current intended production (see Vercel section below)
+This guide covers deployment workflows for KOJ across local development, Vercel (Next.js frontend), Google Cloud Run (FastAPI judge service), and Neon (serverless Postgres).
 
 ---
 
-## Infrastructure
+## Architecture Overview
+
+KOJ runs as a decoupled 3-tier architecture:
 
 ```
-┌─ Vercel (Next.js) ─────────────────┐  ┌─ FastAPI host ─────────────┐
-│  Next.js Route Handlers            │→ │  FastAPI + judge subprocess│
-│  Clerk proxy.ts                    │  │  POST /judge (internal)    │
-└──────────┬─────────────────────────┘  └──────────┬─────────────────┘
-           │ SQL (Drizzle/pg)                    │ SQL (psycopg)
-           └──────────────┬──────────────────────┘
-                          ▼
-                   ┌──────────────────┐
-                   │  Neon Postgres   │
-                   └──────────────────┘
-Planned: Redis + SSE for realtime — not yet deployed
+┌────────────────────────────────────────────────────────┐
+│  Vercel (Next.js 16 + React 19)                        │
+│  - App Router (UI & Server Components)                 │
+│  - API Route Handlers (/api/*)                         │
+│  - Clerk Authentication Middleware & Proxies           │
+│  - Drizzle ORM client pool (max: 10)                   │
+└──────────────────────────┬─────────────────────────────┘
+                           │
+             ┌─────────────┴─────────────┐
+             │ Internal async HTTP POST  │ (X-Judge-Secret)
+             ▼                           ▼
+┌──────────────────────────────┐   ┌──────────────────────────────┐
+│  Google Cloud Run (FastAPI)  │   │  Neon Serverless Postgres    │
+│  - Multi-language sandbox    │   │  - Core tables               │
+│  - C, C++, Python, Java      │   │  - Pooled connection pooler  │
+│  - Direct DB verdict updates │   │  - sslmode=require           │
+│  - 4 uvicorn workers         │   │                              │
+└──────────────┬───────────────┘   └──────────────┬───────────────┘
+               │ SQL (psycopg 3)                  │ SQL (pg/drizzle)
+               └──────────────────────────────────┘
 ```
 
-Previous diagram referencing Supabase/Neon interchangeable is superseded — Neon is authoritative.
-
-## Realistic constraints
-
-- Single server / single Vercel project + single FastAPI instance; no multi-machine load balancing
-- Storage: ~500MB for a year of contests + problems
-- Network: college LAN / Vercel edge; assume reliable
-- No CDN needed (college-scale traffic)
+- **Frontend**: Hosted on Vercel with edge-capable routing and SSR.
+- **Judge Worker**: Hosted on Google Cloud Run in a container containing gcc, g++, and OpenJDK.
+- **Database**: Hosted on Neon Postgres with pgBouncer pooling.
 
 ---
 
-## Environment variables
+## 1. Database Setup: Neon Postgres & Drizzle
 
-| Variable | Where | Purpose |
-|---|---|---|
-| `DATABASE_URL` | `.env.local` (Next.js), `.env` (FastAPI) | Neon pooled connection string (`…-pooler…?sslmode=require&channel_binding=require`) |
-| `FASTAPI_URL` | `.env.local` (Next.js) | FastAPI origin (e.g. `http://127.0.0.1:8000` local, deployed URL in prod) |
-| `JUDGE_INTERNAL_SECRET` | Both Next + FastAPI | Shared secret for `POST /judge` (`X-Judge-Secret`); must match |
-| `FRONTEND_URL` | `.env` (FastAPI) | Production frontend origin for CORS (e.g. `https://koj.vercel.app`) |
-| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | `.env.local` (Next) | Clerk publishable key |
-| `CLERK_SECRET_KEY` | `.env.local` (Next) | Clerk secret |
-| `NEXT_PUBLIC_CLERK_SIGN_IN_URL` | `.env.local` | `/sign-in` |
-| `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | `.env.local` | `/sign-up` |
-| `NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL` | `.env.local` | `/dashboard` |
-| `NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL` | `.env.local` | `/dashboard` |
-| `REDIS_URL` | `.env` (FastAPI/Next, planned) | Redis — not used yet |
+KOJ uses Neon Postgres with Drizzle ORM for schema definitions and migrations.
 
-Obsolete: `SUPABASE_URL`, `SUPABASE_ANON_KEY` — not used; KOJ uses Clerk + Neon.
+### Neon Project Creation
+1. Create a project in [Neon Console](https://console.neon.tech).
+2. Copy the **Pooled Connection String** (format: `postgresql://[user]:[password]@[host]-pooler.neon.tech/[db]?sslmode=require&channel_binding=require`).
 
-**Never commit `.env*` files.** They are gitignored.
-
----
-
-## Deploying to Vercel
-
-**Required env vars (all empty in `.env.example`):** `DATABASE_URL` (Neon pooled + `sslmode=require`), `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up`, `NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/dashboard`, `NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/dashboard`, `FASTAPI_URL` (deployed FastAPI origin), `JUDGE_INTERNAL_SECRET` (must match on Next.js + FastAPI), `FRONTEND_URL` (Vercel URL for FastAPI CORS).
-
-**FastAPI separately:** Host on Cloud Run (`gcloud run deploy koj-judge --source ./api`). Copy `api/.env.example` keys to Cloud Run env vars (`DATABASE_URL`, `FASTAPI_HOST=0.0.0.0`, `JUDGE_INTERNAL_SECRET`, `FRONTEND_URL`). Set `FRONTEND_URL=https://<vercel-app>.vercel.app` and ensure `JUDGE_INTERNAL_SECRET` is identical on both sides. CORS is tight — `allow_origins=[http://localhost:3000, FASTAPI_URL, FRONTEND_URL]` (never `*`); localhost remains for dev.
-
-**Clerk:** In Clerk dashboard, set Sign-in/Sign-up URLs and fallback redirects to the same values. Mirror all `NEXT_PUBLIC_CLERK_*` vars in Vercel Project Settings → Environment Variables. Organizations are **enabled** — `org:admin` role is used for admin APIs.
-
-**Neon:** Use pooled connection string (`…-pooler…?sslmode=require&channel_binding=require`). Next.js `pg` Pool `max:10` and FastAPI `psycopg` short-lived connections.
-
-**Function duration:** `app/api/submissions` exports `maxDuration=60` (55s judge timeout + 2s buffer). Vercel Hobby caps at 10s — requires Pro (60s) or moving judging to background queue/worker later. No `regions` pin needed.
-
----
-
-## Current deployment limitations (as of `feat/sprint1-backend`)
-
-Preserved Vercel section above is accurate for intended production. Limitations today:
-
-1. **FastAPI not yet deployed** — judge works locally (`FASTAPI_URL=http://127.0.0.1:8000` fallback) but production requires a hosted FastAPI with `JUDGE_INTERNAL_SECRET` + `FRONTEND_URL` set; without it `POST /api/submissions` returns 502 `judge unavailable`
-2. **Redis/SSE not deployed** — no Redis instance, no SSE route; leaderboard is on-demand
-3. **Contest CRUD not deployed** — no API to create contests in production; contests come from seed script
-4. **Webhook sync not deployed** — Clerk webhooks for `users`/`org memberships` not wired; `users` rows are lazy-created on first submission/admin call
-5. **Vercel Hobby limit** — `maxDuration=60` needs Pro or a queue/worker refactor before production contests
-
----
-
-## Seeding demo data
-
-The idempotent seed script populates the live Neon database with 8 published problems, 4 contests, and test cases. It requires a real Clerk user — safe for local/dev only, never for production with fake users.
+### Schema Migrations
+Run Drizzle Kit from the project root:
 
 ```bash
-# Provide the real Clerk user to own seeded content
-SEED_USER_CLERK_ID=user_xxx SEED_USER_EMAIL=you@example.com npm run db:seed
-# Optional: SEED_USERNAME=koj-seed-admin (default)
-# Uses DATABASE_URL from .env.local; rerunning is safe (upserts by title/slug).
+# Generate SQL migrations when db/schema.ts is modified
+npm run db:generate
+
+# Apply pending SQL migrations to the target database in DATABASE_URL
+npm run db:migrate
+
+# (Dev only) Inspect tables visually in Drizzle Studio
+npm run db:studio
 ```
 
-Seed uses `node --experimental-strip-types scripts/seed.ts` (Node 22+). No fake submissions or registrations are created — those reflect real user actions.
+### Seeding Initial Data
+Populate the database with default problems, test cases, and sample contests. The seed script requires an existing Clerk user ID to assign ownership:
 
-Seeded counts: 8 problems, 32 test cases (4 per problem, 2 sample + 2 hidden), 4 contests, 16 contest_problem links. See `docs/status.md` for verification.
+```bash
+SEED_USER_CLERK_ID=user_xxx SEED_USER_EMAIL=admin@example.com npm run db:seed
+```
+
+---
+
+## 2. Frontend Deployment: Vercel
+
+The Next.js 16 application is deployed to Vercel.
+
+### Setup Instructions
+1. Import the repository into your Vercel team/account.
+2. Ensure the **Framework Preset** is detected as **Next.js**.
+3. Set the root directory to the repository root (`.`).
+4. Note that `.vercelignore` ignores the `api/` directory so Vercel only builds the Next.js application.
+
+### Required Environment Variables on Vercel
+
+Configure these in **Project Settings → Environment Variables**:
+
+| Variable | Example / Description |
+|---|---|
+| `DATABASE_URL` | Neon pooled DSN (`postgresql://...@...-pooler...neon.tech/koj?sslmode=require`) |
+| `FASTAPI_URL` | Origin of the deployed Cloud Run judge (e.g. `https://koj-judge-xyz-uc.a.run.app`) |
+| `JUDGE_INTERNAL_SECRET` | 32+ character random secret string (must match Cloud Run) |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk publishable key (`pk_live_...` or `pk_test_...`) |
+| `CLERK_SECRET_KEY` | Clerk secret key (`sk_live_...` or `sk_test_...`) |
+| `NEXT_PUBLIC_CLERK_SIGN_IN_URL` | `/sign-in` |
+| `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | `/sign-up` |
+| `NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL` | `/dashboard` |
+| `NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL` | `/dashboard` |
+
+### Function Timeout Configuration
+`app/api/submissions` uses asynchronous fire-and-forget handoff to the FastAPI judge via `POST /judge-async`. The submission handler dispatches the job in under 500ms and returns `202 Accepted` while the client subscribes to Server-Sent Events (SSE). Vercel's default function limits are sufficient.
+
+---
+
+## 3. Backend / Judge Service: Google Cloud Run
+
+The judge service executes untrusted code in an isolated subprocess sandbox. It must be hosted on Google Cloud Run (or another Docker-capable container host) rather than Vercel serverless.
+
+### Container Build & Deployment
+The `api/Dockerfile` contains Python 3.11-slim, `gcc`, `g++`, and `default-jdk-headless`.
+
+Deploy directly using the Google Cloud SDK:
+
+```bash
+# Navigate to project root or api directory
+cd /home/prajwal-k/Projects/KOJ
+
+# Deploy to Cloud Run
+gcloud run deploy koj-judge \
+  --source ./api \
+  --region asia-south1 \
+  --platform managed \
+  --allow-unauthenticated \
+  --concurrency 4 \
+  --cpu 2 \
+  --memory 2Gi \
+  --timeout 120s \
+  --set-env-vars "DATABASE_URL=postgresql://...,JUDGE_INTERNAL_SECRET=your_shared_secret,FRONTEND_URL=https://your-app.vercel.app,FASTAPI_HOST=0.0.0.0"
+```
+
+### Key Deployment Settings for Cloud Run
+- **Concurrency (`--concurrency 4`)**: Set to 4 to match the 4 uvicorn worker processes in `api/Dockerfile`. Cloud Run spins up additional container instances automatically when submissions spike (`REQ-JUDGE-13`).
+- **Memory & CPU (`--memory 2Gi --cpu 2`)**: Ensures adequate resources for compilation (`gcc`, `g++`, `javac`) and execution limits (up to 256MB RAM per process).
+- **Authentication**: Protected via `X-Judge-Secret` header validation. Requests missing the shared secret are rejected with `401 Unauthorized`.
+
+---
+
+## 4. Local Development Workflow
+
+Run the frontend and backend locally for development and testing.
+
+### Prerequisites
+- Node.js 20+ (Node 22+ recommended)
+- Python 3.11+
+- GCC, G++, and Java JDK installed on your host OS
+- Access to a Neon database or local Postgres instance
+
+### 1. Configure Local Environment Files
+
+**In repository root (`.env.local`):**
+```env
+DATABASE_URL="postgresql://user:password@ep-sample-pooler.neon.tech/koj?sslmode=require"
+FASTAPI_URL="http://127.0.0.1:8000"
+JUDGE_INTERNAL_SECRET="dev-judge-secret-local"
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="pk_test_..."
+CLERK_SECRET_KEY="sk_test_..."
+NEXT_PUBLIC_CLERK_SIGN_IN_URL="/sign-in"
+NEXT_PUBLIC_CLERK_SIGN_UP_URL="/sign-up"
+NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL="/dashboard"
+NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL="/dashboard"
+```
+
+**In `api/.env`:**
+```env
+DATABASE_URL="postgresql://user:password@ep-sample-pooler.neon.tech/koj?sslmode=require"
+FASTAPI_HOST=0.0.0.0
+FASTAPI_PORT=8000
+JUDGE_INTERNAL_SECRET="dev-judge-secret-local"
+FRONTEND_URL="http://localhost:3000"
+```
+
+### 2. Start the Backend Judge Service
+
+```bash
+cd api
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
+```
+Verify the judge is live at <http://127.0.0.1:8000/health>.
+
+### 3. Start the Next.js Frontend
+
+```bash
+# In the project root:
+npm install
+npm run db:migrate
+npm run dev
+```
+Open <http://localhost:3000> in your browser. Verify database health at <http://localhost:3000/api/health>.
+
+---
+
+## 5. Environment Variables Reference
+
+| Variable | Applied To | Required | Description |
+|---|---|---|---|
+| `DATABASE_URL` (or `NEON_DSN`) | Next.js & FastAPI | Yes | Neon pooled connection string with `sslmode=require`. |
+| `FASTAPI_URL` | Next.js (`.env.local`) | Yes | Base URL where FastAPI judge is hosted (e.g., `http://127.0.0.1:8000` or Cloud Run URL). |
+| `JUDGE_INTERNAL_SECRET` | Next.js & FastAPI | Yes | Shared secret header (`X-Judge-Secret`) authorizing judge triggers. |
+| `FRONTEND_URL` | FastAPI (`.env`) | Yes | Frontend origin for CORS allow-listing (e.g. `https://koj.vercel.app` or `http://localhost:3000`). |
+| `FASTAPI_HOST` | FastAPI (`.env`) | Yes | Network bind address (`0.0.0.0` in Docker/Cloud Run, `127.0.0.1` in dev). |
+| `FASTAPI_PORT` | FastAPI (`.env`) | Yes | Port to listen on (Cloud Run sets `PORT` automatically). |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Next.js | Yes | Clerk publishable key from Clerk dashboard. |
+| `CLERK_SECRET_KEY` | Next.js | Yes | Clerk secret key from Clerk dashboard. |
+| `NEXT_PUBLIC_CLERK_SIGN_IN_URL` | Next.js | Yes | Route for authentication sign in (`/sign-in`). |
+| `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | Next.js | Yes | Route for authentication sign up (`/sign-up`). |
+| `NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL` | Next.js | Yes | Default redirect after sign-in (`/dashboard`). |
+| `NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL` | Next.js | Yes | Default redirect after sign-up (`/dashboard`). |
+
+> [!CAUTION]
+> Never commit `.env`, `.env.local`, or any credentials to Git. Always inject sensitive values via Vercel and Google Cloud Run environment variable configuration.

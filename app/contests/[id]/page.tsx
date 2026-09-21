@@ -291,7 +291,7 @@ export default function ContestDetailPage() {
                 </p>
               ) : null}
               <Link
-                href="/rankings"
+                href={`/rankings?contestId=${contest.numericId}`}
                 className="block text-center mt-3 text-xs font-mono text-kjprimary hover:underline"
               >
                 OPEN LEADERBOARD →

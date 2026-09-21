@@ -261,7 +261,7 @@ export async function POST(req: NextRequest) {
         "X-Judge-Secret": judgeSecret,
       },
       body: JSON.stringify({ submission_id: submissionId }),
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(55000),
     });
   } catch {
     await db

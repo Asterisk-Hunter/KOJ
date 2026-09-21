@@ -8,30 +8,6 @@ import { settleExpiredContests } from "@/app/api/contests/lifecycle";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type UiStatus = "Active" | "Registration Open" | "Upcoming" | "Finished";
-
-function deriveUiStatus(
-  dbStatus: string,
-  startsAt: Date,
-  endsAt: Date,
-  now: Date = new Date(),
-): UiStatus {
-  if (dbStatus === "archived" || dbStatus === "ended") return "Finished";
-  if (dbStatus === "live") {
-    if (now >= startsAt && now <= endsAt) return "Active";
-    if (now < startsAt) return "Registration Open";
-    return "Finished";
-  }
-  if (now < startsAt) {
-    const diff = startsAt.getTime() - now.getTime();
-    const sevenDays = 7 * 24 * 60 * 60 * 1000;
-    if (diff <= sevenDays) return "Registration Open";
-    return "Upcoming";
-  }
-  if (now >= startsAt && now <= endsAt) return "Registration Open";
-  return "Finished";
-}
-
 function jsonError(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
 }
@@ -78,17 +54,12 @@ export async function POST(
   }
 
   const now = new Date();
-  const uiStatus = deriveUiStatus(contest.status, contest.startsAt, contest.endsAt, now);
 
-  // Only draft/upcoming/registration-open contests allow registration
-  // That corresponds to dbStatus === "draft" and uiStatus is Registration Open or Upcoming
-  if (contest.status !== "draft") {
-    return jsonError("registration closed", 403);
+  // BR-06: A user can only register for a contest before it starts.
+  if (now >= contest.startsAt) {
+    return jsonError("registration closed: contest has already started", 403);
   }
-  if (uiStatus !== "Registration Open" && uiStatus !== "Upcoming") {
-    return jsonError("registration closed", 403);
-  }
-  if (now >= contest.startsAt && now > contest.endsAt) {
+  if (contest.status === "ended" || contest.status === "archived") {
     return jsonError("registration closed", 403);
   }
 
