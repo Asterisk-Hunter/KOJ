@@ -189,6 +189,18 @@ def _process_async_judge(submission_id: int, sample_only: bool) -> None:
         result = execute_judge(judge_req)
 
         # 8. Update submission with verdict
+        case_results = [
+            {
+                "index": c.index,
+                "passed": c.passed,
+                "verdict": c.verdict,
+                "runtime_ms": c.runtime_ms,
+                "stdout": c.stdout[:2048],
+                "stderr": c.stderr[:2048],
+            }
+            for c in result.cases[:100]
+        ]
+
         _update_submission_status(
             submission_id,
             result.status,
@@ -198,6 +210,7 @@ def _process_async_judge(submission_id: int, sample_only: bool) -> None:
             result.memory_used_mb,
             result.error_message,
             now,
+            case_results=case_results,
         )
 
         # 9. Structured JSON log line (one per execution)
@@ -264,6 +277,7 @@ def _update_submission_status(
     memory_used_mb: int,
     error_message: str | None,
     completed_at: datetime,
+    case_results: list[dict] | None = None,
 ) -> None:
     """Best-effort update of submission verdict."""
     try:
@@ -272,8 +286,8 @@ def _update_submission_status(
                 cur.execute(
                     "UPDATE submissions SET status = %s, passed_tests = %s, "
                     "total_tests = %s, execution_time_ms = %s, memory_used_mb = %s, "
-                    "error_message = %s, completed_at = %s WHERE id = %s",
-                    (status, passed_tests, total_tests, execution_time_ms, memory_used_mb, error_message, completed_at, submission_id),
+                    "error_message = %s, completed_at = %s, case_results = %s WHERE id = %s",
+                    (status, passed_tests, total_tests, execution_time_ms, memory_used_mb, error_message, completed_at, json.dumps(case_results) if case_results is not None else None, submission_id),
                 )
     except Exception:
         logger.exception("Failed to update submission %s status to %s", submission_id, status)

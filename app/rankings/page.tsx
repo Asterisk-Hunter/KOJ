@@ -129,23 +129,13 @@ export default function RankingsPage() {
           status: String(c.status),
         }));
       setContests(normalized);
-
-      const urlContestId =
-        typeof window !== "undefined"
-          ? new URLSearchParams(window.location.search).get("contestId")
-          : null;
-      if (urlContestId && normalized.some((c) => String(c.id) === urlContestId)) {
-        setSelectedId(urlContestId);
-      } else if (normalized.length > 0 && !selectedId) {
-        setSelectedId(String(normalized[0].id));
-      }
     } catch (e) {
       setContestsError(e instanceof Error ? e.message : "failed to load contests");
       setContests([]);
     } finally {
       setContestsLoading(false);
     }
-  }, [selectedId]);
+  }, []);
 
   const fetchRankings = useCallback(async (contestId: string) => {
     if (!contestId) {
@@ -184,6 +174,20 @@ export default function RankingsPage() {
       }
     }
   }, []);
+
+  // After contests load, select from URL param or default to first contest
+  useEffect(() => {
+    if (contests.length === 0) return;
+    const urlContestId =
+      typeof window !== "undefined"
+        ? new URLSearchParams(window.location.search).get("contestId")
+        : null;
+    if (urlContestId && contests.some((c) => String(c.id) === urlContestId)) {
+      setSelectedId(urlContestId);
+    } else if (!selectedId) {
+      setSelectedId(String(contests[0].id));
+    }
+  }, [contests, selectedId]);
 
   useEffect(() => {
     void fetchContests();

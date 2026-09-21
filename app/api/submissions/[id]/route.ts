@@ -53,6 +53,7 @@ export async function GET(
     passedTests: row.passedTests,
     totalTests: row.totalTests,
     errorMessage: row.errorMessage,
+    caseResults: row.caseResults,
     submittedAt: row.submittedAt?.toISOString() ?? null,
     completedAt: row.completedAt?.toISOString() ?? null,
     startedAt: row.startedAt?.toISOString() ?? null,

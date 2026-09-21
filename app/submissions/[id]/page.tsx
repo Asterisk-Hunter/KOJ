@@ -4,7 +4,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import Navigation from "@/app/components/Navigation";
 
 type SubmissionDetail = {
@@ -20,6 +20,14 @@ type SubmissionDetail = {
   passedTests: number | null;
   totalTests: number | null;
   errorMessage: string | null;
+  caseResults: Array<{
+    index: number;
+    passed: boolean;
+    verdict: string;
+    runtime_ms: number;
+    stdout: string;
+    stderr: string;
+  }> | null;
   submittedAt: string | null;
   completedAt: string | null;
   startedAt: string | null;
@@ -54,6 +62,7 @@ export default function SubmissionStatusPage() {
   const [problem, setProblem] = useState<ProblemBrief | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [expandedTests, setExpandedTests] = useState<Set<number>>(new Set());
 
   const fetchSubmission = useCallback(async () => {
     if (!id) return;
@@ -235,7 +244,17 @@ export default function SubmissionStatusPage() {
             <p className="text-xs uppercase tracking-widest font-mono text-kjprimary">Submission monitor</p>
             <h1 className="text-3xl font-mono font-bold text-kjtext mt-2">Submission #{submission.id}</h1>
           </div>
-          <span className={`font-mono text-sm font-bold ${statusInfo?.color}`}>{statusInfo?.label}</span>
+          <div className="flex flex-col items-end gap-2">
+            <span className={`font-mono text-sm font-bold ${statusInfo?.color}`}>{statusInfo?.label}</span>
+            {submission.contestId && (
+              <Link
+                href={`/rankings?contestId=${submission.contestId}`}
+                className="text-xs font-mono text-kjprimary hover:underline"
+              >
+                View contest standings →
+              </Link>
+            )}
+          </div>
         </div>
 
         <section className="mt-8 bg-kjsurface border border-kjborder rounded-lg p-6">
@@ -258,30 +277,106 @@ export default function SubmissionStatusPage() {
             </div>
           </div>
 
-          <div className="mt-10">
-            <div className="flex justify-between text-xs font-mono text-kjtext-muted mb-2">
-              <span>TEST CASE PROGRESS</span>
-              <span>
-                {submission.passedTests !== null && submission.totalTests !== null
-                  ? `${submission.passedTests} / ${submission.totalTests}`
-                  : PENDING.has(submission.status)
-                    ? "queued"
-                    : "--"}
-              </span>
+          {submission.caseResults && submission.caseResults.length > 0 ? (
+            <div className="mt-8">
+              <div className="flex justify-between text-xs font-mono text-kjtext-muted mb-3">
+                <span>TEST CASE RESULTS</span>
+                <span>
+                  {submission.passedTests !== null && submission.totalTests !== null
+                    ? `${submission.passedTests} / ${submission.totalTests}`
+                    : `${submission.caseResults.filter((c) => c.passed).length} / ${submission.caseResults.length}`}
+                </span>
+              </div>
+              <div className="border border-kjborder rounded-lg overflow-hidden">
+                <table className="w-full text-xs font-mono">
+                  <thead>
+                    <tr className="bg-kjbg border-b border-kjborder text-kjtext-muted">
+                      <th className="text-left py-2.5 px-4 uppercase tracking-wider">Test #</th>
+                      <th className="text-left py-2.5 px-4 uppercase tracking-wider">Result</th>
+                      <th className="text-right py-2.5 px-4 uppercase tracking-wider">Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {submission.caseResults.map((tc) => (
+                      <Fragment key={tc.index}>
+                        <tr
+                          className={`border-b border-kjborder/50 ${
+                            !tc.passed ? "cursor-pointer hover:bg-kjbg/60" : ""
+                          }`}
+                          onClick={
+                            !tc.passed
+                              ? () =>
+                                  setExpandedTests((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(tc.index)) next.delete(tc.index);
+                                    else next.add(tc.index);
+                                    return next;
+                                  })
+                              : undefined
+                          }
+                        >
+                          <td className="py-2 px-4 text-kjtext tabular-nums">{tc.index + 1}</td>
+                          <td className="py-2 px-4">
+                            <span
+                              className={
+                                tc.passed
+                                  ? "text-green-400"
+                                  : tc.verdict === "time_limit_exceeded"
+                                    ? "text-yellow-400"
+                                    : "text-red-400"
+                              }
+                            >
+                              {tc.passed ? "✓ PASS" : `✗ ${tc.verdict.replace(/_/g, " ").toUpperCase()}`}
+                            </span>
+                          </td>
+                          <td className="py-2 px-4 text-right text-kjtext-muted tabular-nums">
+                            {tc.runtime_ms != null ? `${tc.runtime_ms} ms` : "--"}
+                          </td>
+                        </tr>
+                        {!tc.passed && expandedTests.has(tc.index) && (
+                          <tr>
+                            <td colSpan={3} className="bg-kjbg px-4 py-3 border-b border-kjborder/50">
+                              <p className="text-[10px] uppercase tracking-wider text-kjtext-muted mb-1.5">
+                                stdout
+                              </p>
+                              <pre className="text-xs font-mono text-kjtext whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
+                                {tc.stdout || "(no output)"}
+                              </pre>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
-            <div className="h-2.5 rounded bg-kjbg overflow-hidden">
-              <div
-                className={`h-full transition-all duration-700 rounded ${
-                  submission.status === "accepted"
-                    ? "bg-gradient-to-r from-green-500 to-green-400"
-                    : TERMINAL.has(submission.status) && submission.status !== "accepted"
-                      ? "bg-gradient-to-r from-red-500 to-red-400"
-                      : "bg-kjprimary"
-                }`}
-                style={{ width: `${progress}%` }}
-              />
+          ) : (
+            <div className="mt-10">
+              <div className="flex justify-between text-xs font-mono text-kjtext-muted mb-2">
+                <span>TEST CASE PROGRESS</span>
+                <span>
+                  {submission.passedTests !== null && submission.totalTests !== null
+                    ? `${submission.passedTests} / ${submission.totalTests}`
+                    : PENDING.has(submission.status)
+                      ? "queued"
+                      : "--"}
+                </span>
+              </div>
+              <div className="h-2.5 rounded bg-kjbg overflow-hidden">
+                <div
+                  className={`h-full transition-all duration-700 rounded ${
+                    submission.status === "accepted"
+                      ? "bg-gradient-to-r from-green-500 to-green-400"
+                      : TERMINAL.has(submission.status) && submission.status !== "accepted"
+                        ? "bg-gradient-to-r from-red-500 to-red-400"
+                        : "bg-kjprimary"
+                  }`}
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
             </div>
-          </div>
+          )}
         </section>
 
         <div className="grid sm:grid-cols-3 gap-4 mt-4">
