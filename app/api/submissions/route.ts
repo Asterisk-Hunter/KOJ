@@ -291,12 +291,13 @@ export async function GET(req: NextRequest) {
   const problemIdRaw = url.searchParams.get("problemId");
   const contestIdRaw = url.searchParams.get("contestId");
 
-  if (!problemIdRaw) {
-    return jsonError("problemId is required", 400);
-  }
-  const problemId = Number(problemIdRaw);
-  if (!Number.isInteger(problemId) || problemId <= 0) {
-    return jsonError("problemId must be a positive integer", 400);
+  let problemId: number | undefined;
+  if (problemIdRaw !== null) {
+    const pid = Number(problemIdRaw);
+    if (!Number.isInteger(pid) || pid <= 0) {
+      return jsonError("problemId must be a positive integer", 400);
+    }
+    problemId = pid;
   }
 
   let contestId: number | undefined;
@@ -308,33 +309,43 @@ export async function GET(req: NextRequest) {
     contestId = cid;
   }
 
-  let rows: (typeof submissions.$inferSelect)[];
-  if (contestId !== undefined) {
-    rows = await db
-      .select()
-      .from(submissions)
-      .where(
-        and(
-          eq(submissions.userId, userId),
-          eq(submissions.problemId, problemId),
-          eq(submissions.contestId, contestId as number),
-        ),
-      )
-      .orderBy(desc(submissions.submittedAt));
-  } else {
-    rows = await db
-      .select()
-      .from(submissions)
-      .where(and(eq(submissions.userId, userId), eq(submissions.problemId, problemId)))
-      .orderBy(desc(submissions.submittedAt));
+  const conditions = [eq(submissions.userId, userId)];
+  if (problemId !== undefined) {
+    conditions.push(eq(submissions.problemId, problemId));
   }
+  if (contestId !== undefined) {
+    conditions.push(eq(submissions.contestId, contestId));
+  }
+
+  const rows = await db
+    .select({
+      id: submissions.id,
+      problemId: submissions.problemId,
+      problemTitle: problems.title,
+      language: submissions.language,
+      status: submissions.status,
+      passedTests: submissions.passedTests,
+      totalTests: submissions.totalTests,
+      executionTimeMs: submissions.executionTimeMs,
+      memoryUsedMb: submissions.memoryUsedMb,
+      submittedAt: submissions.submittedAt,
+    })
+    .from(submissions)
+    .leftJoin(problems, eq(submissions.problemId, problems.id))
+    .where(and(...conditions))
+    .orderBy(desc(submissions.submittedAt))
+    .limit(100);
 
   const result = rows.map((r) => ({
     id: r.id,
+    problemId: r.problemId,
+    problemTitle: r.problemTitle ?? `Problem #${r.problemId}`,
+    language: r.language,
     status: r.status,
     passedTests: r.passedTests,
     totalTests: r.totalTests,
     executionTimeMs: r.executionTimeMs,
+    memoryUsedMb: r.memoryUsedMb,
     submittedAt: r.submittedAt?.toISOString() ?? null,
   }));
 

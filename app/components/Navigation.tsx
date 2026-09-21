@@ -47,8 +47,8 @@ const navLinks = [
     ),
   },
   {
-    href: "/submissions/1042",
-    signedOutHref: "/submissions/1042",
+    href: "/submissions",
+    signedOutHref: "/submissions",
     label: "Submissions",
     icon: <span className="font-mono text-xs">#</span>,
   },

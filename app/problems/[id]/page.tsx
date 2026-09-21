@@ -7,13 +7,38 @@ import { useAuth } from "@clerk/nextjs";
 import Markdown from "react-markdown";
 import Navigation from "@/app/components/Navigation";
 
-const starter = `# Write your solution here
+const STARTERS: Record<string, string> = {
+  python: `# Write your solution here
 
 def solve():
     pass
 
 if __name__ == "__main__":
-    solve()`;
+    solve()`,
+  "c++": `#include <iostream>
+using namespace std;
+
+int main() {
+    ios_base::sync_with_stdio(false);
+    cin.tie(NULL);
+    // Write your solution here
+    return 0;
+}`,
+  c: `#include <stdio.h>
+
+int main() {
+    // Write your solution here
+    return 0;
+}`,
+  java: `import java.util.Scanner;
+
+public class Main {
+    public static void main(String[] args) {
+        Scanner scanner = new Scanner(System.in);
+        // Write your solution here
+    }
+}`,
+};
 
 type ProblemResponse = {
   id: number;
@@ -63,8 +88,9 @@ export default function ProblemDetailPage() {
   const [problem, setProblem] = useState<ProblemResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [code, setCode] = useState(starter);
+  const [codeByLang, setCodeByLang] = useState<Record<string, string>>(STARTERS);
   const [language, setLanguage] = useState("python");
+  const [copiedSample, setCopiedSample] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [cooldown, setCooldown] = useState(0);
@@ -133,10 +159,11 @@ export default function ProblemDetailPage() {
     setSubmitting(true);
     setNotice("");
     try {
+      const currentCode = codeByLang[language] ?? STARTERS[language] ?? "";
       const payload: Record<string, unknown> = {
         problemId: problem.id,
         language,
-        code,
+        code: currentCode,
         mode,
       };
       if (problem.contestId) payload.contestId = problem.contestId;
@@ -218,14 +245,14 @@ export default function ProblemDetailPage() {
       const parts: string[] = [];
       if (typeof data.passedTests === "number" && typeof data.totalTests === "number")
         parts.push(`${data.passedTests}/${data.totalTests}`);
-      if (data.status) parts.push(formatStatus(String(data.status)));
-      if (typeof data.executionTimeMs === "number" && data.executionTimeMs !== null)
+      if (data.status) parts.push(formatStatus(data.status));
+      if (typeof data.executionTimeMs === "number")
         parts.push(`${data.executionTimeMs}ms`);
       const head = mode === "run" ? "Run" : "Submit";
       let msg = `${head}: ${parts.join(" · ")}`;
       if (data.errorMessage) msg += ` — ${data.errorMessage}`;
       setNotice(msg);
-      await loadVerdicts();
+      void loadVerdicts();
     } catch (e) {
       setNotice(e instanceof Error ? e.message : "Submission failed");
     } finally {
@@ -237,12 +264,8 @@ export default function ProblemDetailPage() {
     return (
       <>
         <Navigation />
-        <main className="pt-20 min-h-screen">
-          <div className="max-w-[1500px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
-            <div className="bg-kjsurface/40 border border-kjborder rounded-lg p-8 text-sm font-mono text-kjtext-muted">
-              Loading problem…
-            </div>
-          </div>
+        <main className="max-w-6xl mx-auto px-4 py-20 font-mono text-xs text-kjtext-muted">
+          Loading problem #{id}…
         </main>
       </>
     );
@@ -252,18 +275,11 @@ export default function ProblemDetailPage() {
     return (
       <>
         <Navigation />
-        <main className="pt-20 min-h-screen">
-          <div className="max-w-[1500px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
-            <div className="bg-kjsurface/40 border border-kjborder rounded-lg p-8">
-              <p className="text-sm font-mono text-red-400">{error ?? "Problem not found"}</p>
-              <Link
-                href="/problems"
-                className="inline-block mt-4 text-xs font-mono text-kjprimary hover:underline"
-              >
-                ← Back to archive
-              </Link>
-            </div>
-          </div>
+        <main className="max-w-6xl mx-auto px-4 py-20">
+          <p className="font-mono text-sm text-red-400">{error ?? "Problem not found"}</p>
+          <Link href="/problems" className="inline-block mt-4 text-xs font-mono text-kjprimary hover:underline">
+            ← Return to problem list
+          </Link>
         </main>
       </>
     );
@@ -272,68 +288,110 @@ export default function ProblemDetailPage() {
   return (
     <>
       <Navigation />
-      <main className="pt-20 min-h-screen">
-        <div className="max-w-[1500px] mx-auto px-4 sm:px-6 lg:px-8 py-6 grid lg:grid-cols-[minmax(0,1fr)_minmax(420px,0.9fr)] gap-6">
-          <article className="bg-kjsurface/40 border border-kjborder rounded-lg p-6 lg:p-8">
-            <Link href="/problems" className="text-xs font-mono text-kjtext-muted hover:text-kjprimary">
-              ← Back to archive
-            </Link>
-            <div className="flex flex-wrap gap-2 mt-6 mb-3">
-              <span className="text-green-400 bg-green-400/10 border border-green-400/20 rounded-full px-2 py-1 text-xs font-mono">
-                {problem.difficulty}
-              </span>
-              <span className="text-kjtext-muted bg-kjbg border border-kjborder rounded-full px-2 py-1 text-xs font-mono">
-                {problem.tags[0] ?? problem.difficulty}
-              </span>
+      <main className="pt-20 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="mb-4">
+          <Link
+            href={contestId ? `/contests/${contestId}/arena` : "/problems"}
+            className="text-xs font-mono text-kjtext-muted hover:text-kjprimary"
+          >
+            ← {contestId ? "Return to contest arena" : "Browse all problems"}
+          </Link>
+        </div>
+        <div className="grid lg:grid-cols-[1.08fr_0.92fr] gap-8 items-start">
+          <article className="space-y-6">
+            <div>
+              <div className="flex items-center gap-3">
+                <span className="text-xs uppercase tracking-widest font-mono text-kjprimary">Problem #{problem.id}</span>
+                <span className={`text-[11px] font-mono border rounded-full px-2 py-0.5 ${
+                  problem.difficulty === "easy"
+                    ? "text-green-400 border-green-400/20"
+                    : problem.difficulty === "medium"
+                      ? "text-yellow-400 border-yellow-400/20"
+                      : "text-red-400 border-red-400/20"
+                }`}>
+                  {problem.difficulty}
+                </span>
+                {problem.tags?.map((t) => (
+                  <span key={t} className="text-[11px] font-mono border border-kjborder rounded px-1.5 text-kjtext-muted">
+                    {t}
+                  </span>
+                ))}
+              </div>
+              <h1 className="text-2xl sm:text-3xl font-mono font-bold text-kjtext mt-2">{problem.title}</h1>
             </div>
-            <h1 className="text-3xl font-mono font-bold text-kjtext mb-8">{problem.title}</h1>
-            {(
-              [
-                ["Problem Statement", problem.statement, true],
-                ["Input Format", problem.inputFormat, false],
-                ["Output Format", problem.outputFormat, false],
-                ["Constraints", problem.constraints, false],
-                ...(problem.explanation ? [["Explanation", problem.explanation, true] as const] : []),
-              ] as [string, string, boolean][]
-            ).map(([heading, text, md]) => (
-              <section key={heading} className="mb-7">
-                <h2 className="text-xs uppercase tracking-widest font-mono text-kjprimary border-b border-kjborder pb-2 mb-3">
-                  {heading}
-                </h2>
-                {md ? (
-                  <div className="text-sm text-kjtext-muted leading-7 space-y-3 [&_pre]:bg-kjbg [&_pre]:border [&_pre]:border-kjborder [&_pre]:rounded [&_pre]:p-3 [&_pre]:overflow-x-auto [&_code]:font-mono [&_code]:text-[13px]">
-                    <Markdown>{text}</Markdown>
-                  </div>
-                ) : (
-                  <p className="text-sm text-kjtext-muted leading-7">{text}</p>
-                )}
-              </section>
-            ))}
-            <div className="grid sm:grid-cols-2 gap-3 mb-7">
+            <div className="prose prose-invert max-w-none text-sm leading-6 text-kjtext font-sans">
+              <Markdown>{problem.statement}</Markdown>
+            </div>
+            <div>
+              <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted mb-2">Input format</h2>
+              <pre className="bg-kjsurface border border-kjborder rounded p-4 text-xs font-mono text-kjtext whitespace-pre-wrap">
+                {problem.inputFormat}
+              </pre>
+            </div>
+            <div>
+              <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted mb-2">Output format</h2>
+              <pre className="bg-kjsurface border border-kjborder rounded p-4 text-xs font-mono text-kjtext whitespace-pre-wrap">
+                {problem.outputFormat}
+              </pre>
+            </div>
+            <div>
+              <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted mb-2">Constraints</h2>
+              <pre className="bg-kjsurface border border-kjborder rounded p-4 text-xs font-mono text-kjtext whitespace-pre-wrap">
+                {problem.constraints}
+              </pre>
+            </div>
+            {problem.explanation && (
+              <div>
+                <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted mb-2">Explanation</h2>
+                <div className="bg-kjsurface border border-kjborder rounded p-4 text-xs font-mono text-kjtext whitespace-pre-wrap">
+                  {problem.explanation}
+                </div>
+              </div>
+            )}
+            <div className="space-y-4">
+              <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted">Sample cases</h2>
               {problem.samples.length === 0 ? (
-                <pre className="bg-kjbg border border-kjborder rounded p-4 text-xs text-kjtext whitespace-pre-wrap">
-                  <span className="text-kjtext-muted">SAMPLE INPUT</span>
-                  {"\n\n"}—</pre>
+                <p className="text-xs font-mono text-kjtext-muted">No public sample test cases configured.</p>
               ) : (
                 problem.samples.map((s, idx) => (
-                  <div key={idx} className="grid sm:grid-cols-2 gap-3 sm:contents">
+                  <div key={idx} className="grid sm:grid-cols-2 gap-3 font-mono">
                     <pre className="bg-kjbg border border-kjborder rounded p-4 text-xs text-kjtext whitespace-pre-wrap">
-                      <span className="text-kjtext-muted">SAMPLE INPUT{problem.samples.length > 1 ? ` #${idx + 1}` : ""}</span>
-                      {"\n\n"}
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="text-kjtext-muted">SAMPLE INPUT{problem.samples.length > 1 ? ` #${idx + 1}` : ""}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(s.input);
+                            setCopiedSample(`in-${idx}`);
+                            setTimeout(() => setCopiedSample(null), 1500);
+                          }}
+                          className="text-[10px] uppercase font-mono text-kjprimary hover:underline cursor-pointer"
+                        >
+                          {copiedSample === `in-${idx}` ? "Copied!" : "Copy"}
+                        </button>
+                      </div>
                       {s.input}
                     </pre>
                     <pre className="bg-kjbg border border-kjborder rounded p-4 text-xs text-kjtext whitespace-pre-wrap">
-                      <span className="text-kjtext-muted">SAMPLE OUTPUT{problem.samples.length > 1 ? ` #${idx + 1}` : ""}</span>
-                      {"\n\n"}
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="text-kjtext-muted">SAMPLE OUTPUT{problem.samples.length > 1 ? ` #${idx + 1}` : ""}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(s.expectedOutput);
+                            setCopiedSample(`out-${idx}`);
+                            setTimeout(() => setCopiedSample(null), 1500);
+                          }}
+                          className="text-[10px] uppercase font-mono text-kjprimary hover:underline cursor-pointer"
+                        >
+                          {copiedSample === `out-${idx}` ? "Copied!" : "Copy"}
+                        </button>
+                      </div>
                       {s.expectedOutput}
                     </pre>
                   </div>
                 ))
               )}
-            </div>
-            <div className="flex gap-5 text-xs font-mono text-kjtext-muted">
-              <span>TIME {problem.timeLimitMs}ms</span>
-              <span>MEMORY {problem.memoryMb}MB</span>
             </div>
           </article>
           <section className="bg-kjsurface/40 border border-kjborder rounded-lg p-4 lg:p-5 h-fit lg:sticky lg:top-20">
@@ -352,8 +410,11 @@ export default function ProblemDetailPage() {
               </select>
             </div>
             <textarea
-              value={code}
-              onChange={(event) => setCode(event.target.value)}
+              value={codeByLang[language] ?? STARTERS[language] ?? ""}
+              onChange={(event) => {
+                const val = event.target.value;
+                setCodeByLang((prev) => ({ ...prev, [language]: val }));
+              }}
               spellCheck={false}
               className="w-full min-h-[360px] resize-y bg-kjbg border border-kjborder rounded p-4 text-sm leading-6 font-mono text-kjtext focus:border-kjprimary focus:outline-none"
             />
@@ -361,14 +422,14 @@ export default function ProblemDetailPage() {
               <button
                 onClick={() => handleSubmit("run")}
                 disabled={submitting}
-                className="border border-kjborder text-kjtext font-mono text-xs px-4 py-2 rounded hover:border-kjprimary hover:text-kjprimary disabled:opacity-50 disabled:cursor-not-allowed"
+                className="border border-kjborder text-kjtext font-mono text-xs px-4 py-2 rounded hover:border-kjprimary hover:text-kjprimary disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
               >
                 {submitting ? "RUNNING…" : "RUN SAMPLE"}
               </button>
               <button
                 onClick={() => handleSubmit("submit")}
                 disabled={submitting || cooldown > 0}
-                className="bg-kjprimary text-kjbg font-mono font-bold text-xs px-5 py-2 rounded hover:glow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                className="bg-kjprimary text-kjbg font-mono font-bold text-xs px-5 py-2 rounded hover:glow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
               >
                 {submitting ? "SUBMITTING…" : cooldown > 0 ? `WAIT ${cooldown}s` : "SUBMIT"}
               </button>
@@ -381,11 +442,11 @@ export default function ProblemDetailPage() {
             <div className="mt-7">
               <div className="flex justify-between mb-3">
                 <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted">Recent verdicts</h2>
-                <Link href="/submissions/1042" className="text-xs font-mono text-kjprimary">
+                <Link href={`/submissions?problemId=${problem.id}`} className="text-xs font-mono text-kjprimary hover:underline">
                   view all →
                 </Link>
               </div>
-              <div className="space-y-2 text-xs font-mono">
+              <div className="space-y-1 text-xs font-mono">
                 {!isLoaded ? (
                   <p className="text-kjtext-muted">Loading…</p>
                 ) : !isSignedIn ? (
@@ -396,16 +457,25 @@ export default function ProblemDetailPage() {
                   <p className="text-kjtext-muted">No submissions yet.</p>
                 ) : (
                   verdicts.map((v) => (
-                    <p key={v.id} className="flex justify-between border-b border-kjborder/70 pb-2">
-                      <span className={`border rounded-full px-2 py-0.5 ${statusBadge(v.status)}`}>
-                        {formatStatus(v.status)}
-                      </span>
-                      <span className="text-kjtext-muted">
+                    <Link
+                      key={v.id}
+                      href={`/submissions/${v.id}`}
+                      className="flex justify-between items-center border-b border-kjborder/50 py-1.5 px-2 rounded hover:bg-kjbg/60 transition-colors group"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className={`border rounded-full px-2 py-0.5 text-[11px] ${statusBadge(v.status)}`}>
+                          {formatStatus(v.status)}
+                        </span>
+                        <span className="text-[10px] text-kjtext-muted group-hover:text-kjprimary transition-colors">
+                          #{v.id}
+                        </span>
+                      </div>
+                      <span className="text-kjtext-muted text-[11px]">
                         {v.passedTests !== null && v.totalTests !== null ? `${v.passedTests}/${v.totalTests}` : ""}{" "}
                         {v.executionTimeMs !== null ? `${v.executionTimeMs}ms` : ""}{" "}
-                        {v.submittedAt ? new Date(v.submittedAt).toLocaleTimeString() : ""}
+                        {v.submittedAt ? new Date(v.submittedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}
                       </span>
-                    </p>
+                    </Link>
                   ))
                 )}
               </div>
