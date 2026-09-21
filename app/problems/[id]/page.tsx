@@ -6,6 +6,8 @@ import { useParams, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@clerk/nextjs";
 import Markdown from "react-markdown";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import Navigation from "@/app/components/Navigation";
 
 const STARTERS: Record<string, string> = {
@@ -584,28 +586,36 @@ export default function ProblemDetailPage() {
                 </div>
 
                 <div className="prose prose-invert max-w-none text-sm leading-6 text-kjtext font-sans">
-                  <Markdown>{problem.statement}</Markdown>
+                  <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                    {problem.statement}
+                  </Markdown>
                 </div>
 
                 <div>
                   <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted mb-2">Input format</h2>
-                  <pre className="bg-kjsurface border border-kjborder rounded p-4 text-xs font-mono text-kjtext whitespace-pre-wrap">
-                    {problem.inputFormat}
-                  </pre>
+                  <div className="bg-kjsurface border border-kjborder rounded p-4 text-xs font-mono text-kjtext prose prose-invert max-w-none">
+                    <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                      {problem.inputFormat}
+                    </Markdown>
+                  </div>
                 </div>
 
                 <div>
                   <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted mb-2">Output format</h2>
-                  <pre className="bg-kjsurface border border-kjborder rounded p-4 text-xs font-mono text-kjtext whitespace-pre-wrap">
-                    {problem.outputFormat}
-                  </pre>
+                  <div className="bg-kjsurface border border-kjborder rounded p-4 text-xs font-mono text-kjtext prose prose-invert max-w-none">
+                    <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                      {problem.outputFormat}
+                    </Markdown>
+                  </div>
                 </div>
 
                 <div>
                   <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted mb-2">Constraints</h2>
-                  <pre className="bg-kjsurface border border-kjborder rounded p-4 text-xs font-mono text-kjtext whitespace-pre-wrap">
-                    {problem.constraints}
-                  </pre>
+                  <div className="bg-kjsurface border border-kjborder rounded p-4 text-xs font-mono text-kjtext prose prose-invert max-w-none">
+                    <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                      {problem.constraints}
+                    </Markdown>
+                  </div>
                 </div>
 
                 {/* Public Sample Testcases with One-Click Copy */}
@@ -677,7 +687,7 @@ export default function ProblemDetailPage() {
                 </div>
                 {problem.explanation ? (
                   <div className="bg-kjsurface border border-kjborder rounded-lg p-5 text-xs sm:text-sm font-sans text-kjtext leading-relaxed prose prose-invert max-w-none">
-                    <Markdown>{problem.explanation}</Markdown>
+                    <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{problem.explanation}</Markdown>
                   </div>
                 ) : (
                   <div className="bg-kjsurface border border-kjborder rounded-lg p-8 text-center space-y-2 font-mono">

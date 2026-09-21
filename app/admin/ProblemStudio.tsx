@@ -3,6 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import Markdown from "react-markdown";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import { pairPolygonTestFiles } from "@/app/api/admin/problems/import/parser";
 
 type Difficulty = "easy" | "medium" | "hard";
@@ -409,6 +411,19 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
     setForm({ ...form, tags: next.join(", ") });
   }
 
+  async function handleLoadTxtFile(
+    file: File,
+    field: "input" | "expectedOutput"
+  ) {
+    try {
+      const text = await file.text();
+      setNewTc((prev) => ({ ...prev, [field]: text }));
+      setStatusNotice(`Loaded ${file.name} (${file.size} bytes) into ${field === "input" ? "Input" : "Expected Output"}.`);
+    } catch {
+      setStatusError(`Failed to read file ${file.name}.`);
+    }
+  }
+
   // Inline Test Case Add
   function handleAddInlineTestCase() {
     if (!newTc.input.trim() || !newTc.expectedOutput.trim()) return;
@@ -708,6 +723,18 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                   <p className="text-[10px] text-kjtext-muted mt-1">{src.desc}</p>
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Contest Adaptation Workflow Callout */}
+          <div className="border border-kjprimary/30 bg-kjprimary/5 rounded-lg p-3.5 text-xs font-mono flex items-start gap-2.5">
+            <span className="text-base leading-none">💡</span>
+            <div className="space-y-1">
+              <strong className="text-kjprimary">Contest Adaptation & Statement Customization:</strong>
+              <p className="text-[11px] text-kjtext-muted leading-relaxed">
+                Want to adapt problems from Codeforces, LeetCode, or AtCoder for your college contest? Click{" "}
+                <strong className="text-kjtext">⚡ FETCH & PREVIEW IN STUDIO</strong>. It pulls the problem along with all verified test cases into the Studio Editor. You can then freely rewrite the problem statement, add college lore, and customize LaTeX formulas while keeping all original test cases intact!
+              </p>
             </div>
           </div>
 
@@ -1018,20 +1045,27 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
 
                 {/* Statement Editor */}
                 <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="text-[11px] text-kjtext-muted uppercase">Statement (Markdown)</label>
-                    <div className="flex gap-1">
+                  <div className="flex justify-between items-center mb-1 flex-wrap gap-2">
+                    <label className="text-[11px] text-kjtext-muted uppercase">Statement (Markdown & LaTeX)</label>
+                    <div className="flex gap-1 flex-wrap items-center">
                       {[
                         { label: "B", insert: "**bold**" },
                         { label: "I", insert: "*italic*" },
                         { label: "Code", insert: "`code`" },
-                        { label: "$$ Math", insert: "$$ O(n \\log n) $$" },
+                        { label: "$x$", insert: "$N$" },
+                        { label: "$$ Math $$", insert: "\n\n$$ A_i + A_j = X $$\n\n" },
+                        { label: "\\sum", insert: "\\sum_{i=1}^n" },
+                        { label: "\\le", insert: "\\le" },
+                        { label: "\\ge", insert: "\\ge" },
+                        { label: "\\frac", insert: "\\frac{a}{b}" },
+                        { label: "\\sqrt", insert: "\\sqrt{n}" },
+                        { label: "O(N)", insert: "O(N \\log N)" },
                       ].map((btn) => (
                         <button
                           key={btn.label}
                           type="button"
                           onClick={() => setForm({ ...form, statement: form.statement + " " + btn.insert })}
-                          className="text-[10px] border border-kjborder px-1.5 py-0.5 rounded text-kjtext-muted hover:text-kjtext"
+                          className="text-[10px] border border-kjborder px-1.5 py-0.5 rounded text-kjtext-muted hover:text-kjprimary hover:border-kjprimary transition-colors cursor-pointer"
                         >
                           {btn.label}
                         </button>
@@ -1041,10 +1075,10 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                   <textarea
                     value={form.statement}
                     onChange={(e) => setForm({ ...form, statement: e.target.value })}
-                    rows={8}
+                    rows={9}
                     required
-                    placeholder="Write problem statement in Markdown..."
-                    className="w-full bg-kjbg border border-kjborder rounded p-3 text-xs leading-5 text-kjtext focus:border-kjprimary focus:outline-none"
+                    placeholder="Write problem statement in Markdown. Supports LaTeX math: $N$ for inline math, and $$ \sum_{i=1}^n A_i $$ for display equations..."
+                    className="w-full bg-kjbg border border-kjborder rounded p-3 text-xs leading-5 text-kjtext focus:border-kjprimary focus:outline-none font-mono"
                   />
                 </div>
 
@@ -1177,21 +1211,55 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
 
                   {/* Inline Add Form */}
                   <div className="pt-2 border-t border-kjborder/60">
-                    <div className="grid sm:grid-cols-2 gap-2">
-                      <textarea
-                        value={newTc.input}
-                        onChange={(e) => setNewTc({ ...newTc, input: e.target.value })}
-                        rows={2}
-                        placeholder="Input (stdin)..."
-                        className="bg-kjbg border border-kjborder rounded p-2 text-xs text-kjtext focus:border-kjprimary focus:outline-none"
-                      />
-                      <textarea
-                        value={newTc.expectedOutput}
-                        onChange={(e) => setNewTc({ ...newTc, expectedOutput: e.target.value })}
-                        rows={2}
-                        placeholder="Expected Output (stdout)..."
-                        className="bg-kjbg border border-kjborder rounded p-2 text-xs text-kjtext focus:border-kjprimary focus:outline-none"
-                      />
+                    <div className="grid sm:grid-cols-2 gap-3">
+                      <div>
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="text-[10px] uppercase text-kjtext-muted font-bold">Input (stdin)</span>
+                          <label className="text-[10px] text-kjprimary hover:underline cursor-pointer flex items-center gap-1">
+                            <span>📂 Upload .txt</span>
+                            <input
+                              type="file"
+                              accept=".txt,.in,.stdin"
+                              className="hidden"
+                              onChange={(e) => {
+                                const f = e.target.files?.[0];
+                                if (f) void handleLoadTxtFile(f, "input");
+                              }}
+                            />
+                          </label>
+                        </div>
+                        <textarea
+                          value={newTc.input}
+                          onChange={(e) => setNewTc({ ...newTc, input: e.target.value })}
+                          rows={3}
+                          placeholder="Paste or upload input (stdin)..."
+                          className="w-full bg-kjbg border border-kjborder rounded p-2 text-xs text-kjtext focus:border-kjprimary focus:outline-none font-mono"
+                        />
+                      </div>
+                      <div>
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="text-[10px] uppercase text-kjtext-muted font-bold">Expected Output (stdout)</span>
+                          <label className="text-[10px] text-kjprimary hover:underline cursor-pointer flex items-center gap-1">
+                            <span>📂 Upload .txt</span>
+                            <input
+                              type="file"
+                              accept=".txt,.out,.ans,.stdout"
+                              className="hidden"
+                              onChange={(e) => {
+                                const f = e.target.files?.[0];
+                                if (f) void handleLoadTxtFile(f, "expectedOutput");
+                              }}
+                            />
+                          </label>
+                        </div>
+                        <textarea
+                          value={newTc.expectedOutput}
+                          onChange={(e) => setNewTc({ ...newTc, expectedOutput: e.target.value })}
+                          rows={3}
+                          placeholder="Paste or upload expected output (stdout)..."
+                          className="w-full bg-kjbg border border-kjborder rounded p-2 text-xs text-kjtext focus:border-kjprimary focus:outline-none font-mono"
+                        />
+                      </div>
                     </div>
                     <div className="flex items-center justify-between mt-2">
                       <label className="flex items-center gap-1.5 text-xs text-kjtext-muted cursor-pointer">
@@ -1261,33 +1329,41 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                 </div>
 
                 <div className="prose prose-invert max-w-none text-xs leading-6 text-kjtext font-sans border-t border-kjborder/40 pt-3">
-                  <Markdown>{form.statement || "*No statement written yet.*"}</Markdown>
+                  <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                    {form.statement || "*No statement written yet.*"}
+                  </Markdown>
                 </div>
 
                 {form.inputFormat && (
                   <div>
                     <h3 className="text-[11px] uppercase tracking-widest text-kjtext-muted mb-1 font-bold">Input Format</h3>
-                    <pre className="bg-kjsurface border border-kjborder rounded p-3 text-xs text-kjtext whitespace-pre-wrap">
-                      {form.inputFormat}
-                    </pre>
+                    <div className="bg-kjsurface border border-kjborder rounded p-3 text-xs text-kjtext prose prose-invert max-w-none font-mono">
+                      <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                        {form.inputFormat}
+                      </Markdown>
+                    </div>
                   </div>
                 )}
 
                 {form.outputFormat && (
                   <div>
                     <h3 className="text-[11px] uppercase tracking-widest text-kjtext-muted mb-1 font-bold">Output Format</h3>
-                    <pre className="bg-kjsurface border border-kjborder rounded p-3 text-xs text-kjtext whitespace-pre-wrap">
-                      {form.outputFormat}
-                    </pre>
+                    <div className="bg-kjsurface border border-kjborder rounded p-3 text-xs text-kjtext prose prose-invert max-w-none font-mono">
+                      <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                        {form.outputFormat}
+                      </Markdown>
+                    </div>
                   </div>
                 )}
 
                 {form.constraints && (
                   <div>
                     <h3 className="text-[11px] uppercase tracking-widest text-kjtext-muted mb-1 font-bold">Constraints</h3>
-                    <pre className="bg-kjsurface border border-kjborder rounded p-3 text-xs text-kjtext whitespace-pre-wrap">
-                      {form.constraints}
-                    </pre>
+                    <div className="bg-kjsurface border border-kjborder rounded p-3 text-xs text-kjtext prose prose-invert max-w-none font-mono">
+                      <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                        {form.constraints}
+                      </Markdown>
+                    </div>
                   </div>
                 )}
 

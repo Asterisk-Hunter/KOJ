@@ -596,11 +596,14 @@ export function pairPolygonTestFiles(
       }
     }
 
-    // CSV / TSV file
-    if (ext === "csv" || ext === "tsv") {
-      const csvCases = parseTestCasesFromText(item.content);
-      if (csvCases.length > 0) {
-        for (const tc of csvCases) {
+    // CSV / TSV file or single TXT batch file containing delimiter blocks or CSV format
+    if (ext === "csv" || ext === "tsv" || ext === "txt") {
+      const textCases = parseTestCasesFromText(item.content);
+      if (
+        textCases.length > 0 &&
+        (ext !== "txt" || /(=+|-+)\s*INPUT/i.test(item.content) || (item.content.includes(",") && textCases.length > 1))
+      ) {
+        for (const tc of textCases) {
           paired.push({
             ...tc,
             position: paired.length,
@@ -645,21 +648,35 @@ export function pairPolygonTestFiles(
       continue;
     }
 
-    // 3. Prefix format: input01.txt, in_01.txt, output01.txt, out_01.txt, ans_01.txt
-    const prefixInMatch = fileName.match(/^(?:input|in)[-_]?(\d+)(?:\.txt)?$/i);
+    // 3. Prefix format: input01.txt, in_01.txt, output01.txt, out_01.txt, ans_01.txt, or input.txt / output.txt
+    const prefixInMatch = fileName.match(/^(?:input|in|stdin)[-_]?(\d*)(?:\.txt)?$/i);
     if (prefixInMatch) {
-      const key = prefixInMatch[1];
+      const key = prefixInMatch[1] || "single";
       inputs.push({ baseKey: key, kind: "input", fileName, content: item.content });
       continue;
     }
-    const prefixOutMatch = fileName.match(/^(?:output|out|ans|answer)[-_]?(\d+)(?:\.txt)?$/i);
+    const prefixOutMatch = fileName.match(/^(?:output|out|ans|answer|stdout)[-_]?(\d*)(?:\.txt)?$/i);
     if (prefixOutMatch) {
-      const key = prefixOutMatch[1];
+      const key = prefixOutMatch[1] || "single";
       outputs.set(key, { baseKey: key, kind: "output", fileName, content: item.content });
       continue;
     }
 
-    // 4. Pure number or alphanumeric (e.g. "01", "02" in Polygon) -> treated as input if output "01.a" exists
+    // 4. Suffix format: case1_in.txt & case1_out.txt or test_input.txt & test_output.txt
+    const suffixInMatch = fileName.match(/^(.*?)[-_](?:in|input|stdin)(?:\.txt)?$/i);
+    if (suffixInMatch) {
+      const key = suffixInMatch[1];
+      inputs.push({ baseKey: key, kind: "input", fileName, content: item.content });
+      continue;
+    }
+    const suffixOutMatch = fileName.match(/^(.*?)[-_](?:out|output|ans|answer|stdout)(?:\.txt)?$/i);
+    if (suffixOutMatch) {
+      const key = suffixOutMatch[1];
+      outputs.set(key, { baseKey: key, kind: "output", fileName, content: item.content });
+      continue;
+    }
+
+    // 5. Pure number or alphanumeric (e.g. "01", "02" in Polygon) -> treated as input if output "01.a" exists
     if (fileMap.has(`${fileName}.a`)) {
       inputs.push({ baseKey: fileName, kind: "input", fileName, content: item.content });
       continue;
