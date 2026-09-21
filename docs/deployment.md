@@ -106,7 +106,7 @@ Configure these in **Project Settings → Environment Variables**:
 | `CLERK_WEBHOOK_SECRET` | Clerk webhook signing secret (`whsec_...`) — required for `POST /api/webhooks/clerk` |
 
 ### Function Timeout Configuration
-`app/api/submissions` uses asynchronous fire-and-forget handoff to the FastAPI judge via `POST /judge-async`. The submission handler dispatches the job in under 500ms and returns `202 Accepted` while the client subscribes to Server-Sent Events (SSE). Vercel's default function limits are sufficient.
+`app/api/submissions` hands off to the FastAPI judge fire-and-forget via `POST /judge-async` (55-second abort timeout on the dispatch call only) and returns `202 Accepted` immediately; the client receives the verdict over SSE (`GET /api/submissions/[id]/events`). The judge's internal wall timeout is `time_limit_ms + 2000ms` per test case.
 
 ---
 
