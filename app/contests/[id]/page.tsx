@@ -287,7 +287,7 @@ export default function ContestDetailPage() {
                 </Link>
               ) : contest.status === "Active" && !contest.registered ? (
                 <p className="mt-3 text-xs font-mono text-kjtext-muted border border-kjborder rounded p-3">
-                  Registration required to enter arena.
+                  Registration closed (contest already in progress).
                 </p>
               ) : null}
               <Link

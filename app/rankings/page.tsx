@@ -75,8 +75,17 @@ export default function RankingsPage() {
       const normalized = list
         .filter((c) => {
           const numericId = c.numericId ?? c.id;
-          return c && Number.isInteger(numericId) && numericId > 0 && typeof c.title === "string" &&
-            (c.status === "Active" || c.status === "Finished");
+          const statusEligible =
+            c.status === "Active" ||
+            c.status === "Finished" ||
+            c.status === "Registration Open";
+          return (
+            c &&
+            Number.isInteger(numericId) &&
+            numericId > 0 &&
+            typeof c.title === "string" &&
+            statusEligible
+          );
         })
         .map((c) => ({
           id: Number(c.numericId ?? c.id),
@@ -84,7 +93,13 @@ export default function RankingsPage() {
           status: String(c.status),
         }));
       setContests(normalized);
-      if (normalized.length > 0 && !selectedId) {
+      const urlContestId =
+        typeof window !== "undefined"
+          ? new URLSearchParams(window.location.search).get("contestId")
+          : null;
+      if (urlContestId && normalized.some((c) => String(c.id) === urlContestId)) {
+        setSelectedId(urlContestId);
+      } else if (normalized.length > 0 && !selectedId) {
         setSelectedId(String(normalized[0].id));
       }
     } catch (e) {
@@ -121,6 +136,15 @@ export default function RankingsPage() {
       setData(null);
     } finally {
       setRankingsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const p = new URLSearchParams(window.location.search).get("contestId");
+      if (p && Number.isInteger(Number(p)) && Number(p) > 0) {
+        setSelectedId(p);
+      }
     }
   }, []);
 

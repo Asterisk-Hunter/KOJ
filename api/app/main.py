@@ -76,8 +76,21 @@ def health() -> JSONResponse:
     return JSONResponse(content=payload, status_code=200)
 
 
+@app.get("/metrics")
+def metrics() -> dict[str, object]:
+    """Judge service liveness and runtime metrics."""
+    db_ok = db.ping()
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "service": "koj-judge",
+        "supported_languages": list(SUPPORTED_LANGUAGES),
+        "db": db_ok,
+    }
+
+
 class JudgeAsyncRequest(BaseModel):
     submission_id: int
+    sample_only: bool = False
 
 
 @app.post("/judge-async")
@@ -120,13 +133,24 @@ def judge_async_endpoint(
 
                 time_limit_ms, memory_limit_mb = problem
 
-                # 6. Load test cases
-                cur.execute(
+                # 6. Load test cases (support sample_only for fast sample runs)
+                test_sql = (
                     "SELECT input, expected_output FROM problem_test_cases "
-                    "WHERE problem_id = %s ORDER BY position",
-                    (problem_id,),
+                    "WHERE problem_id = %s AND is_sample = true ORDER BY position"
+                    if req.sample_only
+                    else
+                    "SELECT input, expected_output FROM problem_test_cases "
+                    "WHERE problem_id = %s ORDER BY position"
                 )
+                cur.execute(test_sql, (problem_id,))
                 rows = cur.fetchall()
+                if req.sample_only and len(rows) == 0:
+                    cur.execute(
+                        "SELECT input, expected_output FROM problem_test_cases "
+                        "WHERE problem_id = %s ORDER BY position",
+                        (problem_id,),
+                    )
+                    rows = cur.fetchall()
                 total_tests = len(rows)
 
         # 7. Build JudgeRequest and execute
