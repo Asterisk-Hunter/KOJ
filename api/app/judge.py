@@ -172,11 +172,16 @@ def _prepare(language: str, code: str, workdir: Path, memory_mb: int) -> tuple[l
         return [str(workdir / "solution")], None
 
     if language == "java":
-        if "class Solution" not in code:
-            return [], "Java submissions must declare 'public class Solution'"
-        src = workdir / "Solution.java"
+        main_class = "Solution"
+        if "class Main" in code:
+            main_class = "Main"
+        elif "class Solution" in code:
+            main_class = "Solution"
+        else:
+            return [], "Java submissions must declare 'public class Main' or 'public class Solution'"
+        src = workdir / f"{main_class}.java"
         src.write_text(code, encoding="utf-8")
-        err = _compile(src, ["javac", "Solution.java"])
+        err = _compile(src, ["javac", f"{main_class}.java"])
         if err is not None:
             return [], err
         heap_mb = max(64, memory_mb * 3 // 4)
@@ -188,7 +193,7 @@ def _prepare(language: str, code: str, workdir: Path, memory_mb: int) -> tuple[l
             "-XX:MaxMetaspaceSize=96M",
             "-cp",
             str(workdir),
-            "Solution",
+            main_class,
         ], None
 
     return [], f"Unsupported language: {language}"

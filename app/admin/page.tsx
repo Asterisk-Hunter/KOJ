@@ -10,6 +10,7 @@ import UsersSection from "@/app/admin/UsersSection";
 import ProblemTestCases from "@/app/admin/ProblemTestCases";
 import ProblemManagerSection from "@/app/admin/ProblemManagerSection";
 import SubmissionsSection from "@/app/admin/SubmissionsSection";
+import ObservabilitySection from "@/app/admin/ObservabilitySection";
 
 type Summary = {
   role?: "admin" | "problem_setter" | "contest_setter";
@@ -403,6 +404,7 @@ export default function AdminPage() {
         {(data?.role === "admin" || data?.role === "contest_setter") && <ContestsSection />}
         {data?.role === "admin" && <UsersSection />}
         {data?.role === "admin" && <SubmissionsSection />}
+        {data?.role === "admin" && <ObservabilitySection />}
       </main>
     </>
   );

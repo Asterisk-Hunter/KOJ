@@ -191,11 +191,17 @@ export default function ContestsPage() {
                 </div>
                 <div className="flex gap-3">
                   <Link
-                    href={`/contests/${encodeURIComponent(contest.id)}`}
+                    href={
+                      contest.status === "Active" && contest.registered
+                        ? `/contests/${encodeURIComponent(contest.id)}/arena`
+                        : `/contests/${encodeURIComponent(contest.id)}`
+                    }
                     className="bg-kjprimary text-kjbg font-mono font-bold text-xs px-4 py-2 rounded"
                   >
                     {contest.status === "Active"
-                      ? "ENTER ARENA"
+                      ? contest.registered
+                        ? "ENTER ARENA"
+                        : "VIEW DETAILS"
                       : contest.status === "Finished"
                         ? "VIEW RESULTS"
                         : "VIEW DETAILS"}

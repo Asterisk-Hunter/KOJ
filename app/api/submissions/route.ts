@@ -250,7 +250,8 @@ export async function POST(req: NextRequest) {
     .where(eq(submissions.id, submissionId));
 
   // Fire-and-forget async judge via Cloud Run
-  const fastApiUrl = process.env.FASTAPI_URL ?? "http://127.0.0.1:8000";
+  const fastApiUrl =
+    process.env.FASTAPI_URL ?? process.env.JUDGE_API_URL ?? "http://127.0.0.1:8000";
   const judgeSecret = process.env.JUDGE_INTERNAL_SECRET ?? "";
 
   try {
@@ -260,7 +261,10 @@ export async function POST(req: NextRequest) {
         "Content-Type": "application/json",
         "X-Judge-Secret": judgeSecret,
       },
-      body: JSON.stringify({ submission_id: submissionId }),
+      body: JSON.stringify({
+        submission_id: submissionId,
+        sample_only: mode === "run",
+      }),
       signal: AbortSignal.timeout(55000),
     });
   } catch {
