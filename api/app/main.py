@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -93,17 +93,8 @@ class JudgeAsyncRequest(BaseModel):
     sample_only: bool = False
 
 
-@app.post("/judge-async")
-def judge_async_endpoint(
-    req: JudgeAsyncRequest,
-    x_judge_secret: str | None = Header(default=None, alias="X-Judge-Secret"),
-) -> JSONResponse:
-    """Async judge: fetch submission from DB, judge, write verdict back."""
-    if not settings.JUDGE_INTERNAL_SECRET:
-        raise HTTPException(status_code=500, detail="judge secret not configured")
-    if x_judge_secret != settings.JUDGE_INTERNAL_SECRET:
-        raise HTTPException(status_code=401, detail="unauthorized")
-
+def _process_async_judge(submission_id: int, sample_only: bool) -> None:
+    """Background worker task to execute judging and persist verdict."""
     now = datetime.now(timezone.utc)
     total_tests = 0
 
@@ -114,13 +105,13 @@ def judge_async_endpoint(
                 cur.execute(
                     "SELECT id, problem_id, language, code FROM submissions "
                     "WHERE id = %s AND status = 'running'",
-                    (req.submission_id,),
+                    (submission_id,),
                 )
                 sub = cur.fetchone()
                 if sub is None:
-                    raise HTTPException(status_code=404, detail="submission not found or not in running state")
+                    return
 
-                submission_id, problem_id, language, code = sub
+                _, problem_id, language, code = sub
 
                 # 5. Load problem metadata
                 cur.execute(
@@ -129,7 +120,11 @@ def judge_async_endpoint(
                 )
                 problem = cur.fetchone()
                 if problem is None:
-                    raise HTTPException(status_code=404, detail="problem not found")
+                    _update_submission_status(
+                        submission_id, "runtime_error", 0, 0,
+                        0, 0, "problem not found", now,
+                    )
+                    return
 
                 time_limit_ms, memory_limit_mb = problem
 
@@ -137,14 +132,14 @@ def judge_async_endpoint(
                 test_sql = (
                     "SELECT input, expected_output FROM problem_test_cases "
                     "WHERE problem_id = %s AND is_sample = true ORDER BY position"
-                    if req.sample_only
+                    if sample_only
                     else
                     "SELECT input, expected_output FROM problem_test_cases "
                     "WHERE problem_id = %s ORDER BY position"
                 )
                 cur.execute(test_sql, (problem_id,))
                 rows = cur.fetchall()
-                if req.sample_only and len(rows) == 0:
+                if sample_only and len(rows) == 0:
                     cur.execute(
                         "SELECT input, expected_output FROM problem_test_cases "
                         "WHERE problem_id = %s ORDER BY position",
@@ -164,30 +159,40 @@ def judge_async_endpoint(
         )
         result = execute_judge(judge_req)
 
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("judge-async error for submission %s", req.submission_id)
+        # 8. Update submission with verdict
         _update_submission_status(
-            req.submission_id, "runtime_error", 0, total_tests,
+            submission_id,
+            result.status,
+            result.passed_tests,
+            result.total_tests,
+            result.execution_time_ms,
+            result.memory_used_mb,
+            result.error_message,
+            now,
+        )
+
+    except Exception as exc:
+        logger.exception("judge-async error for submission %s", submission_id)
+        _update_submission_status(
+            submission_id, "runtime_error", 0, total_tests,
             0, 0, str(exc), now,
         )
-        return JSONResponse(status_code=502, content={"status": "runtime_error"})
 
-    # 8. Update submission with verdict
-    _update_submission_status(
-        req.submission_id,
-        result.status,
-        result.passed_tests,
-        result.total_tests,
-        result.execution_time_ms,
-        result.memory_used_mb,
-        result.error_message,
-        now,
-    )
 
-    # 9. Return 202
-    return JSONResponse(status_code=202, content={"status": result.status})
+@app.post("/judge-async")
+def judge_async_endpoint(
+    req: JudgeAsyncRequest,
+    background_tasks: BackgroundTasks,
+    x_judge_secret: str | None = Header(default=None, alias="X-Judge-Secret"),
+) -> JSONResponse:
+    """Async judge: dispatch background evaluation, return 202 immediately."""
+    if not settings.JUDGE_INTERNAL_SECRET:
+        raise HTTPException(status_code=500, detail="judge secret not configured")
+    if x_judge_secret != settings.JUDGE_INTERNAL_SECRET:
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+    background_tasks.add_task(_process_async_judge, req.submission_id, req.sample_only)
+    return JSONResponse(status_code=202, content={"status": "running", "queued": True})
 
 
 def _update_submission_status(

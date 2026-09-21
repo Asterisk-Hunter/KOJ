@@ -25,6 +25,7 @@ export default function SignInPage() {
           {/* Terminal Body */}
           <div className="p-6">
             <SignIn
+              fallbackRedirectUrl="/dashboard"
               appearance={{
                 elements: {
                   rootBox: "w-full",

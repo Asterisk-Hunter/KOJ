@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { contestProblems, contestRegistrations, contests, problems } from "@/db/schema";
+import { contestProblems, contestRegistrations, contests, problems, users } from "@/db/schema";
 import { settleExpiredContests } from "@/app/api/contests/lifecycle";
 
 export const runtime = "nodejs";
@@ -61,6 +61,20 @@ export async function GET(
   if (!contest) return jsonError("contest not found", 404);
 
   const { userId } = await auth();
+
+  // Draft contests are only visible to staff (admin/contest_setter/problem_setter)
+  if (contest.status === "draft") {
+    if (!userId) return jsonError("contest not found", 404);
+    const userRows = await db
+      .select({ role: users.role })
+      .from(users)
+      .where(eq(users.clerkId, userId))
+      .limit(1);
+    const role = userRows[0]?.role;
+    if (role !== "admin" && role !== "contest_setter" && role !== "problem_setter") {
+      return jsonError("contest not found", 404);
+    }
+  }
 
   const now = new Date();
   const status = deriveUiStatus(contest.status, contest.startsAt, contest.endsAt, now);

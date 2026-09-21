@@ -265,7 +265,7 @@ export async function POST(req: NextRequest) {
         submission_id: submissionId,
         sample_only: mode === "run",
       }),
-      signal: AbortSignal.timeout(55000),
+      signal: AbortSignal.timeout(10000),
     });
   } catch {
     await db

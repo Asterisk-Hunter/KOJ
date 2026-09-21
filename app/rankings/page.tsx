@@ -9,6 +9,7 @@ type ContestMeta = {
   numericId?: number;
   title: string;
   status: string;
+  dbStatus?: string;
   startsAt?: string;
   endsAt?: string;
 };
@@ -84,7 +85,8 @@ export default function RankingsPage() {
             Number.isInteger(numericId) &&
             numericId > 0 &&
             typeof c.title === "string" &&
-            statusEligible
+            statusEligible &&
+            c.dbStatus !== "draft"
           );
         })
         .map((c) => ({

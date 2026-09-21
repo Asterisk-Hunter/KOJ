@@ -143,6 +143,7 @@ export async function GET(req: NextRequest) {
           "time_limit_exceeded",
           "memory_limit_exceeded",
           "runtime_error",
+          "compilation_error",
           "presentation_error",
         ]);
         const wrongBefore = list

@@ -25,6 +25,7 @@ export default function SignUpPage() {
           {/* Terminal Body */}
           <div className="p-6">
             <SignUp
+              fallbackRedirectUrl="/dashboard"
               appearance={{
                 elements: {
                   rootBox: "w-full",

@@ -40,7 +40,7 @@ type ProblemSummary = {
   id: number;
   title: string;
   difficulty: string;
-  acceptance: number | null;
+  acceptance?: string | number | null;
 };
 
 type ContestSummary = {
@@ -54,6 +54,8 @@ type ContestSummary = {
 };
 
 export default function LandingPage() {
+  // Keep in sync with Python JUDGE_LANGUAGES in api/app/main.py
+  const JUDGE_LANGUAGES = ["C", "C++", "Python", "Java"];
   const { isLoaded, isSignedIn } = useAuth();
   const [recentProblems, setRecentProblems] = useState<ProblemSummary[]>([]);
   const [activeContests, setActiveContests] = useState<ContestSummary[]>([]);
@@ -62,23 +64,29 @@ export default function LandingPage() {
   useEffect(() => {
     fetch("/api/problems")
       .then((r) => r.json())
-      .then((data: { problems?: ProblemSummary[] }) => {
-        if (data.problems) {
-          setRecentProblems(data.problems.slice(0, 4));
-          setStats((prev) => ({ ...prev, problems: data.problems?.length ?? 0 }));
+      .then((data: unknown) => {
+        const problems = Array.isArray(data)
+          ? (data as ProblemSummary[])
+          : (data as { problems?: ProblemSummary[] })?.problems;
+        if (problems && Array.isArray(problems)) {
+          setRecentProblems(problems.slice(0, 4));
+          setStats((prev) => ({ ...prev, problems: problems.length }));
         }
       })
       .catch(() => {});
 
     fetch("/api/contests")
       .then((r) => r.json())
-      .then((data: { contests?: ContestSummary[] }) => {
-        if (data.contests) {
-          const visible = data.contests.filter(
+      .then((data: unknown) => {
+        const contests = Array.isArray(data)
+          ? (data as ContestSummary[])
+          : (data as { contests?: ContestSummary[] })?.contests;
+        if (contests && Array.isArray(contests)) {
+          const visible = contests.filter(
             (c) => c.status === "Active" || c.status === "Registration Open" || c.status === "Upcoming",
           );
           setActiveContests(visible.slice(0, 3));
-          setStats((prev) => ({ ...prev, contests: data.contests?.length ?? 0 }));
+          setStats((prev) => ({ ...prev, contests: contests.length }));
         }
       })
       .catch(() => {});
@@ -153,7 +161,7 @@ export default function LandingPage() {
             <p className="text-xs font-mono text-kjtext-muted mt-1">Contests</p>
           </div>
           <div className="bg-kjsurface border border-kjborder rounded-lg p-5 text-center">
-            <p className="text-3xl font-mono font-bold text-kjprimary">4</p>
+            <p className="text-3xl font-mono font-bold text-kjprimary">{JUDGE_LANGUAGES.length}</p>
             <p className="text-xs font-mono text-kjtext-muted mt-1">Languages</p>
           </div>
         </div>

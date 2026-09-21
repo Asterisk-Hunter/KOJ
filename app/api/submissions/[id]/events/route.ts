@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@clerk/nextjs/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { submissions } from "@/db/schema";
+import { requireAdmin } from "@/app/api/admin/authz";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,16 +26,22 @@ export async function GET(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
+  const { userId } = await auth();
+  if (!userId) {
+    return jsonError("unauthorized", 401);
+  }
+
   const { id: idRaw } = await ctx.params;
   const submissionId = Number(idRaw);
   if (!Number.isInteger(submissionId) || submissionId <= 0) {
     return jsonError("invalid submission id", 400);
   }
 
-  // Verify submission exists
+  // Verify submission exists and belongs to the authenticated user (or admin)
   const rows = await db
     .select({
       id: submissions.id,
+      userId: submissions.userId,
       status: submissions.status,
       passedTests: submissions.passedTests,
       totalTests: submissions.totalTests,
@@ -49,9 +57,17 @@ export async function GET(
     return jsonError("submission not found", 404);
   }
 
+  if (rows[0].userId !== userId) {
+    const adminCheck = await requireAdmin();
+    if (!adminCheck.ok) {
+      return jsonError("forbidden", 403);
+    }
+  }
+
   const encoder = new TextEncoder();
   let ticks = 0;
   let closed = false;
+  let timer: NodeJS.Timeout | null = null;
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -108,20 +124,20 @@ export async function GET(
           return;
         }
 
-        const timer = setInterval(() => {
+        timer = setInterval(() => {
           void (async () => {
             ticks += 1;
             try {
               const done = await fetchAndSend();
               if (done || ticks >= MAX_TICKS) {
-                clearInterval(timer);
+                if (timer) clearInterval(timer);
                 if (!closed) {
                   closed = true;
                   controller.close();
                 }
               }
             } catch {
-              clearInterval(timer);
+              if (timer) clearInterval(timer);
               if (!closed) {
                 closed = true;
                 controller.close();
@@ -138,6 +154,10 @@ export async function GET(
     },
     cancel() {
       closed = true;
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
     },
   });
 
