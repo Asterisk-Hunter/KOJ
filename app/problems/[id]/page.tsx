@@ -76,6 +76,7 @@ type ProblemResponse = {
 type VerdictRow = {
   id: number;
   status: string;
+  language?: string;
   passedTests: number | null;
   totalTests: number | null;
   executionTimeMs: number | null;
@@ -136,6 +137,11 @@ export default function ProblemDetailPage() {
   const [cooldown, setCooldown] = useState(0);
   const [verdicts, setVerdicts] = useState<VerdictRow[]>([]);
 
+  // Left panel mode: "statement" | "editorial" | "submissions"
+  const [leftTab, setLeftTab] = useState<"statement" | "editorial" | "submissions">("statement");
+  const gutterRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
   // Workspace tab: "samples" | "custom" | "submissions"
   const [activeTab, setActiveTab] = useState<"samples" | "custom" | "submissions">("samples");
   const [activeSampleIndex, setActiveSampleIndex] = useState(0);
@@ -143,6 +149,16 @@ export default function ProblemDetailPage() {
   const [customExpected, setCustomExpected] = useState("");
   const [customResult, setCustomResult] = useState<CustomRunResult | null>(null);
   const [sampleResults, setSampleResults] = useState<InteractiveCaseResult[]>([]);
+
+  const currentCode = codeByLang[language] ?? STARTERS[language] ?? "";
+  const lineCount = Math.max(1, currentCode.split("\n").length);
+  const lineNumbers = useMemo(() => Array.from({ length: lineCount }, (_, i) => i + 1), [lineCount]);
+
+  function handleEditorScroll(e: React.UIEvent<HTMLTextAreaElement>) {
+    if (gutterRef.current) {
+      gutterRef.current.scrollTop = e.currentTarget.scrollTop;
+    }
+  }
 
   const activeEsRef = useRef<EventSource | null>(null);
 
@@ -466,6 +482,31 @@ export default function ProblemDetailPage() {
     <>
       <Navigation />
       <main className="pt-20 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Contest Mode Banner */}
+        {contestId && (
+          <div className="mb-4 p-3 rounded-lg border border-kjprimary/30 bg-kjprimary/5 flex flex-wrap items-center justify-between gap-3 font-mono text-xs text-kjtext">
+            <div className="flex items-center gap-2.5">
+              <span className="w-2 h-2 rounded-full bg-kjprimary animate-pulse" />
+              <span className="font-bold text-kjprimary tracking-wider">CONTEST MODE</span>
+              <span className="text-kjtext-muted hidden sm:inline">· Submissions scored under official ICPC penalty rules</span>
+            </div>
+            <div className="flex items-center gap-4">
+              <Link
+                href={`/rankings?contestId=${contestId}`}
+                className="text-kjprimary hover:underline font-bold"
+              >
+                📊 Scoreboard →
+              </Link>
+              <Link
+                href={`/contests/${contestId}/arena`}
+                className="text-kjtext-muted hover:text-kjtext"
+              >
+                🎪 Contest Arena →
+              </Link>
+            </div>
+          </div>
+        )}
+
         <div className="mb-4 flex justify-between items-center">
           <Link
             href={contestId ? `/contests/${contestId}/arena` : "/problems"}
@@ -481,116 +522,244 @@ export default function ProblemDetailPage() {
 
         <div className="grid lg:grid-cols-[1.05fr_0.95fr] gap-8 items-start">
           {/* Problem Statement Section */}
-          <article className="space-y-6">
-            <div>
-              <div className="flex items-center gap-3 flex-wrap">
-                <span className="text-xs uppercase tracking-widest font-mono text-kjprimary">Problem #{problem.id}</span>
-                <span className={`text-[11px] font-mono border rounded-full px-2 py-0.5 ${
-                  problem.difficulty === "easy"
-                    ? "text-green-400 border-green-400/20 bg-green-400/5"
-                    : problem.difficulty === "medium"
-                      ? "text-yellow-400 border-yellow-400/20 bg-yellow-400/5"
-                      : "text-red-400 border-red-400/20 bg-red-400/5"
-                }`}>
-                  {problem.difficulty}
-                </span>
-                {problem.tags?.map((t) => (
-                  <span key={t} className="text-[11px] font-mono border border-kjborder rounded px-1.5 text-kjtext-muted bg-kjsurface">
-                    {t}
-                  </span>
-                ))}
-              </div>
-              <h1 className="text-2xl sm:text-3xl font-mono font-bold text-kjtext mt-2">{problem.title}</h1>
+          <article className="space-y-5">
+            {/* Left Panel Tabs Bar */}
+            <div className="flex items-center gap-1 bg-kjsurface/60 p-1 rounded-lg border border-kjborder font-mono text-xs">
+              <button
+                type="button"
+                onClick={() => setLeftTab("statement")}
+                className={`px-3 py-1.5 rounded transition-all cursor-pointer ${
+                  leftTab === "statement"
+                    ? "bg-kjprimary text-kjbg font-bold shadow-sm"
+                    : "text-kjtext-muted hover:text-kjtext"
+                }`}
+              >
+                📄 Statement
+              </button>
+              <button
+                type="button"
+                onClick={() => setLeftTab("editorial")}
+                className={`px-3 py-1.5 rounded transition-all cursor-pointer ${
+                  leftTab === "editorial"
+                    ? "bg-kjprimary text-kjbg font-bold shadow-sm"
+                    : "text-kjtext-muted hover:text-kjtext"
+                }`}
+              >
+                💡 Editorial {problem.explanation ? "✓" : ""}
+              </button>
+              <button
+                type="button"
+                onClick={() => setLeftTab("submissions")}
+                className={`px-3 py-1.5 rounded transition-all cursor-pointer ${
+                  leftTab === "submissions"
+                    ? "bg-kjprimary text-kjbg font-bold shadow-sm"
+                    : "text-kjtext-muted hover:text-kjtext"
+                }`}
+              >
+                🕒 Submissions {verdicts.length > 0 ? `(${verdicts.length})` : ""}
+              </button>
             </div>
 
-            <div className="prose prose-invert max-w-none text-sm leading-6 text-kjtext font-sans">
-              <Markdown>{problem.statement}</Markdown>
-            </div>
+            {leftTab === "statement" && (
+              <div className="space-y-6">
+                <div>
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <span className="text-xs uppercase tracking-widest font-mono text-kjprimary">Problem #{problem.id}</span>
+                    <span className={`text-[11px] font-mono border rounded-full px-2 py-0.5 ${
+                      problem.difficulty === "easy"
+                        ? "text-green-400 border-green-400/20 bg-green-400/5"
+                        : problem.difficulty === "medium"
+                          ? "text-yellow-400 border-yellow-400/20 bg-yellow-400/5"
+                          : "text-red-400 border-red-400/20 bg-red-400/5"
+                    }`}>
+                      {problem.difficulty}
+                    </span>
+                    {problem.tags?.map((t) => (
+                      <span key={t} className="text-[11px] font-mono border border-kjborder rounded px-1.5 text-kjtext-muted bg-kjsurface">
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                  <h1 className="text-2xl sm:text-3xl font-mono font-bold text-kjtext mt-2">{problem.title}</h1>
+                </div>
 
-            <div>
-              <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted mb-2">Input format</h2>
-              <pre className="bg-kjsurface border border-kjborder rounded p-4 text-xs font-mono text-kjtext whitespace-pre-wrap">
-                {problem.inputFormat}
-              </pre>
-            </div>
+                <div className="prose prose-invert max-w-none text-sm leading-6 text-kjtext font-sans">
+                  <Markdown>{problem.statement}</Markdown>
+                </div>
 
-            <div>
-              <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted mb-2">Output format</h2>
-              <pre className="bg-kjsurface border border-kjborder rounded p-4 text-xs font-mono text-kjtext whitespace-pre-wrap">
-                {problem.outputFormat}
-              </pre>
-            </div>
+                <div>
+                  <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted mb-2">Input format</h2>
+                  <pre className="bg-kjsurface border border-kjborder rounded p-4 text-xs font-mono text-kjtext whitespace-pre-wrap">
+                    {problem.inputFormat}
+                  </pre>
+                </div>
 
-            <div>
-              <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted mb-2">Constraints</h2>
-              <pre className="bg-kjsurface border border-kjborder rounded p-4 text-xs font-mono text-kjtext whitespace-pre-wrap">
-                {problem.constraints}
-              </pre>
-            </div>
+                <div>
+                  <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted mb-2">Output format</h2>
+                  <pre className="bg-kjsurface border border-kjborder rounded p-4 text-xs font-mono text-kjtext whitespace-pre-wrap">
+                    {problem.outputFormat}
+                  </pre>
+                </div>
 
-            {problem.explanation && (
-              <div>
-                <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted mb-2">Explanation</h2>
-                <div className="bg-kjsurface border border-kjborder rounded p-4 text-xs font-mono text-kjtext whitespace-pre-wrap">
-                  {problem.explanation}
+                <div>
+                  <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted mb-2">Constraints</h2>
+                  <pre className="bg-kjsurface border border-kjborder rounded p-4 text-xs font-mono text-kjtext whitespace-pre-wrap">
+                    {problem.constraints}
+                  </pre>
+                </div>
+
+                {/* Public Sample Testcases with One-Click Copy */}
+                <div className="space-y-4">
+                  <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted">Sample cases</h2>
+                  {problem.samples.length === 0 ? (
+                    <p className="text-xs font-mono text-kjtext-muted">No public sample test cases configured.</p>
+                  ) : (
+                    problem.samples.map((s, idx) => (
+                      <div key={idx} className="grid sm:grid-cols-2 gap-3 font-mono">
+                        <div className="bg-kjbg border border-kjborder rounded p-4 text-xs text-kjtext whitespace-pre-wrap">
+                          <div className="flex justify-between items-center mb-2">
+                            <span className="text-kjtext-muted text-[11px]">SAMPLE INPUT{problem.samples.length > 1 ? ` #${idx + 1}` : ""}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void navigator.clipboard.writeText(s.input);
+                                setCopiedSample(`in-${idx}`);
+                                setTimeout(() => setCopiedSample(null), 1500);
+                              }}
+                              className={`flex items-center gap-1 text-[10px] uppercase font-mono px-1.5 py-0.5 rounded transition-colors cursor-pointer ${
+                                copiedSample === `in-${idx}`
+                                  ? "text-green-400 bg-green-400/10"
+                                  : "text-kjprimary hover:bg-kjprimary/10"
+                              }`}
+                            >
+                              {copiedSample === `in-${idx}` ? "✓ Copied" : "Copy"}
+                            </button>
+                          </div>
+                          {s.input}
+                        </div>
+                        <div className="bg-kjbg border border-kjborder rounded p-4 text-xs text-kjtext whitespace-pre-wrap">
+                          <div className="flex justify-between items-center mb-2">
+                            <span className="text-kjtext-muted text-[11px]">SAMPLE OUTPUT{problem.samples.length > 1 ? ` #${idx + 1}` : ""}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void navigator.clipboard.writeText(s.expectedOutput);
+                                setCopiedSample(`out-${idx}`);
+                                setTimeout(() => setCopiedSample(null), 1500);
+                              }}
+                              className={`flex items-center gap-1 text-[10px] uppercase font-mono px-1.5 py-0.5 rounded transition-colors cursor-pointer ${
+                                copiedSample === `out-${idx}`
+                                  ? "text-green-400 bg-green-400/10"
+                                  : "text-kjprimary hover:bg-kjprimary/10"
+                              }`}
+                            >
+                              {copiedSample === `out-${idx}` ? "✓ Copied" : "Copy"}
+                            </button>
+                          </div>
+                          {s.expectedOutput}
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             )}
 
-            {/* Public Sample Testcases with One-Click Copy */}
-            <div className="space-y-4">
-              <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted">Sample cases</h2>
-              {problem.samples.length === 0 ? (
-                <p className="text-xs font-mono text-kjtext-muted">No public sample test cases configured.</p>
-              ) : (
-                problem.samples.map((s, idx) => (
-                  <div key={idx} className="grid sm:grid-cols-2 gap-3 font-mono">
-                    <div className="bg-kjbg border border-kjborder rounded p-4 text-xs text-kjtext whitespace-pre-wrap">
-                      <div className="flex justify-between items-center mb-2">
-                        <span className="text-kjtext-muted text-[11px]">SAMPLE INPUT{problem.samples.length > 1 ? ` #${idx + 1}` : ""}</span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            void navigator.clipboard.writeText(s.input);
-                            setCopiedSample(`in-${idx}`);
-                            setTimeout(() => setCopiedSample(null), 1500);
-                          }}
-                          className={`flex items-center gap-1 text-[10px] uppercase font-mono px-1.5 py-0.5 rounded transition-colors cursor-pointer ${
-                            copiedSample === `in-${idx}`
-                              ? "text-green-400 bg-green-400/10"
-                              : "text-kjprimary hover:bg-kjprimary/10"
-                          }`}
-                        >
-                          {copiedSample === `in-${idx}` ? "✓ Copied" : "Copy"}
-                        </button>
-                      </div>
-                      {s.input}
-                    </div>
-                    <div className="bg-kjbg border border-kjborder rounded p-4 text-xs text-kjtext whitespace-pre-wrap">
-                      <div className="flex justify-between items-center mb-2">
-                        <span className="text-kjtext-muted text-[11px]">SAMPLE OUTPUT{problem.samples.length > 1 ? ` #${idx + 1}` : ""}</span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            void navigator.clipboard.writeText(s.expectedOutput);
-                            setCopiedSample(`out-${idx}`);
-                            setTimeout(() => setCopiedSample(null), 1500);
-                          }}
-                          className={`flex items-center gap-1 text-[10px] uppercase font-mono px-1.5 py-0.5 rounded transition-colors cursor-pointer ${
-                            copiedSample === `out-${idx}`
-                              ? "text-green-400 bg-green-400/10"
-                              : "text-kjprimary hover:bg-kjprimary/10"
-                          }`}
-                        >
-                          {copiedSample === `out-${idx}` ? "✓ Copied" : "Copy"}
-                        </button>
-                      </div>
-                      {s.expectedOutput}
-                    </div>
+            {leftTab === "editorial" && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between border-b border-kjborder pb-2">
+                  <h2 className="text-sm font-mono font-bold text-kjtext">
+                    Official Solution & Editorial
+                  </h2>
+                  <span className="text-[10px] font-mono text-kjprimary border border-kjprimary/30 px-2 py-0.5 rounded">
+                    APPROACH & ANALYSIS
+                  </span>
+                </div>
+                {problem.explanation ? (
+                  <div className="bg-kjsurface border border-kjborder rounded-lg p-5 text-xs sm:text-sm font-sans text-kjtext leading-relaxed prose prose-invert max-w-none">
+                    <Markdown>{problem.explanation}</Markdown>
                   </div>
-                ))
-              )}
-            </div>
+                ) : (
+                  <div className="bg-kjsurface border border-kjborder rounded-lg p-8 text-center space-y-2 font-mono">
+                    <p className="text-sm text-kjtext font-bold">No Editorial Available</p>
+                    <p className="text-xs text-kjtext-muted">
+                      An official editorial has not been authored for this problem yet, or is hidden while a live contest is currently active.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {leftTab === "submissions" && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between border-b border-kjborder pb-2">
+                  <h2 className="text-sm font-mono font-bold text-kjtext">
+                    My Submissions ({verdicts.length})
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={() => void loadVerdicts()}
+                    className="text-[10px] font-mono text-kjtext-muted hover:text-kjprimary border border-kjborder px-2 py-0.5 rounded transition-colors cursor-pointer"
+                  >
+                    REFRESH
+                  </button>
+                </div>
+                {verdicts.length === 0 ? (
+                  <div className="bg-kjsurface border border-kjborder rounded-lg p-8 text-center font-mono text-xs text-kjtext-muted space-y-2">
+                    <p className="text-kjtext">No submissions yet on Problem #{problem.id}</p>
+                    <p className="text-kjtext-muted/70">
+                      Submit your solution in the code editor to view real-time verdicts here.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="border border-kjborder rounded-lg overflow-hidden bg-kjsurface/30 font-mono text-xs">
+                    <table className="w-full text-left">
+                      <thead className="bg-kjsurface border-b border-kjborder text-kjtext-muted text-[10px] uppercase tracking-wider">
+                        <tr>
+                          <th className="py-2.5 px-3"># ID</th>
+                          <th className="py-2.5 px-3">Verdict</th>
+                          <th className="py-2.5 px-3">Lang</th>
+                          <th className="py-2.5 px-3">Time</th>
+                          <th className="py-2.5 px-3">Memory</th>
+                          <th className="py-2.5 px-3">Submitted</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-kjborder/50">
+                        {verdicts.map((v) => (
+                          <tr key={v.id} className="hover:bg-kjbg/50 transition-colors">
+                            <td className="py-2.5 px-3">
+                              <Link
+                                href={`/submissions/${v.id}`}
+                                className="text-kjprimary font-bold hover:underline"
+                              >
+                                #{v.id}
+                              </Link>
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                v.status.toLowerCase() === "accepted"
+                                  ? "text-green-400 bg-green-400/10 border border-green-400/20"
+                                  : v.status.toLowerCase().includes("pending") || v.status.toLowerCase().includes("running")
+                                    ? "text-yellow-400 bg-yellow-400/10 border border-yellow-400/20 animate-pulse"
+                                    : "text-red-400 bg-red-400/10 border border-red-400/20"
+                              }`}>
+                                {v.status.replaceAll("_", " ").toUpperCase()}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 uppercase text-kjtext-muted">{v.language}</td>
+                            <td className="py-2.5 px-3 text-kjtext-muted">{v.executionTimeMs != null ? `${v.executionTimeMs}ms` : "--"}</td>
+                            <td className="py-2.5 px-3 text-kjtext-muted">{v.memoryUsedMb != null ? `${v.memoryUsedMb}MB` : "--"}</td>
+                            <td className="py-2.5 px-3 text-kjtext-muted text-[11px] whitespace-nowrap">
+                              {v.submittedAt ? new Date(v.submittedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "--"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
           </article>
 
           {/* Interactive Code Editor & Test Runner Section */}
@@ -634,9 +803,24 @@ export default function ProblemDetailPage() {
               </select>
             </div>
 
-            {/* Monaco-style Textarea Editor */}
-            <div className="relative">
+            {/* Monaco-style Textarea Editor with Line Numbers */}
+            <div className="relative flex rounded border border-kjborder bg-kjbg overflow-hidden focus-within:border-kjprimary">
+              {/* Line numbers gutter */}
+              <div
+                ref={gutterRef}
+                className="select-none py-4 px-2 text-right font-mono text-xs text-kjtext-muted/40 bg-kjsurface/50 border-r border-kjborder/60 overflow-hidden"
+                style={{ minWidth: "2.75rem" }}
+                aria-hidden="true"
+              >
+                {lineNumbers.map((n) => (
+                  <div key={n} className="leading-6">{n}</div>
+                ))}
+              </div>
+
+              {/* Textarea */}
               <textarea
+                ref={textareaRef}
+                onScroll={handleEditorScroll}
                 value={codeByLang[language] ?? STARTERS[language] ?? ""}
                 onChange={(event) => {
                   const val = event.target.value;
@@ -661,12 +845,18 @@ export default function ProblemDetailPage() {
                       void handleSubmit();
                     }
                   }
+                  if ((event.metaKey || event.ctrlKey) && event.key === "'") {
+                    event.preventDefault();
+                    if (!runningSamples && !submitting) {
+                      void handleRunSamples();
+                    }
+                  }
                 }}
                 spellCheck={false}
-                className="w-full min-h-[340px] resize-y bg-kjbg border border-kjborder rounded p-4 text-xs sm:text-sm leading-6 font-mono text-kjtext focus:border-kjprimary focus:outline-none selection:bg-kjprimary/20"
+                className="flex-1 min-h-[340px] resize-y bg-transparent p-4 text-xs sm:text-sm leading-6 font-mono text-kjtext focus:outline-none selection:bg-kjprimary/20"
               />
-              <span className="absolute bottom-2 right-3 text-[10px] font-mono text-kjtext-muted/50 select-none">
-                {(codeByLang[language] ?? STARTERS[language] ?? "").split("\n").length} lines · Ctrl+Enter to submit
+              <span className="absolute bottom-2 right-3 text-[10px] font-mono text-kjtext-muted/50 select-none pointer-events-none">
+                {lineCount} lines · Ctrl+Enter submit · Ctrl+&apos; run
               </span>
             </div>
 
