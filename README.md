@@ -112,3 +112,9 @@ Then <http://127.0.0.1:8000/health> and <http://127.0.0.1:8000/docs>.
 - `.env*` is gitignored. Never commit secrets.
 - Tailwind v4 has no `tailwind.config.js`; theming lives in `app/globals.css` under `@theme inline { ... }`.
 - The FastAPI service is intentionally separate from Next.js. Run it as a second process.
+
+## Production deployment
+
+- **Frontend**: Vercel (Next.js 16). See `docs/deployment.md` § 2.
+- **Judge**: Google Cloud Run (`api/Dockerfile` — Python 3.11-slim + gcc/g++/JDK). See `docs/deployment.md` § 3.
+- **Database**: Neon Postgres with Drizzle ORM. See `docs/deployment.md` § 1.
