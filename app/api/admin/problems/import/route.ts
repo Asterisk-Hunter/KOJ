@@ -3,8 +3,10 @@ import { db } from "@/db";
 import { problems, problemTestCases } from "@/db/schema";
 import { ensureUserRow, jsonError, requireSetter } from "@/app/api/admin/authz";
 import {
+  extractAtCoderTaskId,
   extractCodeforcesId,
   extractLeetCodeSlug,
+  parseAtCoderHtml,
   parseCompetitiveCompanion,
   parseLeetCodeData,
   parseTestCasesFromText,
@@ -225,7 +227,46 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // 5. Raw test cases / CSV parser fallback
+  // 5. AtCoder Import
+  if (
+    !parsed &&
+    (source === "atcoder" ||
+      (typeof rawInput === "string" &&
+        (rawInput.includes("atcoder.jp") || /^[a-z0-9]+_[a-z0-9]+$/i.test(rawInput.trim()))))
+  ) {
+    if (typeof rawInput !== "string" || !rawInput.trim()) {
+      return jsonError("AtCoder URL or task code (e.g. abc340_a) is required", 400);
+    }
+    const ac = extractAtCoderTaskId(rawInput);
+    if (!ac) {
+      return jsonError(
+        "Invalid AtCoder format. Use contest and task code (e.g. abc340_a or https://atcoder.jp/contests/abc340/tasks/abc340_a)",
+        400,
+      );
+    }
+
+    try {
+      const acRes = await fetch(`https://atcoder.jp/contests/${ac.contestId}/tasks/${ac.taskId}`, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        },
+      });
+
+      if (!acRes.ok) {
+        return jsonError(`AtCoder returned HTTP ${acRes.status} for task ${ac.taskId}`, 502);
+      }
+
+      const html = await acRes.text();
+      parsed = parseAtCoderHtml(html, ac.contestId, ac.taskId);
+    } catch (err) {
+      return jsonError(
+        `Failed to reach AtCoder: ${err instanceof Error ? err.message : "network error"}`,
+        502,
+      );
+    }
+  }
+
+  // 6. Raw test cases / CSV parser fallback
   if (!parsed && typeof rawInput === "string" && (source === "csv" || source === "polygon" || rawInput.includes(","))) {
     const cases = parseTestCasesFromText(rawInput);
     if (cases.length > 0) {

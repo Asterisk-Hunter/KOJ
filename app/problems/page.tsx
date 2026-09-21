@@ -112,6 +112,7 @@ export default function ProblemsPage() {
         eyebrow="Archive / indexed"
         title="Problem Archive"
         description="Practice from the public KOJ catalogue. Search by title or topic, then open a problem to read the statement and submit code."
+        action={{ label: "+ NEW / IMPORT PROBLEM", href: "/problems/create" }}
       />
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="flex flex-col lg:flex-row gap-3 mb-6">

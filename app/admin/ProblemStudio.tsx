@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Markdown from "react-markdown";
+import { pairPolygonTestFiles } from "@/app/api/admin/problems/import/parser";
 
 type Difficulty = "easy" | "medium" | "hard";
 
@@ -52,6 +53,11 @@ const PRESETS = {
     { label: "Merge Two Sorted Lists", slug: "merge-two-sorted-lists" },
     { label: "Climbing Stairs", slug: "climbing-stairs" },
   ],
+  ac: [
+    { label: "ABC 340 A · Arithmetic", code: "abc340_a" },
+    { label: "ABC 300 A · N-choice", code: "abc300_a" },
+    { label: "ABC 200 A · Century", code: "abc200_a" },
+  ],
 };
 
 const SAMPLE_CC_JSON = JSON.stringify(
@@ -86,7 +92,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
   const [activeTab, setActiveTab] = useState<"importer" | "studio" | "bulk_cases">("importer");
 
   // Importer state
-  const [importSource, setImportSource] = useState<"leetcode" | "codeforces" | "competitive-companion" | "csv">("leetcode");
+  const [importSource, setImportSource] = useState<"leetcode" | "codeforces" | "atcoder" | "competitive-companion" | "csv">("leetcode");
   const [importInput, setImportInput] = useState("two-sum");
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
@@ -120,8 +126,11 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
   const [expandedCase, setExpandedCase] = useState<number | null>(null);
 
   // Bulk test cases tab state
+  const [bulkMode, setBulkMode] = useState<"polygon" | "csv">("polygon");
   const [bulkText, setBulkText] = useState("");
   const [parsedBulkCases, setParsedBulkCases] = useState<TestCaseDraft[]>([]);
+  const [unmatchedFiles, setUnmatchedFiles] = useState<string[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
 
   // Apply parsed data into the Authoring Studio
   function populateStudio(parsed: {
@@ -343,6 +352,36 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
     setParsedBulkCases(cases);
   }
 
+  async function handlePolygonFiles(fileList: FileList | File[]) {
+    const filesArray = Array.from(fileList);
+    if (filesArray.length === 0) return;
+
+    const readFiles: Array<{ name: string; content: string }> = [];
+    for (const file of filesArray) {
+      if (file.size > 10 * 1024 * 1024) continue;
+      try {
+        const text = await file.text();
+        readFiles.push({ name: file.name, content: text });
+      } catch {
+        // ignore unreadable
+      }
+    }
+
+    const { paired, unmatched } = pairPolygonTestFiles(readFiles);
+    setParsedBulkCases(paired);
+    setUnmatchedFiles(unmatched);
+    if (paired.length > 0) {
+      setStatusNotice(`Paired ${paired.length} test case(s) from ${readFiles.length} Polygon/ICPC files.`);
+      if (unmatched.length > 0) {
+        setStatusError(`Note: ${unmatched.length} file(s) had no matching counterpart: ${unmatched.slice(0, 5).join(", ")}${unmatched.length > 5 ? "…" : ""}`);
+      } else {
+        setStatusError(null);
+      }
+    } else {
+      setStatusError(`No matching input/output pairs found in ${readFiles.length} files. Ensure files follow conventions like 01 & 01.a, 1.in & 1.out, or input1.txt & output1.txt.`);
+    }
+  }
+
   function handleApplyBulkCases() {
     if (parsedBulkCases.length === 0) return;
     setForm((prev) => ({
@@ -351,6 +390,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
     }));
     setBulkText("");
     setParsedBulkCases([]);
+    setUnmatchedFiles([]);
     setActiveTab("studio");
     setStatusNotice(`Added ${parsedBulkCases.length} bulk test cases to problem!`);
   }
@@ -399,7 +439,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                 : "text-kjtext-muted hover:text-kjtext"
             }`}
           >
-            📦 Bulk CSV Tests {form.testCases.length > 0 && `(${form.testCases.length})`}
+            📦 Polygon & Bulk Tests {form.testCases.length > 0 && `(${form.testCases.length})`}
           </button>
         </div>
 
@@ -441,10 +481,11 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
               </span>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
               {[
-                { id: "leetcode", label: "LeetCode", icon: "🟡", desc: "URL or title slug" },
+                { id: "leetcode", label: "LeetCode", icon: "🟡", desc: "URL or slug" },
                 { id: "codeforces", label: "Codeforces", icon: "🔵", desc: "4A, 158B, or URL" },
+                { id: "atcoder", label: "AtCoder", icon: "🔴", desc: "abc340_a or URL" },
                 { id: "competitive-companion", label: "Competitive Companion", icon: "🟢", desc: "Browser JSON format" },
                 { id: "csv", label: "Polygon / CSV", icon: "📄", desc: "Test cases batch" },
               ].map((src) => (
@@ -457,6 +498,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                     setImportSource(nextId);
                     if (nextId === "leetcode") setImportInput("two-sum");
                     else if (nextId === "codeforces") setImportInput("4A");
+                    else if (nextId === "atcoder") setImportInput("abc340_a");
                     else if (nextId === "competitive-companion") setImportInput(SAMPLE_CC_JSON);
                     else setImportInput("1 2,3,true\n4 5,9,false");
                   }}
@@ -482,6 +524,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
               <label className="text-xs font-bold text-kjtext-muted uppercase tracking-wider">
                 {importSource === "leetcode" && "Enter LeetCode Problem URL or Slug"}
                 {importSource === "codeforces" && "Enter Codeforces Problem ID or Contest URL"}
+                {importSource === "atcoder" && "Enter AtCoder Task Code (e.g. abc340_a) or Contest URL"}
                 {importSource === "competitive-companion" && "Paste Competitive Companion JSON Payload"}
                 {importSource === "csv" && "Paste CSV Test Cases (input,expectedOutput,isSample)"}
               </label>
@@ -515,6 +558,20 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                   ))}
                 </div>
               )}
+              {importSource === "atcoder" && (
+                <div className="flex gap-1.5 flex-wrap">
+                  {PRESETS.ac.map((p) => (
+                    <button
+                      key={p.code}
+                      type="button"
+                      onClick={() => setImportInput(p.code)}
+                      className="text-[10px] border border-kjborder/80 px-2 py-0.5 rounded text-kjtext-muted hover:text-kjprimary hover:border-kjprimary transition-colors cursor-pointer"
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             {importSource === "competitive-companion" || importSource === "csv" ? (
@@ -532,7 +589,13 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                 type="text"
                 value={importInput}
                 onChange={(e) => setImportInput(e.target.value)}
-                placeholder={importSource === "leetcode" ? "e.g. two-sum or https://leetcode.com/problems/two-sum/" : "e.g. 4A, 158B, or https://codeforces.com/problemset/problem/4/A"}
+                placeholder={
+                  importSource === "leetcode"
+                    ? "e.g. two-sum or https://leetcode.com/problems/two-sum/"
+                    : importSource === "atcoder"
+                      ? "e.g. abc340_a or https://atcoder.jp/contests/abc340/tasks/abc340_a"
+                      : "e.g. 4A, 158B, or https://codeforces.com/problemset/problem/4/A"
+                }
                 className="w-full bg-kjbg border border-kjborder rounded-lg px-4 py-3 text-sm font-mono text-kjtext focus:border-kjprimary focus:outline-none"
               />
             )}
@@ -997,35 +1060,119 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
         </div>
       )}
 
-      {/* TAB 3: BATCH TEST CASES (CSV / POLYGON) */}
+      {/* TAB 3: BATCH TEST CASES (POLYGON & CSV) */}
       {activeTab === "bulk_cases" && (
         <div className="p-6 space-y-6">
-          <div className="border border-kjborder/80 rounded-lg p-4 bg-kjbg/40 space-y-3">
-            <div className="flex justify-between items-center">
-              <span className="text-xs font-bold text-kjprimary uppercase tracking-widest">
-                Polygon & CSV Test Case Batch Importer
-              </span>
-              <span className="text-[11px] text-kjtext-muted">
-                Industry-standard comma or tab-separated bulk upload
-              </span>
+          <div className="flex items-center justify-between border-b border-kjborder pb-3">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setBulkMode("polygon")}
+                className={`px-3 py-1.5 rounded text-xs font-bold transition-all cursor-pointer ${
+                  bulkMode === "polygon"
+                    ? "bg-kjprimary/10 text-kjprimary border border-kjprimary/40"
+                    : "text-kjtext-muted hover:text-kjtext border border-transparent"
+                }`}
+              >
+                📁 Polygon / ICPC Multi-File Upload
+              </button>
+              <button
+                type="button"
+                onClick={() => setBulkMode("csv")}
+                className={`px-3 py-1.5 rounded text-xs font-bold transition-all cursor-pointer ${
+                  bulkMode === "csv"
+                    ? "bg-kjprimary/10 text-kjprimary border border-kjprimary/40"
+                    : "text-kjtext-muted hover:text-kjtext border border-transparent"
+                }`}
+              >
+                📝 CSV / Tab Delimited Text
+              </button>
             </div>
-            <p className="text-xs text-kjtext-muted leading-relaxed">
-              Format: <code className="text-kjprimary">input,expectedOutput,isSample</code> (one per line). Use tab or comma delimiters. Multi-line tokens are supported with quotes.
-            </p>
+            <span className="text-[11px] text-kjtext-muted hidden sm:inline">
+              {bulkMode === "polygon" ? "Supports Polygon (01, 01.a), (.in, .out, .ans)" : "Comma or tab-delimited text"}
+            </span>
+          </div>
 
-            <textarea
-              value={bulkText}
-              onChange={(e) => setBulkText(e.target.value)}
-              rows={8}
-              placeholder={"input,expectedOutput,isSample\n1 2,3,true\n4 5,9,false\n10 20,30,false"}
-              className="w-full bg-kjbg border border-kjborder rounded-lg p-3 text-xs font-mono text-kjtext focus:border-kjprimary focus:outline-none"
-            />
+          {bulkMode === "polygon" ? (
+            <div className="border border-kjborder/80 rounded-lg p-5 bg-kjbg/40 space-y-4">
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setIsDragging(true);
+                }}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setIsDragging(false);
+                  if (e.dataTransfer.files) {
+                    void handlePolygonFiles(e.dataTransfer.files);
+                  }
+                }}
+                className={`border-2 border-dashed rounded-xl p-8 text-center transition-all cursor-pointer relative ${
+                  isDragging
+                    ? "border-kjprimary bg-kjprimary/10 text-kjprimary"
+                    : "border-kjborder hover:border-kjprimary/60 bg-kjsurface/40"
+                }`}
+              >
+                <input
+                  type="file"
+                  multiple
+                  onChange={(e) => {
+                    if (e.target.files) {
+                      void handlePolygonFiles(e.target.files);
+                    }
+                  }}
+                  className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                />
+                <div className="space-y-2 pointer-events-none">
+                  <div className="text-3xl">📥</div>
+                  <div className="text-xs font-bold text-kjtext uppercase tracking-wider">
+                    Drag & Drop Polygon / ICPC Test Case Files Here
+                  </div>
+                  <div className="text-[11px] text-kjtext-muted max-w-lg mx-auto">
+                    Select all files at once (e.g. <code className="text-kjprimary">01, 01.a</code>, <code className="text-kjprimary">1.in, 1.out, 1.ans</code>, or <code className="text-kjprimary">input1.txt, output1.txt</code>). KOJ auto-pairs matching inputs & outputs.
+                  </div>
+                  <div className="pt-2">
+                    <span className="inline-block px-3 py-1 bg-kjsurface border border-kjborder rounded text-[11px] text-kjprimary font-bold">
+                      Or click to browse files…
+                    </span>
+                  </div>
+                </div>
+              </div>
 
-            <div className="flex justify-between items-center pt-2">
-              <span className="text-xs text-kjtext-muted">
-                {parsedBulkCases.length > 0 ? `${parsedBulkCases.length} test cases parsed` : "Paste CSV text above and click preview"}
-              </span>
-              <div className="flex gap-2">
+              {unmatchedFiles.length > 0 && (
+                <div className="border border-yellow-400/30 bg-yellow-400/10 rounded p-3 text-xs text-yellow-300 space-y-1">
+                  <div className="font-bold">⚠️ Unmatched Files ({unmatchedFiles.length})</div>
+                  <div className="text-[11px] text-yellow-300/80">
+                    The following files could not be paired with an input or output counterpart:{" "}
+                    <code className="text-yellow-200">{unmatchedFiles.slice(0, 8).join(", ")}{unmatchedFiles.length > 8 ? "…" : ""}</code>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="border border-kjborder/80 rounded-lg p-4 bg-kjbg/40 space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-bold text-kjprimary uppercase tracking-widest">
+                  CSV Test Case Batch
+                </span>
+                <span className="text-[11px] text-kjtext-muted">
+                  One row per test case
+                </span>
+              </div>
+              <p className="text-xs text-kjtext-muted leading-relaxed">
+                Format: <code className="text-kjprimary">input,expectedOutput,isSample</code>. Delimited by comma or tab. Multi-line tokens supported in quotes.
+              </p>
+
+              <textarea
+                value={bulkText}
+                onChange={(e) => setBulkText(e.target.value)}
+                rows={8}
+                placeholder={"input,expectedOutput,isSample\n1 2,3,true\n4 5,9,false\n10 20,30,false"}
+                className="w-full bg-kjbg border border-kjborder rounded-lg p-3 text-xs font-mono text-kjtext focus:border-kjprimary focus:outline-none"
+              />
+
+              <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
                   onClick={handlePreviewBulk}
@@ -1034,25 +1181,39 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                 >
                   PREVIEW PARSED CASES
                 </button>
-                <button
-                  type="button"
-                  onClick={handleApplyBulkCases}
-                  disabled={parsedBulkCases.length === 0}
-                  className="bg-kjprimary text-kjbg font-bold px-5 py-2 rounded text-xs hover:glow-sm transition-all cursor-pointer disabled:opacity-50"
-                >
-                  ATTACH ALL TO PROBLEM ({parsedBulkCases.length})
-                </button>
               </div>
             </div>
-          </div>
+          )}
 
-          {/* Parsed Preview Table */}
+          {/* Parsed Preview Table & Attach Button */}
           {parsedBulkCases.length > 0 && (
-            <div className="border border-kjborder rounded-lg overflow-hidden bg-kjbg">
-              <div className="px-4 py-2 border-b border-kjborder bg-kjsurface text-xs font-bold text-kjtext uppercase">
-                Parsed Test Cases Preview ({parsedBulkCases.length})
+            <div className="border border-kjborder rounded-lg overflow-hidden bg-kjbg space-y-0">
+              <div className="px-4 py-3 border-b border-kjborder bg-kjsurface flex flex-wrap justify-between items-center gap-2">
+                <div className="text-xs font-bold text-kjtext uppercase tracking-wider">
+                  Parsed Test Cases Preview ({parsedBulkCases.length})
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setParsedBulkCases([]);
+                      setUnmatchedFiles([]);
+                    }}
+                    className="border border-kjborder text-kjtext-muted hover:text-kjtext text-xs px-3 py-1.5 rounded transition-colors cursor-pointer"
+                  >
+                    CLEAR
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleApplyBulkCases}
+                    className="bg-kjprimary text-kjbg font-bold px-4 py-1.5 rounded text-xs hover:glow-sm transition-all cursor-pointer"
+                  >
+                    ATTACH ALL TO PROBLEM ({parsedBulkCases.length})
+                  </button>
+                </div>
               </div>
-              <div className="max-h-72 overflow-y-auto">
+
+              <div className="max-h-80 overflow-y-auto">
                 <table className="w-full text-xs font-mono">
                   <thead>
                     <tr className="border-b border-kjborder text-left text-kjtext-muted bg-kjsurface/40">
@@ -1066,12 +1227,28 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                     {parsedBulkCases.map((c, i) => (
                       <tr key={i} className="border-b border-kjborder/50 hover:bg-kjsurface/50">
                         <td className="p-3 text-kjtext-muted">{i + 1}</td>
-                        <td className="p-3 text-kjtext font-mono truncate max-w-xs">{c.input.replace(/\n/g, "\\n")}</td>
-                        <td className="p-3 text-kjtext font-mono truncate max-w-xs">{c.expectedOutput.replace(/\n/g, "\\n")}</td>
+                        <td className="p-3 text-kjtext font-mono whitespace-pre-wrap max-w-xs break-all max-h-24 overflow-hidden">
+                          {c.input.length > 100 ? `${c.input.slice(0, 100)}…` : c.input}
+                        </td>
+                        <td className="p-3 text-kjtext font-mono whitespace-pre-wrap max-w-xs break-all max-h-24 overflow-hidden">
+                          {c.expectedOutput.length > 100 ? `${c.expectedOutput.slice(0, 100)}…` : c.expectedOutput}
+                        </td>
                         <td className="p-3">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${c.isSample ? "bg-green-500/10 text-green-400" : "bg-yellow-500/10 text-yellow-400"}`}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setParsedBulkCases((prev) =>
+                                prev.map((tc, idx) => (idx === i ? { ...tc, isSample: !tc.isSample } : tc))
+                              );
+                            }}
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer transition-colors ${
+                              c.isSample
+                                ? "bg-green-500/10 text-green-400 border border-green-500/30"
+                                : "bg-yellow-500/10 text-yellow-400 border border-yellow-500/30"
+                            }`}
+                          >
                             {c.isSample ? "SAMPLE" : "HIDDEN"}
-                          </span>
+                          </button>
                         </td>
                       </tr>
                     ))}
