@@ -94,18 +94,33 @@ Problems progress through three discrete states in the database:
    - Initial status upon creation.
    - Invisible to contestants.
    - Authoring setters and admins can freely modify details, limits, and test cases.
-   - Can be published directly to the public archive or attached to an upcoming contest.
+   - Can be published directly to the public archive or added to a **draft** contest.
 
 2. **`contest_active`**:
    - The problem is attached to a contest.
    - Visible to registered participants only when the contest is active in the arena.
    - **Locking rule (`BR-08`)**: When the linked contest is in `live` status, the problem and its test cases are strictly **locked**. Any attempt to edit or delete the problem or its test cases returns `403 Forbidden`.
-   - Transitions into and out of `contest_active` are owned by the contest lifecycle.
+   - Transitions into and out of `contest_active` are owned by the contest lifecycle — setters cannot set this status directly.
 
 3. **`published`**:
    - The problem is listed in the public Problem Archive (`/problems`).
    - Any authenticated user can practice and submit solutions.
    - Can be toggled back to `draft` (Unpublish) if revisions are required.
+
+### Adding Problems to Contests (BR-04)
+
+Only **draft** problems can be added to a contest. The contest itself must also be in `draft` status. This is enforced by `POST /api/admin/contests/[id]/problems`.
+
+When a contest is **published** (status set to `live`):
+- All linked draft problems transition to `contest_active` (handled automatically by the contest lifecycle in `app/api/contests/lifecycle.ts`).
+
+When a contest **ends**:
+- All linked `contest_active` problems transition to `published` and appear in the public archive.
+
+When a contest is **unpublished** (reverted from `live` back to `draft` before it starts):
+- Linked `contest_active` problems return to `draft`.
+
+You cannot add a problem to a contest that is already `live` or `ended`.
 
 ### Deletion Rules
 Only admins can delete problems (`DELETE /api/admin/problems/[id]`). Problems linked to any contest or containing submitted code cannot be deleted to protect contest standings and audit history.
