@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { asc, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { contestProblems, contests, submissions, users } from "@/db/schema";
+import { contestProblems, contests, problems, submissions, users } from "@/db/schema";
 import { getRedis } from "@/lib/redis";
 
 export const runtime = "nodejs";
@@ -13,18 +13,39 @@ function jsonError(message: string, status: number) {
 
 const STANDINGS_CACHE_TTL = 8; // seconds — short enough for live contests
 
+// Standard ICPC / DOMjudge balloon color palette
+export const BALLOON_PALETTE = [
+  { name: "Red", hex: "#ef4444", bg: "bg-red-500", text: "text-red-400", border: "border-red-500/30" },
+  { name: "Green", hex: "#22c55e", bg: "bg-green-500", text: "text-green-400", border: "border-green-500/30" },
+  { name: "Blue", hex: "#3b82f6", bg: "bg-blue-500", text: "text-blue-400", border: "border-blue-500/30" },
+  { name: "Yellow", hex: "#eab308", bg: "bg-yellow-500", text: "text-yellow-400", border: "border-yellow-500/30" },
+  { name: "Purple", hex: "#a855f7", bg: "bg-purple-500", text: "text-purple-400", border: "border-purple-500/30" },
+  { name: "Orange", hex: "#f97316", bg: "bg-orange-500", text: "text-orange-400", border: "border-orange-500/30" },
+  { name: "Cyan", hex: "#06b6d4", bg: "bg-cyan-500", text: "text-cyan-400", border: "border-cyan-500/30" },
+  { name: "Pink", hex: "#ec4899", bg: "bg-pink-500", text: "text-pink-400", border: "border-pink-500/30" },
+  { name: "Emerald", hex: "#10b981", bg: "bg-emerald-500", text: "text-emerald-400", border: "border-emerald-500/30" },
+  { name: "Indigo", hex: "#6366f1", bg: "bg-indigo-500", text: "text-indigo-400", border: "border-indigo-500/30" },
+  { name: "Amber", hex: "#f59e0b", bg: "bg-amber-500", text: "text-amber-400", border: "border-amber-500/30" },
+  { name: "Rose", hex: "#f43f5e", bg: "bg-rose-500", text: "text-rose-400", border: "border-rose-500/30" },
+];
+
+export type PerProblemStanding = {
+  problemId: number;
+  status: "AC" | "WA" | "PENDING" | "--";
+  attempts: number;
+  penaltyMinutes: number | null;
+  isFirstToSolve: boolean;
+  timeMinutes: number | null;
+  pendingAttempts?: number;
+};
+
 type StandingRow = {
   rank: number;
   userId: string;
   username: string;
   solvedCount: number;
   penalty: number;
-  perProblem: Array<{
-    problemId: number;
-    status: "AC" | "WA" | "--";
-    attempts: number;
-    penaltyMinutes: number | null;
-  }>;
+  perProblem: PerProblemStanding[];
 };
 
 export async function GET(req: NextRequest) {
@@ -64,8 +85,14 @@ export async function GET(req: NextRequest) {
   }
 
   const cpRows = await db
-    .select()
+    .select({
+      contestId: contestProblems.contestId,
+      problemId: contestProblems.problemId,
+      position: contestProblems.position,
+      problemTitle: problems.title,
+    })
     .from(contestProblems)
+    .innerJoin(problems, eq(contestProblems.problemId, problems.id))
     .where(eq(contestProblems.contestId, contestId))
     .orderBy(asc(contestProblems.position));
 
@@ -77,9 +104,11 @@ export async function GET(req: NextRequest) {
         status: contest.status,
         startsAt: contest.startsAt.toISOString(),
         endsAt: contest.endsAt.toISOString(),
+        isFrozen: false,
       },
       problems: [],
       rows: [],
+      summary: [],
     });
   }
 
@@ -95,6 +124,15 @@ export async function GET(req: NextRequest) {
   for (const u of userRows) {
     userMap.set(u.clerkId, u.username);
   }
+
+  const contestStartMs = contest.startsAt.getTime();
+  const contestEndMs = contest.endsAt.getTime();
+  const nowMs = Date.now();
+
+  // Scoreboard freeze: in ICPC/DOMjudge, scoreboard freezes in the last 60 minutes of live contest
+  const FREEZE_WINDOW_MS = 60 * 60 * 1000;
+  const freezeAtMs = Math.max(contestStartMs, contestEndMs - FREEZE_WINDOW_MS);
+  const isFrozen = contest.status === "live" && nowMs >= freezeAtMs && nowMs < contestEndMs;
 
   // Group submissions by userId -> problemId -> sorted list
   const byUserProblem = new Map<string, Map<number, typeof submissionRows>>();
@@ -113,7 +151,7 @@ export async function GET(req: NextRequest) {
     list.push(s);
   }
 
-  // Sort each list by submittedAt asc (fallback to id)
+  // Sort each list by submittedAt asc
   for (const [, m] of byUserProblem) {
     for (const [, list] of m) {
       list.sort((a, b) => {
@@ -125,22 +163,58 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const contestStartMs = contest.startsAt.getTime();
+  // Detect First-to-Solve (First AC) per problem across entire contest
+  // If scoreboard is currently frozen, post-freeze solves are masked until contest ends
+  const firstSolverByProblem = new Map<number, { userId: string; submittedAtMs: number }>();
+  for (const [userId, m] of byUserProblem) {
+    for (const [pid, list] of m) {
+      for (const s of list) {
+        if (s.status === "accepted") {
+          const subMs = s.submittedAt ? s.submittedAt.getTime() : contestStartMs;
+          if (isFrozen && subMs >= freezeAtMs) {
+            continue; // Mask post-freeze solve during active freeze window
+          }
+          const currentFirst = firstSolverByProblem.get(pid);
+          if (!currentFirst || subMs < currentFirst.submittedAtMs) {
+            firstSolverByProblem.set(pid, { userId, submittedAtMs: subMs });
+          }
+          break; // First AC for this user on this problem
+        }
+      }
+    }
+  }
 
   const standings: StandingRow[] = [];
+  // Under official ICPC and DOMjudge rules, compilation errors do NOT incur a 20-minute penalty
+  const WRONG_VERDICTS = new Set([
+    "wrong_answer",
+    "time_limit_exceeded",
+    "memory_limit_exceeded",
+    "runtime_error",
+    "presentation_error",
+  ]);
 
   for (const [userId, probMap] of byUserProblem) {
     const username = userMap.get(userId) ?? userId;
     let solvedCount = 0;
     let penalty = 0;
-    const perProblem: StandingRow["perProblem"] = [];
+    const perProblem: PerProblemStanding[] = [];
 
     for (const pid of problemIds) {
       const list = probMap.get(pid) ?? [];
       if (list.length === 0) {
-        perProblem.push({ problemId: pid, status: "--", attempts: 0, penaltyMinutes: null });
+        perProblem.push({
+          problemId: pid,
+          status: "--",
+          attempts: 0,
+          penaltyMinutes: null,
+          isFirstToSolve: false,
+          timeMinutes: null,
+        });
         continue;
       }
+
+      // Check if problem was already accepted
       let firstAcIndex = -1;
       for (let i = 0; i < list.length; i++) {
         if (list[i].status === "accepted") {
@@ -148,28 +222,75 @@ export async function GET(req: NextRequest) {
           break;
         }
       }
+
+      const firstSolver = firstSolverByProblem.get(pid);
+      const isFirst = firstSolver?.userId === userId;
+
       if (firstAcIndex === -1) {
-        // no AC -> WA if any attempts
-        perProblem.push({ problemId: pid, status: "WA", attempts: list.length, penaltyMinutes: null });
+        // No AC
+        // Check if any attempts happened after freeze
+        const postFreezeAttempts = isFrozen
+          ? list.filter((s) => s.submittedAt && s.submittedAt.getTime() >= freezeAtMs).length
+          : 0;
+
+        if (isFrozen && postFreezeAttempts > 0) {
+          perProblem.push({
+            problemId: pid,
+            status: "PENDING",
+            attempts: list.length,
+            penaltyMinutes: null,
+            isFirstToSolve: false,
+            timeMinutes: null,
+            pendingAttempts: postFreezeAttempts,
+          });
+        } else {
+          perProblem.push({
+            problemId: pid,
+            status: "WA",
+            attempts: list.length,
+            penaltyMinutes: null,
+            isFirstToSolve: false,
+            timeMinutes: null,
+          });
+        }
       } else {
         const firstAc = list[firstAcIndex];
-        const WRONG_VERDICTS = new Set([
-          "wrong_answer",
-          "time_limit_exceeded",
-          "memory_limit_exceeded",
-          "runtime_error",
-          "compilation_error",
-          "presentation_error",
-        ]);
+        const submittedAtMs = firstAc.submittedAt ? firstAc.submittedAt.getTime() : contestStartMs;
+
+        // If solved AFTER freeze in a live frozen contest, hide AC from public standings
+        if (isFrozen && submittedAtMs >= freezeAtMs) {
+          const preFreezeList = list.filter((s) => !s.submittedAt || s.submittedAt.getTime() < freezeAtMs);
+          const hadPreFreezeAc = preFreezeList.some((s) => s.status === "accepted");
+          if (!hadPreFreezeAc) {
+            perProblem.push({
+              problemId: pid,
+              status: "PENDING",
+              attempts: list.length,
+              penaltyMinutes: null,
+              isFirstToSolve: false,
+              timeMinutes: null,
+              pendingAttempts: list.length - preFreezeList.length,
+            });
+            continue;
+          }
+        }
+
         const wrongBefore = list
           .slice(0, firstAcIndex)
           .filter((s) => WRONG_VERDICTS.has(s.status)).length;
-        const submittedAtMs = firstAc.submittedAt ? firstAc.submittedAt.getTime() : contestStartMs;
         const minutes = Math.max(0, Math.floor((submittedAtMs - contestStartMs) / 60000));
         const penaltyMinutes = minutes + 20 * wrongBefore;
         solvedCount += 1;
         penalty += penaltyMinutes;
-        perProblem.push({ problemId: pid, status: "AC", attempts: list.length, penaltyMinutes });
+
+        perProblem.push({
+          problemId: pid,
+          status: "AC",
+          attempts: firstAcIndex + 1,
+          penaltyMinutes,
+          isFirstToSolve: isFirst,
+          timeMinutes: minutes,
+        });
       }
     }
 
@@ -185,11 +306,44 @@ export async function GET(req: NextRequest) {
     standings[i].rank = i + 1;
   }
 
-  const problemsMeta = cpRows.map((cp, idx) => ({
-    problemId: cp.problemId,
-    position: cp.position,
-    label: String.fromCharCode(65 + idx),
-  }));
+  // Metadata for problem headers and summary bar
+  const problemsMeta = cpRows.map((cp, idx) => {
+    const balloon = BALLOON_PALETTE[idx % BALLOON_PALETTE.length];
+    return {
+      problemId: cp.problemId,
+      title: cp.problemTitle,
+      position: cp.position,
+      label: String.fromCharCode(65 + idx),
+      balloonColor: balloon.hex,
+      balloonName: balloon.name,
+      balloonClass: balloon.bg,
+    };
+  });
+
+  // Calculate per-problem summary statistics (DOMjudge style bottom row)
+  const problemSummary = problemsMeta.map((p) => {
+    let totalSolved = 0;
+    let totalAttempts = 0;
+    for (const s of standings) {
+      const prob = s.perProblem.find((item) => item.problemId === p.problemId);
+      if (prob) {
+        if (prob.status === "AC") totalSolved += 1;
+        totalAttempts += prob.attempts;
+      }
+    }
+    const firstSolver = firstSolverByProblem.get(p.problemId);
+    const firstSolveMinutes = firstSolver
+      ? Math.max(0, Math.floor((firstSolver.submittedAtMs - contestStartMs) / 60000))
+      : null;
+    return {
+      problemId: p.problemId,
+      label: p.label,
+      totalSolved,
+      totalAttempts,
+      firstSolveMinutes,
+      acceptanceRate: totalAttempts > 0 ? Math.round((totalSolved / totalAttempts) * 100) : 0,
+    };
+  });
 
   const responsePayload = {
     contest: {
@@ -198,8 +352,11 @@ export async function GET(req: NextRequest) {
       status: contest.status,
       startsAt: contest.startsAt.toISOString(),
       endsAt: contest.endsAt.toISOString(),
+      isFrozen,
+      freezeMinutesRemaining: isFrozen ? Math.max(0, Math.ceil((contestEndMs - nowMs) / 60000)) : 0,
     },
     problems: problemsMeta,
+    summary: problemSummary,
     rows: standings.map((r) => ({
       rank: r.rank,
       userId: r.userId,
@@ -211,13 +368,15 @@ export async function GET(req: NextRequest) {
         status: p.status,
         attempts: p.attempts,
         penaltyMinutes: p.penaltyMinutes,
+        isFirstToSolve: p.isFirstToSolve,
+        timeMinutes: p.timeMinutes,
+        pendingAttempts: p.pendingAttempts ?? 0,
       })),
-      // legacy compatibility for previous mock: solved array of status strings
       solved: r.perProblem.map((p) => p.status),
     })),
   };
 
-  // Cache standings for short TTL (live-contest responsive)
+  // Cache standings for short TTL
   if (redis) {
     try {
       await redis.set(cacheKey, responsePayload, { ex: STANDINGS_CACHE_TTL });

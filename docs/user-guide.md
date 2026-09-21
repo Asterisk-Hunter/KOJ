@@ -55,14 +55,23 @@ Select your language from the dropdown menu in the code submission pane:
 
 Your code is read from standard input (`stdin`) and must write output to standard output (`stdout`).
 
-### Submission Modes
+### Submission Modes and Test Runner
 
-| Action | Button | Scope | Impact on Standings |
+The coding workspace features a 3-tab interactive testing panel:
+
+| Tab | Purpose | Behavior | Impact on Standings |
 |---|---|---|---|
-| **Run Sample** | `RUN SAMPLE` | Tests code against **public sample cases** only. | None. Used to quickly check syntax, logic, and output formatting. |
-| **Submit** | `SUBMIT` | Evaluates code against **all test cases** (sample + hidden). | Counts towards problem completion and contest leaderboard scoring. |
+| **Sample Cases** | Multi-case sample evaluation | Runs against all public sample test cases. Displays per-case status badges (`✓` / `✗`), expected vs actual `stdout` diffs, execution time (ms), memory (MB), and `stderr` traces. | None (ephemeral) |
+| **Custom Test** | Arbitrary `stdin` testing | Executes arbitrary user-supplied input against the judge runner. Supports optional expected output for custom diffing. Shows execution time, memory, stdout, and stderr without polluting submission history. | None (ephemeral) |
+| **My Submissions** | In-workspace submission drawer | Lists your recent submissions on this problem with live verdict chips, execution stats, and click-to-view modal. Streams live verdict updates via SSE. | Real contest/archive submissions |
 
-Both modes run your code through the isolated judge service and report execution time and status.
+### Fast I/O Boilerplates & Templates
+The editor includes pre-configured competitive programming starters:
+- **C++**: Preloaded with `<bits/stdc++.h>`, fast I/O (`cin.tie(NULL)`, `ios_base::sync_with_stdio(false)`), and standard typed main template.
+- **Python**: Python 3.11 starter with `sys.stdin.read` fast input parsing.
+- **Java**: Fast I/O using `BufferedReader` and `StringTokenizer`.
+- **C**: Standard GCC 11 template.
+- **Reset Code** and **Copy Code** buttons allow quick template restoration and clipboard copying.
 
 ---
 
@@ -77,7 +86,7 @@ After running or submitting code, KOJ displays a verdict along with the count of
 | **Time Limit Exceeded** | **TLE** | Solution exceeded the CPU time limit (e.g. 1000 ms). | Inefficient algorithm complexity (e.g., $O(N^2)$ instead of $O(N \log N)$), infinite loop, or slow I/O. |
 | **Memory Limit Exceeded** | **MLE** | Solution allocated more RAM than the memory limit (e.g. 256 MB). | Creating overly large arrays or recursion depth causing memory exhaustion. |
 | **Runtime Error** | **RE** | Program crashed during execution or exited with a non-zero code. | Division by zero, index out of bounds, null pointer dereference, or unhandled exception. |
-| **Compilation Error** | **CE** | Code failed to compile. | Syntax error, missing header or import, or type mismatch. Compiler output is displayed in the response notice. |
+| **Compilation Error** | **CE** | Code failed to compile. | Syntax error, missing header or import, or type mismatch. Compiler output is displayed in the response notice. (Note: CE does **not** incur penalty time in ICPC scoring). |
 | **Presentation Error** | **PE** | Output content is logically correct, but whitespace/formatting differs. | Extra spaces at end of lines, missing newlines, or extra blank lines. |
 
 ---
@@ -104,15 +113,24 @@ Contests are organized at `/contests`.
 
 ### The Arena (`/contests/[id]/arena`)
 When a contest is active and you are registered, click **ENTER ARENA** to open the live contest arena:
-- Problems are letter-indexed (**A**, **B**, **C**, etc.).
+- Problems are letter-indexed (**A**, **B**, **C**, etc.) with distinctive **DOMjudge balloon color indicators** (Red, Blue, Green, Yellow, Orange, Cyan, Magenta, Purple, etc.).
 - Submitting code from within the arena tags the submission with the `contestId`.
 - Live standings reflect only submissions made during the contest window.
 
 ---
 
-## 6. Leaderboard & ICPC Scoring
+## 6. Leaderboard & DOMjudge ICPC Scoreboard
 
 The contest standings are available at `/rankings?contestId=[id]` and update live during active contests via Server-Sent Events (SSE).
+
+### Visual Elements (DOMjudge Style)
+- **Problem Balloon Header**: Each problem column displays a circular balloon badge matching its assigned color palette.
+- **First-to-Solve (First Blood)**: The earliest Accepted submission for each problem across the entire contest receives a dark green cell highlight and a gold star (`★`) badge.
+- **Accepted Solves**: Highlighted in green showing `+attempts` and the elapsed time in minutes when solved (e.g., `+1 14'`).
+- **Rejected Attempts**: Highlighted in red showing negative attempts (e.g., `-3`).
+- **Pending / Scoreboard Freeze**: In the final 60 minutes of a live contest, submissions are masked in cyan with a `?` symbol and attempt count (e.g., `? 2`) to build suspense for the closing ceremony.
+- **Summary Footer Row**: DOMjudge-style bottom row summarizing total accepted solutions and total attempts per problem.
+- **Contestant Filter**: Live search input to filter standings by contestant username.
 
 ### ICPC Scoring Rules
 1. **Rank Order**: Contestants are ranked primarily by **number of solved problems (descending)**.
@@ -120,6 +138,7 @@ The contest standings are available at `/rankings?contestId=[id]` and update liv
 3. **Penalty Calculation**:
    - **Penalty for a Solved Problem** = Time in minutes from contest start to your first Accepted (AC) submission + **20 minutes** for each rejected submission on that problem made prior to the first AC.
    - Example: You solve problem A at minute 35 after 2 Wrong Answers. Penalty for problem A = $35 + (2 \times 20) = 75$ minutes.
+   - **Compilation Errors**: In accordance with official ICPC rules, compilation errors (`CE`) do **not** incur penalty minutes.
    - **Submissions after AC**: Subsequent submissions after solving a problem do not add penalty.
    - **Unsolved Problems**: If a problem is never solved, zero penalty is added for failed attempts on that problem.
 

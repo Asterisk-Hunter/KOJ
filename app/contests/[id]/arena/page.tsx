@@ -31,6 +31,12 @@ type ContestDetail = {
   registered: boolean;
 };
 
+const BALLOON_COLORS = [
+  "#ef4444", "#22c55e", "#3b82f6", "#eab308",
+  "#a855f7", "#f97316", "#06b6d4", "#ec4899",
+  "#10b981", "#6366f1", "#f59e0b", "#f43f5e",
+];
+
 export default function ContestArenaPage() {
   const { id } = useParams<{ id: string }>();
   const [contest, setContest] = useState<ContestDetail | null>(null);
@@ -178,16 +184,23 @@ export default function ContestArenaPage() {
             ) : (
               sorted.map((p, idx) => {
                 const letter = String.fromCharCode(65 + idx);
+                const balloonColor = BALLOON_COLORS[idx % BALLOON_COLORS.length];
                 return (
                   <Link
                     key={p.id}
                     href={`/problems/${p.id}?contestId=${contest.numericId}`}
-                    className="flex justify-between items-center border-b border-kjborder py-3 text-sm text-kjtext hover:text-kjprimary transition-colors group"
+                    className="flex justify-between items-center border-b border-kjborder/60 py-3 text-sm text-kjtext hover:text-kjprimary transition-colors group"
                   >
                     <div className="flex items-center gap-3">
-                      <span className="font-mono text-kjtext-muted w-5 text-center">{letter}</span>
-                      <span>{p.title}</span>
-                      <span className={`text-[11px] font-mono border rounded px-1.5 py-0.5 ${
+                      <span
+                        className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white shadow-sm"
+                        style={{ backgroundColor: balloonColor }}
+                        title={`Problem ${letter} (${p.title})`}
+                      >
+                        {letter}
+                      </span>
+                      <span className="font-mono text-sm">{p.title}</span>
+                      <span className={`text-[10px] font-mono border rounded px-1.5 py-0.5 ${
                         p.difficulty === "easy"
                           ? "text-green-400 border-green-400/20"
                           : p.difficulty === "medium"
@@ -197,7 +210,9 @@ export default function ContestArenaPage() {
                         {p.difficulty}
                       </span>
                     </div>
-                    <span className="text-xs text-kjprimary border border-kjborder rounded px-2 py-0.5 group-hover:border-kjprimary transition-colors">OPEN</span>
+                    <span className="text-xs text-kjprimary border border-kjborder/70 rounded px-2 py-0.5 group-hover:border-kjprimary transition-colors font-mono">
+                      SOLVE →
+                    </span>
                   </Link>
                 );
               })
