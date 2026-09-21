@@ -138,9 +138,16 @@ export async function GET(req: NextRequest) {
         perProblem.push({ problemId: pid, status: "WA", attempts: list.length, penaltyMinutes: null });
       } else {
         const firstAc = list[firstAcIndex];
-        const wrongBefore = firstAcIndex; // each prior submission counts as 20 min penalty regardless of verdict? Spec says wrong attempt before first AC.
-        // We count all non-accepted before first AC
-        // Alternative count could filter pending/running but those shouldn't be before AC in finished contest
+        const WRONG_VERDICTS = new Set([
+          "wrong_answer",
+          "time_limit_exceeded",
+          "memory_limit_exceeded",
+          "runtime_error",
+          "presentation_error",
+        ]);
+        const wrongBefore = list
+          .slice(0, firstAcIndex)
+          .filter((s) => WRONG_VERDICTS.has(s.status)).length;
         const submittedAtMs = firstAc.submittedAt ? firstAc.submittedAt.getTime() : contestStartMs;
         const minutes = Math.max(0, Math.floor((submittedAtMs - contestStartMs) / 60000));
         const penaltyMinutes = minutes + 20 * wrongBefore;

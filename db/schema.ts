@@ -51,7 +51,7 @@ export const userRole = pgEnum("user_role", [
 export const users = pgTable("users", {
   clerkId: text("clerk_id").primaryKey(),
   username: text("username").notNull().unique(),
-  email: text("email").notNull(),
+  email: text("email").notNull().unique(),
   role: userRole("role").notNull().default("contestant"),
   suspended: boolean("suspended").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true })
@@ -78,7 +78,7 @@ export const problems = pgTable("problems", {
     .array()
     .notNull()
     .default(sql`'{}'::text[]`),
-  timeLimitMs: integer("time_limit_ms").notNull().default(1000),
+  timeLimitMs: integer("time_limit_ms").notNull().default(2000),
   memoryLimitMb: integer("memory_limit_mb").notNull().default(256),
   status: problemStatus("status").notNull().default("draft"),
   createdAt: timestamp("created_at", { withTimezone: true })

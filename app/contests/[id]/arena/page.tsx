@@ -183,7 +183,7 @@ export default function ContestArenaPage() {
           </p>
           <p className="text-xs font-mono text-kjtext-muted mt-2">{contest.participants} participants registered</p>
           <Link
-            href="/rankings"
+            href={`/rankings?contestId=${contest.numericId}`}
             className="inline-block mt-6 border border-kjborder px-4 py-2 rounded text-xs font-mono text-kjprimary"
           >
             LEADERBOARD →

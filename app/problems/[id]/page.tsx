@@ -148,6 +148,7 @@ export default function ProblemDetailPage() {
         body: JSON.stringify(payload),
       });
       const data = (await res.json()) as {
+        id?: number;
         error?: string;
         passedTests?: number;
         totalTests?: number;
@@ -166,6 +167,54 @@ export default function ProblemDetailPage() {
       if (mode === "submit") {
         setCooldown(30);
       }
+
+      // If we got a submission ID back (async judge flow), subscribe to SSE
+      // for real-time verdict delivery (REQ-JUDGE-12).
+      if (data.id && (data.status === "running" || data.status === "pending")) {
+        const head = mode === "run" ? "Run" : "Submit";
+        setNotice(`${head}: judging…`);
+
+        const es = new EventSource(`/api/submissions/${data.id}/events`);
+        es.addEventListener("status", (ev) => {
+          try {
+            const update = JSON.parse(ev.data) as { status: string };
+            setNotice(`${head}: ${formatStatus(update.status)}…`);
+          } catch { /* ignore malformed events */ }
+        });
+        es.addEventListener("done", (ev) => {
+          es.close();
+          try {
+            const result = JSON.parse(ev.data) as {
+              status: string;
+              passedTests: number | null;
+              totalTests: number | null;
+              executionTimeMs: number | null;
+              errorMessage: string | null;
+            };
+            const parts: string[] = [];
+            if (result.passedTests !== null && result.totalTests !== null)
+              parts.push(`${result.passedTests}/${result.totalTests}`);
+            parts.push(formatStatus(result.status));
+            if (result.executionTimeMs !== null)
+              parts.push(`${result.executionTimeMs}ms`);
+            let msg = `${head}: ${parts.join(" · ")}`;
+            if (result.errorMessage) msg += ` — ${result.errorMessage}`;
+            setNotice(msg);
+          } catch { /* ignore */ }
+          setSubmitting(false);
+          void loadVerdicts();
+        });
+        es.addEventListener("error", () => {
+          es.close();
+          setNotice(`${head}: verdict pending — refresh to check`);
+          setSubmitting(false);
+          void loadVerdicts();
+        });
+        // Don't setSubmitting(false) here — the SSE handlers will do it
+        return;
+      }
+
+      // Fallback for synchronous judge response (legacy /judge path)
       const parts: string[] = [];
       if (typeof data.passedTests === "number" && typeof data.totalTests === "number")
         parts.push(`${data.passedTests}/${data.totalTests}`);

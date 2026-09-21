@@ -95,15 +95,34 @@ export default function SubmissionStatusPage() {
     void fetchSubmission();
   }, [fetchSubmission]);
 
-  // polling only while pending/running
+  // Subscribe to SSE for real-time verdict delivery (REQ-JUDGE-12)
+  const sseSubId = submission?.id;
+  const sseSubStatus = submission?.status;
   useEffect(() => {
-    if (!submission) return;
-    if (!PENDING.has(submission.status)) return;
-    const interval = setInterval(() => {
+    if (sseSubId === undefined || sseSubStatus === undefined) return;
+    if (!PENDING.has(sseSubStatus)) return;
+
+    const es = new EventSource(`/api/submissions/${sseSubId}/events`);
+    es.addEventListener("status", (ev) => {
+      try {
+        const data = JSON.parse(ev.data) as Partial<SubmissionDetail>;
+        setSubmission((prev) => prev ? { ...prev, ...data } : prev);
+      } catch { /* ignore */ }
+    });
+    es.addEventListener("done", (ev) => {
+      es.close();
+      try {
+        const data = JSON.parse(ev.data) as Partial<SubmissionDetail>;
+        setSubmission((prev) => prev ? { ...prev, ...data } : prev);
+      } catch { /* ignore */ }
+    });
+    es.addEventListener("error", () => {
+      es.close();
+      // Fallback: refetch once on SSE failure
       void fetchSubmission();
-    }, 2000);
-    return () => clearInterval(interval);
-  }, [submission, fetchSubmission]);
+    });
+    return () => es.close();
+  }, [sseSubId, sseSubStatus, fetchSubmission]);
 
   const statusInfo = submission ? formatStatus(submission.status) : null;
   const submittedLabel = submission?.submittedAt ? new Date(submission.submittedAt).toLocaleString() : "--";
@@ -250,8 +269,8 @@ export default function SubmissionStatusPage() {
           </pre>
         </section>
 
-        {PENDING.has(submission.status) && <p className="mt-4 text-xs font-mono text-kjtext-muted">Polling DB every 2s until terminal verdict…</p>}
-        {isTerminal && <p className="mt-4 text-xs font-mono text-kjtext-muted">Terminal verdict reached — polling stopped.</p>}
+        {PENDING.has(submission.status) && <p className="mt-4 text-xs font-mono text-kjtext-muted animate-pulse">Live update via SSE — waiting for verdict…</p>}
+        {isTerminal && <p className="mt-4 text-xs font-mono text-kjtext-muted">Terminal verdict reached.</p>}
       </main>
     </>
   );

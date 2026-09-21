@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { SignInButton, SignUpButton, UserButton, useAuth } from "@clerk/nextjs";
+import { useEffect, useState } from "react";
 import GlitchingTerminal from "@/app/components/GlitchingTerminal";
 import Navigation from "@/app/components/Navigation";
 
@@ -35,15 +36,53 @@ const features = [
   },
 ];
 
-const footerLinks: { label: string; href?: string }[] = [
-  { label: "GitHub" },
-  { label: "Documentation" },
-  { label: "Status" },
-  { label: "Privacy" },
-];
+type ProblemSummary = {
+  id: number;
+  title: string;
+  difficulty: string;
+  acceptance: number | null;
+};
+
+type ContestSummary = {
+  id: number | string;
+  slug: string;
+  title: string;
+  status: string;
+  startsAt: string;
+  endsAt: string;
+  participants: number;
+};
 
 export default function LandingPage() {
   const { isLoaded, isSignedIn } = useAuth();
+  const [recentProblems, setRecentProblems] = useState<ProblemSummary[]>([]);
+  const [activeContests, setActiveContests] = useState<ContestSummary[]>([]);
+  const [stats, setStats] = useState({ problems: 0, contests: 0 });
+
+  useEffect(() => {
+    fetch("/api/problems")
+      .then((r) => r.json())
+      .then((data: { problems?: ProblemSummary[] }) => {
+        if (data.problems) {
+          setRecentProblems(data.problems.slice(0, 4));
+          setStats((prev) => ({ ...prev, problems: data.problems?.length ?? 0 }));
+        }
+      })
+      .catch(() => {});
+
+    fetch("/api/contests")
+      .then((r) => r.json())
+      .then((data: { contests?: ContestSummary[] }) => {
+        if (data.contests) {
+          const visible = data.contests.filter(
+            (c) => c.status === "Active" || c.status === "Registration Open" || c.status === "Upcoming",
+          );
+          setActiveContests(visible.slice(0, 3));
+          setStats((prev) => ({ ...prev, contests: data.contests?.length ?? 0 }));
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -102,17 +141,94 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <section className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 pb-16 grid md:grid-cols-2 gap-4">
-        <Link href="/problems/1" className="bg-kjsurface border border-kjborder rounded-lg p-5 hover:border-kjprimary/50">
-          <p className="text-xs font-mono text-kjprimary tracking-widest mb-2">FEATURED PROBLEM</p>
-          <h2 className="font-mono text-xl text-kjtext">Two Sum</h2>
-          <p className="text-sm text-kjtext-muted mt-2">Start with a classic hash-map problem from the public archive.</p>
-        </Link>
-        <Link href="/contests/winter-2026" className="bg-kjsurface border border-kjborder rounded-lg p-5 hover:border-kjprimary/50">
-          <p className="text-xs font-mono text-kjprimary tracking-widest mb-2">UPCOMING CONTEST</p>
-          <h2 className="font-mono text-xl text-kjtext">Winter Championship</h2>
-          <p className="text-sm text-kjtext-muted mt-2">Registration is open for 10 problems across five hours.</p>
-        </Link>
+      {/* Platform Stats */}
+      <section className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 pb-8">
+        <div className="grid grid-cols-3 gap-4">
+          <div className="bg-kjsurface border border-kjborder rounded-lg p-5 text-center">
+            <p className="text-3xl font-mono font-bold text-kjprimary">{stats.problems}</p>
+            <p className="text-xs font-mono text-kjtext-muted mt-1">Problems</p>
+          </div>
+          <div className="bg-kjsurface border border-kjborder rounded-lg p-5 text-center">
+            <p className="text-3xl font-mono font-bold text-kjprimary">{stats.contests}</p>
+            <p className="text-xs font-mono text-kjtext-muted mt-1">Contests</p>
+          </div>
+          <div className="bg-kjsurface border border-kjborder rounded-lg p-5 text-center">
+            <p className="text-3xl font-mono font-bold text-kjprimary">4</p>
+            <p className="text-xs font-mono text-kjtext-muted mt-1">Languages</p>
+          </div>
+        </div>
+      </section>
+
+      {/* Recent Problems + Active Contests */}
+      <section className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 pb-16 grid md:grid-cols-2 gap-6">
+        <div>
+          <h2 className="text-xs uppercase tracking-widest font-mono text-kjprimary mb-4">Recent Problems</h2>
+          {recentProblems.length === 0 ? (
+            <div className="bg-kjsurface border border-kjborder rounded-lg p-5">
+              <p className="text-sm font-mono text-kjtext-muted">No problems yet.</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {recentProblems.map((p) => (
+                <Link
+                  key={p.id}
+                  href={`/problems/${p.id}`}
+                  className="flex items-center justify-between bg-kjsurface border border-kjborder rounded-lg px-5 py-3 hover:border-kjprimary/50"
+                >
+                  <span className="text-sm font-mono text-kjtext">{p.title}</span>
+                  <span className={`text-[11px] font-mono border rounded-full px-2 py-0.5 ${
+                    p.difficulty === "easy"
+                      ? "text-green-400 border-green-400/20"
+                      : p.difficulty === "medium"
+                        ? "text-yellow-400 border-yellow-400/20"
+                        : "text-red-400 border-red-400/20"
+                  }`}>
+                    {p.difficulty}
+                  </span>
+                </Link>
+              ))}
+              <Link href="/problems" className="block text-xs font-mono text-kjprimary mt-2 hover:underline">
+                View all problems →
+              </Link>
+            </div>
+          )}
+        </div>
+
+        <div>
+          <h2 className="text-xs uppercase tracking-widest font-mono text-kjprimary mb-4">Active & Upcoming Contests</h2>
+          {activeContests.length === 0 ? (
+            <div className="bg-kjsurface border border-kjborder rounded-lg p-5">
+              <p className="text-sm font-mono text-kjtext-muted">No active contests right now.</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {activeContests.map((c) => (
+                <Link
+                  key={c.slug}
+                  href={`/contests/${c.slug}`}
+                  className="block bg-kjsurface border border-kjborder rounded-lg px-5 py-3 hover:border-kjprimary/50"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-mono text-kjtext">{c.title}</span>
+                    <span className={`text-[11px] font-mono border rounded-full px-2 py-0.5 ${
+                      c.status === "Active"
+                        ? "text-green-400 border-green-400/20"
+                        : "text-yellow-400 border-yellow-400/20"
+                    }`}>
+                      {c.status}
+                    </span>
+                  </div>
+                  <p className="text-xs font-mono text-kjtext-muted mt-1">
+                    {c.participants} participants · {new Date(c.startsAt).toLocaleDateString()}
+                  </p>
+                </Link>
+              ))}
+              <Link href="/contests" className="block text-xs font-mono text-kjprimary mt-2 hover:underline">
+                View all contests →
+              </Link>
+            </div>
+          )}
+        </div>
       </section>
 
       {/* Features Section */}
@@ -145,29 +261,18 @@ export default function LandingPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
             <p className="font-mono text-xs text-kjtext-muted">
-              &copy; 2024 IIIT Kottayam. Built for Competitive Excellence.
+              &copy; 2026 IIIT Kottayam. Built for Competitive Excellence.
             </p>
             <div className="flex items-center gap-6">
-              {footerLinks.map((link) =>
-                link.href ? (
-                  <Link
-                    key={link.label}
-                    href={link.href}
-                    className="font-mono text-xs text-kjtext-muted hover:text-kjprimary transition-colors"
-                  >
-                    {link.label}
-                  </Link>
-                ) : (
-                  <span
-                    key={link.label}
-                    title="Coming soon"
-                    className="font-mono text-xs text-kjtext-muted/50 cursor-not-allowed"
-                    aria-disabled="true"
-                  >
-                    {link.label}
-                  </span>
-                ),
-              )}
+              <Link href="/problems" className="font-mono text-xs text-kjtext-muted hover:text-kjprimary transition-colors">
+                Problems
+              </Link>
+              <Link href="/contests" className="font-mono text-xs text-kjtext-muted hover:text-kjprimary transition-colors">
+                Contests
+              </Link>
+              <Link href="/rankings" className="font-mono text-xs text-kjtext-muted hover:text-kjprimary transition-colors">
+                Rankings
+              </Link>
             </div>
           </div>
         </div>

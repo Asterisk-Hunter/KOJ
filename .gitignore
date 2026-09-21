@@ -57,3 +57,6 @@ next-env.d.ts
 
 # Playwright MCP artifacts
 .playwright-mcp/
+
+# deepwork local state (git-local, OpenCode-readable)
+.slim/deepwork/

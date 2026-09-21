@@ -146,7 +146,7 @@ def judge_async_endpoint(
         logger.exception("judge-async error for submission %s", req.submission_id)
         _update_submission_status(
             req.submission_id, "runtime_error", 0, total_tests,
-            0, str(exc), now,
+            0, 0, str(exc), now,
         )
         return JSONResponse(status_code=502, content={"status": "runtime_error"})
 
@@ -157,6 +157,7 @@ def judge_async_endpoint(
         result.passed_tests,
         result.total_tests,
         result.execution_time_ms,
+        result.memory_used_mb,
         result.error_message,
         now,
     )
@@ -171,6 +172,7 @@ def _update_submission_status(
     passed_tests: int,
     total_tests: int,
     execution_time_ms: int,
+    memory_used_mb: int,
     error_message: str | None,
     completed_at: datetime,
 ) -> None:
@@ -180,12 +182,13 @@ def _update_submission_status(
             with conn.cursor() as cur:
                 cur.execute(
                     "UPDATE submissions SET status = %s, passed_tests = %s, "
-                    "total_tests = %s, execution_time_ms = %s, "
+                    "total_tests = %s, execution_time_ms = %s, memory_used_mb = %s, "
                     "error_message = %s, completed_at = %s WHERE id = %s",
-                    (status, passed_tests, total_tests, execution_time_ms, error_message, completed_at, submission_id),
+                    (status, passed_tests, total_tests, execution_time_ms, memory_used_mb, error_message, completed_at, submission_id),
                 )
     except Exception:
         logger.exception("Failed to update submission %s status to %s", submission_id, status)
+
 
 
 @app.post("/judge", response_model=JudgeResponse)
