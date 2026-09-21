@@ -170,6 +170,11 @@ export async function GET(
     .where(and(eq(problemTestCases.problemId, id), eq(problemTestCases.isSample, true)))
     .orderBy(asc(problemTestCases.position));
 
+  // Hide editorial / explanation during live contests to protect competitive integrity.
+  // Explanations are only visible in public practice mode or after a contest ends.
+  const hideExplanation =
+    problem.status === "contest_active" || contestIdToReturn !== null;
+
   const response: Record<string, unknown> = {
     id: problem.id,
     title: problem.title,
@@ -177,7 +182,7 @@ export async function GET(
     inputFormat: problem.inputFormat,
     outputFormat: problem.outputFormat,
     constraints: problem.constraints,
-    explanation: problem.explanation,
+    explanation: hideExplanation ? null : problem.explanation,
     difficulty: problem.difficulty,
     tags: problem.tags,
     timeLimitMs: problem.timeLimitMs,

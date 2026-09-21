@@ -37,12 +37,44 @@ const BALLOON_COLORS = [
   "#10b981", "#6366f1", "#f59e0b", "#f43f5e",
 ];
 
+type ArenaSubmission = {
+  id: number;
+  problemId: number;
+  problemTitle: string;
+  language: string;
+  status: string;
+  passedTests: number | null;
+  totalTests: number | null;
+  executionTimeMs: number | null;
+  memoryUsedMb: number | null;
+  submittedAt: string | null;
+};
+
 export default function ContestArenaPage() {
   const { id } = useParams<{ id: string }>();
   const [contest, setContest] = useState<ContestDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [submissions, setSubmissions] = useState<ArenaSubmission[]>([]);
+  const [loadingSubmissions, setLoadingSubmissions] = useState(false);
+
+  const loadSubmissions = useCallback(async (numericContestId: number) => {
+    setLoadingSubmissions(true);
+    try {
+      const res = await fetch(`/api/submissions?contestId=${numericContestId}`, { cache: "no-store" });
+      if (res.ok) {
+        const data = (await res.json()) as unknown;
+        if (Array.isArray(data)) {
+          setSubmissions(data as ArenaSubmission[]);
+        }
+      }
+    } catch {
+      // Non-fatal
+    } finally {
+      setLoadingSubmissions(false);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -55,13 +87,17 @@ export default function ContestArenaPage() {
         const msg = (data as { error?: string }).error ?? `Failed to load contest (${res.status})`;
         throw new Error(msg);
       }
-      setContest(data as ContestDetail);
+      const c = data as ContestDetail;
+      setContest(c);
+      if (c.numericId && c.registered) {
+        void loadSubmissions(c.numericId);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load contest");
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, loadSubmissions]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -73,16 +109,41 @@ export default function ContestArenaPage() {
     return () => clearInterval(t);
   }, []);
 
+  const diffMs = useMemo(() => {
+    if (!contest) return 0;
+    return Math.max(0, new Date(contest.endsAt).getTime() - now);
+  }, [contest, now]);
+
+  const isUrgent = diffMs > 0 && diffMs < 15 * 60 * 1000;
+  const isCritical = diffMs > 0 && diffMs < 5 * 60 * 1000;
+
   const timeRemaining = useMemo(() => {
-    if (!contest) return "00:00:00";
-    const end = new Date(contest.endsAt).getTime();
-    const diff = Math.max(0, end - now);
-    const totalSec = Math.floor(diff / 1000);
+    const totalSec = Math.floor(diffMs / 1000);
     const h = String(Math.floor(totalSec / 3600)).padStart(2, "0");
     const m = String(Math.floor((totalSec % 3600) / 60)).padStart(2, "0");
     const s = String(totalSec % 60).padStart(2, "0");
     return `${h}:${m}:${s}`;
-  }, [contest, now]);
+  }, [diffMs]);
+
+  const problemStatusMap = useMemo(() => {
+    const map = new Map<number, { isSolved: boolean; attempts: number }>();
+    for (const sub of submissions) {
+      const prev = map.get(sub.problemId) ?? { isSolved: false, attempts: 0 };
+      map.set(sub.problemId, {
+        isSolved: prev.isSolved || sub.status === "accepted",
+        attempts: prev.attempts + 1,
+      });
+    }
+    return map;
+  }, [submissions]);
+
+  const solvedCount = useMemo(() => {
+    let count = 0;
+    for (const val of problemStatusMap.values()) {
+      if (val.isSolved) count++;
+    }
+    return count;
+  }, [problemStatusMap]);
 
   if (loading) {
     return (
@@ -185,6 +246,7 @@ export default function ContestArenaPage() {
               sorted.map((p, idx) => {
                 const letter = String.fromCharCode(65 + idx);
                 const balloonColor = BALLOON_COLORS[idx % BALLOON_COLORS.length];
+                const pStatus = problemStatusMap.get(p.id);
                 return (
                   <Link
                     key={p.id}
@@ -209,6 +271,15 @@ export default function ContestArenaPage() {
                       }`}>
                         {p.difficulty}
                       </span>
+                      {pStatus?.isSolved ? (
+                        <span className="text-[10px] font-mono border rounded px-1.5 py-0.5 text-green-400 border-green-400/20">
+                          SOLVED
+                        </span>
+                      ) : pStatus && pStatus.attempts > 0 ? (
+                        <span className="text-[10px] font-mono border rounded px-1.5 py-0.5 text-yellow-400 border-yellow-400/20">
+                          ATTEMPTS {pStatus.attempts}
+                        </span>
+                      ) : null}
                     </div>
                     <span className="text-xs text-kjprimary border border-kjborder/70 rounded px-2 py-0.5 group-hover:border-kjprimary transition-colors font-mono">
                       SOLVE →
@@ -220,10 +291,19 @@ export default function ContestArenaPage() {
           </div>
           <div className="bg-kjsurface border border-kjborder rounded-lg p-5">
             <h2 className="font-mono text-kjtext mb-4 text-sm">Contest panel</h2>
-            <p className="font-mono text-3xl text-kjprimary text-glow tabular-nums">{timeRemaining}</p>
+            <p className={`font-mono text-3xl tabular-nums ${
+              isCritical
+                ? "text-red-400 animate-pulse"
+                : isUrgent
+                  ? "text-yellow-400"
+                  : "text-kjprimary text-glow"
+            }`}>{timeRemaining}</p>
             <p className="text-sm text-kjtext-muted mt-3">
-              {contest.problemsCount} problems · scoring is solved count, then penalty.
+              {solvedCount}/{contest.problemsCount} solved · {contest.problemsCount} problems · scoring is solved count, then penalty.
             </p>
+            {loadingSubmissions && (
+              <p className="text-[10px] font-mono text-kjtext-muted/60 mt-1 animate-pulse">syncing attempts…</p>
+            )}
             <p className="text-xs font-mono text-kjtext-muted mt-2">{contest.participants} participants registered</p>
             <Link
               href={`/rankings?contestId=${contest.numericId}`}
