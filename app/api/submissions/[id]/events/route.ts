@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { submissions } from "@/db/schema";
 import { requireAdmin } from "@/app/api/admin/authz";
+import { getRedis } from "@/lib/redis";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -68,6 +69,7 @@ export async function GET(
   let ticks = 0;
   let closed = false;
   let timer: NodeJS.Timeout | null = null;
+  const redis = getRedis();
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -79,6 +81,19 @@ export async function GET(
       };
 
       const fetchAndSend = async (): Promise<boolean> => {
+        // Redis-first: check for verdict event published by FastAPI
+        if (redis) {
+          try {
+            const cached = await redis.get<Record<string, unknown>>(`verdict:${submissionId}`);
+            if (cached) {
+              send("done", cached);
+              return true;
+            }
+          } catch {
+            // Redis unavailable — fall through to DB
+          }
+        }
+
         const current = await db
           .select({
             status: submissions.status,

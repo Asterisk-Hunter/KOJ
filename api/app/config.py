@@ -47,6 +47,11 @@ class Settings(BaseSettings):
         description="Production frontend origin for CORS (e.g. https://koj.vercel.app). Empty = localhost-only in dev.",
     )
 
+    REDIS_URL: str = Field(
+        default="",
+        description="Optional Redis URL (rediss://...). Empty = DB-only path, no caching.",
+    )
+
     @property
     def FASTAPI_URL(self) -> str:
         """Convenience: the http://host:port origin for CORS allow-lists."""

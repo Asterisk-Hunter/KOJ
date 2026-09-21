@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import time
 from datetime import datetime, timezone
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
@@ -10,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from . import db
+from . import cache, db
 from .config import settings
 from .judge import SUPPORTED_LANGUAGES, JudgeCase, JudgeRequest, JudgeResponse, execute_judge
 
@@ -19,6 +21,8 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger("koj.api")
+
+_start_time = time.monotonic()
 
 # Settings-driven CORS allow list. Tight — never ["*"].
 # Next.js dev server is always permitted; the FastAPI service's own origin
@@ -80,12 +84,37 @@ def health() -> JSONResponse:
 def metrics() -> dict[str, object]:
     """Judge service liveness and runtime metrics."""
     db_ok = db.ping()
-    return {
+    result: dict[str, object] = {
         "status": "ok" if db_ok else "degraded",
         "service": "koj-judge",
+        "uptime_s": int(time.monotonic() - _start_time),
         "supported_languages": list(SUPPORTED_LANGUAGES),
         "db": db_ok,
     }
+    if db_ok:
+        try:
+            with db.get_connection() as conn:
+                with conn.cursor() as cur:
+                    since = datetime.now(timezone.utc).timestamp() - 86400
+                    cur.execute(
+                        "SELECT status, count(*)::int AS cnt "
+                        "FROM submissions WHERE submitted_at >= to_timestamp(%s) "
+                        "GROUP BY status",
+                        (since,),
+                    )
+                    result["verdicts_24h"] = {row[0]: row[1] for row in cur.fetchall()}
+                    cur.execute(
+                        "SELECT COALESCE(AVG(execution_time_ms), 0)::int "
+                        "FROM submissions "
+                        "WHERE status NOT IN ('pending','running') "
+                        "AND submitted_at >= to_timestamp(%s)",
+                        (since,),
+                    )
+                    avg_row = cur.fetchone()
+                    result["avg_latency_ms_24h"] = avg_row[0] if avg_row else 0
+        except Exception:  # noqa: BLE001
+            logger.debug("metrics query failed", exc_info=True)
+    return result
 
 
 class JudgeAsyncRequest(BaseModel):
@@ -171,8 +200,39 @@ def _process_async_judge(submission_id: int, sample_only: bool) -> None:
             now,
         )
 
+        # 9. Structured JSON log line (one per execution)
+        logger.info(
+            json.dumps({
+                "event": "judge_complete",
+                "submission_id": submission_id,
+                "language": language,
+                "verdict": result.status,
+                "passed": result.passed_tests,
+                "total": result.total_tests,
+                "execution_time_ms": result.execution_time_ms,
+                "memory_used_mb": result.memory_used_mb,
+            })
+        )
+
+        # 10. Publish verdict to Redis for SSE endpoints (best-effort)
+        cache.publish_verdict(submission_id, {
+            "status": result.status,
+            "passed_tests": result.passed_tests,
+            "total_tests": result.total_tests,
+            "execution_time_ms": result.execution_time_ms,
+            "memory_used_mb": result.memory_used_mb,
+            "error_message": result.error_message,
+        })
+
     except Exception as exc:
         logger.exception("judge-async error for submission %s", submission_id)
+        logger.info(
+            json.dumps({
+                "event": "judge_error",
+                "submission_id": submission_id,
+                "error": str(exc)[:500],
+            })
+        )
         _update_submission_status(
             submission_id, "runtime_error", 0, total_tests,
             0, 0, str(exc), now,

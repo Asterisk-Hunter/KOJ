@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { asc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contests, submissions, users } from "@/db/schema";
+import { getRedis } from "@/lib/redis";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,6 +10,8 @@ export const dynamic = "force-dynamic";
 function jsonError(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
 }
+
+const STANDINGS_CACHE_TTL = 8; // seconds — short enough for live contests
 
 type StandingRow = {
   rank: number;
@@ -32,6 +35,18 @@ export async function GET(req: NextRequest) {
   const contestId = Number(contestIdRaw);
   if (!Number.isInteger(contestId) || contestId <= 0) {
     return jsonError("contestId must be a positive integer", 400);
+  }
+
+  // Redis cache check (short TTL for live contests)
+  const redis = getRedis();
+  const cacheKey = `standings:${contestId}`;
+  if (redis) {
+    try {
+      const cached = await redis.get(cacheKey);
+      if (cached) return NextResponse.json(cached);
+    } catch {
+      // Redis unavailable — fall through to DB path
+    }
   }
 
   const contestRows = await db
@@ -176,7 +191,7 @@ export async function GET(req: NextRequest) {
     label: String.fromCharCode(65 + idx),
   }));
 
-  return NextResponse.json({
+  const responsePayload = {
     contest: {
       id: contest.id,
       title: contest.title,
@@ -200,5 +215,16 @@ export async function GET(req: NextRequest) {
       // legacy compatibility for previous mock: solved array of status strings
       solved: r.perProblem.map((p) => p.status),
     })),
-  });
+  };
+
+  // Cache standings for short TTL (live-contest responsive)
+  if (redis) {
+    try {
+      await redis.set(cacheKey, responsePayload, { ex: STANDINGS_CACHE_TTL });
+    } catch {
+      // Best-effort cache write
+    }
+  }
+
+  return NextResponse.json(responsePayload);
 }

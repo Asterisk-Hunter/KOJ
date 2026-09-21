@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { contests, submissions } from "@/db/schema";
+import { getRedis } from "@/lib/redis";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -63,6 +64,8 @@ export async function GET(
   const encoder = new TextEncoder();
   let ticks = 0;
   let closed = false;
+  const redis = getRedis();
+  const versionCacheKey = `contest_version:${contestId}`;
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -72,13 +75,36 @@ export async function GET(
           encoder.encode(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`),
         );
       };
+
+      const fetchVersion = async (): Promise<{ count: number; maxSubmittedAt: string | null }> => {
+        // Redis-first: check cached version
+        if (redis) {
+          try {
+            const cached = await redis.get<{ count: number; maxSubmittedAt: string | null }>(versionCacheKey);
+            if (cached) return cached;
+          } catch {
+            // Fall through to DB
+          }
+        }
+        const v = await versionFor(contestId);
+        // Cache for 3 seconds to reduce DB load on fast tick
+        if (redis) {
+          try {
+            await redis.set(versionCacheKey, v, { ex: 3 });
+          } catch {
+            // Best-effort
+          }
+        }
+        return v;
+      };
+
       try {
-        send("version", await versionFor(contestId));
+        send("version", await fetchVersion());
         const timer = setInterval(() => {
           void (async () => {
             ticks += 1;
             try {
-              send("version", await versionFor(contestId));
+              send("version", await fetchVersion());
             } catch {
               clearInterval(timer);
               if (!closed) {
