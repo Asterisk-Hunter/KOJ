@@ -113,6 +113,33 @@ export default function ProblemTestCases({ problemId }: { problemId: number }) {
     }
   }
 
+  const [mode, setMode] = useState<"single" | "bulk">("single");
+  const [bulkText, setBulkText] = useState("");
+  const [bulkAdding, setBulkAdding] = useState(false);
+
+  async function handleBulkAdd() {
+    if (!bulkText.trim()) return;
+    setBulkAdding(true);
+    setNotice(null);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/problems/${problemId}/test-cases/bulk`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rawText: bulkText }),
+      });
+      const j = (await res.json().catch(() => null)) as { error?: string; addedCount?: number } | null;
+      if (!res.ok) throw new Error(j?.error ?? `bulk add failed (${res.status})`);
+      setNotice(`Added ${j?.addedCount ?? 0} test cases in bulk`);
+      setBulkText("");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "bulk add failed");
+    } finally {
+      setBulkAdding(false);
+    }
+  }
+
   return (
     <div className="mt-3 border border-kjborder rounded p-3 bg-kjbg/30">
       {notice && <p className="mb-2 text-xs font-mono text-kjprimary">{notice}</p>}
@@ -139,35 +166,80 @@ export default function ProblemTestCases({ problemId }: { problemId: number }) {
           </div>
         ))
       )}
-      <form onSubmit={(e) => void handleAdd(e)} className="grid sm:grid-cols-2 gap-2 mt-3">
-        <textarea
-          value={form.input}
-          onChange={(e) => setForm({ ...form, input: e.target.value })}
-          placeholder="stdin"
-          required
-          rows={2}
-          className={inputCls}
-        />
-        <textarea
-          value={form.expectedOutput}
-          onChange={(e) => setForm({ ...form, expectedOutput: e.target.value })}
-          placeholder="expected stdout"
-          required
-          rows={2}
-          className={inputCls}
-        />
-        <label className="flex items-center gap-2 text-xs font-mono text-kjtext-muted">
-          <input
-            type="checkbox"
-            checked={form.isSample}
-            onChange={(e) => setForm({ ...form, isSample: e.target.checked })}
-          />
-          sample (visible to contestants)
-        </label>
-        <button type="submit" disabled={adding} className={btnGhost}>
-          {adding ? "ADDING…" : "ADD TEST CASE"}
+
+      <div className="flex gap-2 mt-4 pt-3 border-t border-kjborder">
+        <button
+          type="button"
+          onClick={() => setMode("single")}
+          className={`px-3 py-1 text-xs font-mono rounded ${
+            mode === "single" ? "bg-kjprimary/20 text-kjprimary border border-kjprimary/40" : "text-kjtext-muted"
+          }`}
+        >
+          Single Add
         </button>
-      </form>
+        <button
+          type="button"
+          onClick={() => setMode("bulk")}
+          className={`px-3 py-1 text-xs font-mono rounded ${
+            mode === "bulk" ? "bg-kjprimary/20 text-kjprimary border border-kjprimary/40" : "text-kjtext-muted"
+          }`}
+        >
+          Bulk Import (CSV)
+        </button>
+      </div>
+
+      {mode === "single" ? (
+        <form onSubmit={(e) => void handleAdd(e)} className="grid sm:grid-cols-2 gap-2 mt-3">
+          <textarea
+            value={form.input}
+            onChange={(e) => setForm({ ...form, input: e.target.value })}
+            placeholder="stdin"
+            required
+            rows={2}
+            className={inputCls}
+          />
+          <textarea
+            value={form.expectedOutput}
+            onChange={(e) => setForm({ ...form, expectedOutput: e.target.value })}
+            placeholder="expected stdout"
+            required
+            rows={2}
+            className={inputCls}
+          />
+          <label className="flex items-center gap-2 text-xs font-mono text-kjtext-muted">
+            <input
+              type="checkbox"
+              checked={form.isSample}
+              onChange={(e) => setForm({ ...form, isSample: e.target.checked })}
+            />
+            sample (visible to contestants)
+          </label>
+          <button type="submit" disabled={adding} className={btnGhost}>
+            {adding ? "ADDING…" : "ADD TEST CASE"}
+          </button>
+        </form>
+      ) : (
+        <div className="space-y-2 mt-3">
+          <p className="text-[11px] text-kjtext-muted">
+            Format: <code className="text-kjprimary">input,expectedOutput,isSample</code> (one per line)
+          </p>
+          <textarea
+            value={bulkText}
+            onChange={(e) => setBulkText(e.target.value)}
+            placeholder={"1 2,3,true\n4 5,9,false"}
+            rows={4}
+            className={`${inputCls} w-full`}
+          />
+          <button
+            type="button"
+            onClick={() => void handleBulkAdd()}
+            disabled={bulkAdding || !bulkText.trim()}
+            className={btnGhost}
+          >
+            {bulkAdding ? "IMPORTING…" : "BATCH IMPORT TEST CASES"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
