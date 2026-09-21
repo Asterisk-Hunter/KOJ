@@ -95,6 +95,7 @@ Contests are organized at `/contests`.
 ### Registration
 - **Open Contests**: Click **REGISTER** to sign up.
 - **Invite-Only Contests**: Enter the secret **Invite Code** distributed by organizers, then click **REGISTER NOW**.
+- **Deadline**: Registration must be completed **before the contest starts** (`BR-06`). Once the clock begins, registration is closed.
 
 ### Countdown Timer
 - Displays **starts in `HH:MM:SS`** prior to start.
@@ -128,9 +129,9 @@ The contest standings are available at `/rankings?contestId=[id]` and update liv
 
 To ensure fair judging and system stability:
 - **Rate Limit**: Maximum **1 submission every 30 seconds per problem** per user (`REQ-RATE-01/02`).
-- Applies to both `RUN SAMPLE` and `SUBMIT` actions.
+- Applies to both `RUN SAMPLE` and `SUBMIT` actions — both consume judge capacity.
 - The submit button displays a live cooldown countdown (`WAIT 30s`).
-- Attempting to bypass the cooldown results in an `HTTP 429 Too Many Requests` error with a `Retry-After` header.
+- Attempting to bypass the cooldown results in an `HTTP 429 Too Many Requests` error with a `Retry-After` header. Wait for the indicated time and retry.
 - **Code Size Limit**: Submissions are limited to **100 KB** of source code.
 
 ---

@@ -59,6 +59,16 @@ npm run db:migrate
 npm run db:studio
 ```
 
+#### Pre-migration safety check
+
+Before applying migrations on a database with existing user data, verify there are no duplicate emails (which would violate the `users.email` uniqueness constraint):
+
+```sql
+SELECT email, COUNT(*) FROM users GROUP BY email HAVING COUNT(*) > 1;
+```
+
+This query must return **zero rows**. If duplicates exist, deduplicate them before running `npm run db:migrate`.
+
 ### Seeding Initial Data
 Populate the database with default problems, test cases, and sample contests. The seed script requires an existing Clerk user ID to assign ownership:
 
@@ -93,6 +103,7 @@ Configure these in **Project Settings → Environment Variables**:
 | `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | `/sign-up` |
 | `NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL` | `/dashboard` |
 | `NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL` | `/dashboard` |
+| `CLERK_WEBHOOK_SECRET` | Clerk webhook signing secret (`whsec_...`) — required for `POST /api/webhooks/clerk` |
 
 ### Function Timeout Configuration
 `app/api/submissions` uses asynchronous fire-and-forget handoff to the FastAPI judge via `POST /judge-async`. The submission handler dispatches the job in under 500ms and returns `202 Accepted` while the client subscribes to Server-Sent Events (SSE). Vercel's default function limits are sufficient.
@@ -205,6 +216,29 @@ Open <http://localhost:3000> in your browser. Verify database health at <http://
 | `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | Next.js | Yes | Route for authentication sign up (`/sign-up`). |
 | `NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL` | Next.js | Yes | Default redirect after sign-in (`/dashboard`). |
 | `NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL` | Next.js | Yes | Default redirect after sign-up (`/dashboard`). |
+| `CLERK_WEBHOOK_SECRET` | Next.js (Vercel) | Yes (for webhooks) | Clerk webhook signing secret (`whsec_...`) for `POST /api/webhooks/clerk`. |
 
 > [!CAUTION]
 > Never commit `.env`, `.env.local`, or any credentials to Git. Always inject sensitive values via Vercel and Google Cloud Run environment variable configuration.
+
+---
+
+## 6. Clerk Dashboard Configuration
+
+After deploying, verify the following in the [Clerk Dashboard](https://dashboard.clerk.com):
+
+### Authentication methods
+- [ ] Enable **GitHub** and **Google** OAuth providers (under *User & Authentication → Social Connections*).
+
+### Organizations
+- [ ] **Organizations** are enabled (under *Organizations*). This is required for `org:admin` role gating on admin APIs.
+- [ ] Create the `contest_setter` organization role (under *Organizations → Roles*) if contest-setter access is desired. DB roles are admin-managed; this only enables Clerk-side `org:contest_setter` checks.
+
+### Webhooks
+- [ ] Add a webhook endpoint: set **Endpoint URL** to `https://<your-app>.vercel.app/api/webhooks/clerk`.
+- [ ] Subscribe to events: `user.created`, `user.updated`, `user.deleted`.
+- [ ] Copy the **Signing Secret** (`whsec_...`) and add it as `CLERK_WEBHOOK_SECRET` in Vercel environment variables.
+
+### Sign-in / Sign-up
+- [ ] Confirm **Sign-in URL** is `/sign-in` and **Sign-up URL** is `/sign-up`.
+- [ ] Confirm **After sign-in redirect** is `/dashboard` and **After sign-up redirect** is `/dashboard`.
