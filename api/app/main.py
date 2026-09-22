@@ -232,6 +232,8 @@ def judge_async_endpoint(
 
     # Verify submission exists before acquiring a judge slot — prevents
     # non-existent IDs from consuming capacity or advisory locks.
+    # Bound here (not below): the check and its logger both need it.
+    submission_id = req.submission_id
     try:
         with db.get_connection() as conn:
             with conn.cursor() as cur:
@@ -253,7 +255,6 @@ def judge_async_endpoint(
 
     now = datetime.now(timezone.utc)
     total_tests = 0
-    submission_id = req.submission_id
     log_suffix = f" key={key[:32]}" if key else ""
 
     try:
