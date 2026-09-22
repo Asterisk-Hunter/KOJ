@@ -4,7 +4,7 @@
 
 - Live site: **https://koj-peach.vercel.app** (not koj.iiitk.ac.in — that's a placeholder).
 - Stack: Next.js 16 + React 19 + TypeScript + Tailwind v4 · FastAPI judge · Neon Postgres + Drizzle · Clerk auth · Upstash Redis (optional cache).
-- Judge sandbox is **dual-backend**: Docker containers where a daemon exists, hardened `rlimit` subprocess on Cloud Run. Prod runs **rlimit** — prove it any time: `/health` returns `"sandbox":"rlimit"`. Never claim containers run on Cloud Run.
+- Judge sandbox is the **rlimit subprocess backend on production**: per-run temp dir, kernel CPU/memory/process/output caps — prove it any time, `/health` returns `"sandbox":"rlimit"`. (A Docker container backend exists in code for self-hosted hosts with a daemon; Cloud Run has none, so prod never uses it.) Never claim containers run on Cloud Run.
 - Auth truth is **Neon `users.role`**, not Clerk org roles (that path was deliberately removed after it over-granted). Clerk = identity only.
 - 4 languages (C, C++, Python, Java), 7 verdicts, ICPC scoring, SSE realtime (poll-push, 2s ticker).
 - Repo: `Prajwal-k-tech/KOJ`, `main` branch. Never mention Asterisk-Hunter (infra-only location of the Neon project).
