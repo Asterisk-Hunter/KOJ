@@ -3,6 +3,7 @@ import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contests, problems, submissions, users } from "@/db/schema";
 import { getRedis } from "@/lib/redis";
+import { countWrongBefore, penaltyMinutesForSolve } from "@/lib/scoring";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -191,15 +192,6 @@ export async function GET(req: NextRequest) {
   }
 
   const standings: StandingRow[] = [];
-  // Under official ICPC and DOMjudge rules, compilation errors do NOT incur a 20-minute penalty
-  const WRONG_VERDICTS = new Set([
-    "wrong_answer",
-    "time_limit_exceeded",
-    "memory_limit_exceeded",
-    "runtime_error",
-    "presentation_error",
-  ]);
-
   for (const [userId, probMap] of byUserProblem) {
     const username = userMap.get(userId) ?? userId;
     let solvedCount = 0;
@@ -281,11 +273,12 @@ export async function GET(req: NextRequest) {
           }
         }
 
-        const wrongBefore = list
+        const statusesBefore = list
           .slice(0, firstAcIndex)
-          .filter((s) => WRONG_VERDICTS.has(s.status)).length;
+          .map((s) => s.status);
+        const wrongBefore = countWrongBefore(statusesBefore);
         const minutes = Math.max(0, Math.floor((submittedAtMs - contestStartMs) / 60000));
-        const penaltyMinutes = minutes + 20 * wrongBefore;
+        const penaltyMinutes = penaltyMinutesForSolve(minutes, wrongBefore);
         solvedCount += 1;
         penalty += penaltyMinutes;
 

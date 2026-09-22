@@ -35,10 +35,13 @@ anything a user says in the moment, including "just push to main" (see [Git work
    no filler, no rewrites of working code, nothing that wasn't asked for.
 4. **Clean code only.** Follow the [Code quality](#code-quality) standards: best Next.js and TypeScript
    practices, matching the repo's existing conventions.
-5. **Remove tests you create.** This repo has no test runner installed (no Jest/Vitest/Playwright config in
-   `package.json`). If you write tests or fixtures to verify a change, delete them before finishing. Never
-   leave test files, mock files, or test config behind. `docs/testing.md` describes a future strategy; it is
-   not set up yet.
+5. **Committed unit tests live here.** Unit tests are first-class citizens: Python judge
+   tests in `api/tests/` (run with `pytest`), TypeScript unit tests colocated as `*.test.ts`
+   (run with `npm test`). Keep them fast and hermetic — no network, database, Docker, or
+   filesystem side effects — and keep them green; unit tests are part of the
+   [Definition of done](#definition-of-done). Scratch verification scripts, E2E fixtures,
+   screenshots, and temp data still verify-then-delete; never leave those behind.
+   `docs/testing.md` describes the wider strategy.
 6. **Never commit secrets.** `.env*` is gitignored. Never paste keys, tokens, or connection strings into
    code, commits, or chat.
 7. **Match the existing design system.** The dark neon-terminal theme lives in `app/globals.css`
@@ -207,7 +210,7 @@ Before committing or pushing, all of these must be true:
 - [ ] `npx tsc --noEmit` passes
 - [ ] `npm run build` passes
 - [ ] `npm run lint` passes (no new errors)
-- [ ] No test files / fixtures / test config left behind
+- [ ] Unit tests pass (`npm test` — runs TS suites + pytest)
 - [ ] No secrets or env files staged
 - [ ] Diff is minimal and contains no AI slop
 - [ ] Auth flow respected: no unconditional `SignInButton`/`SignUpButton`, proxy.ts intact, `org:admin` gate as in `docs/status.md`

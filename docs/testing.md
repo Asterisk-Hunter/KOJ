@@ -64,7 +64,7 @@ Requires Redis/SSE and judge queue — not run on Sprint 1.
 | Jest | Frontend (TypeScript) | Component rendering, state | Not installed |
 | Playwright | E2E | Full contest flow: register → submit → verdict → rankings | Not installed |
 
-`package.json` has no `jest`/`vitest`/`playwright` config. Per `AGENTS.md` §1.5, any ad-hoc test files must be deleted before committing.
+`package.json` has a `test` script that runs `node --test` for all colocated `.test.ts` suites (e.g. `lib/scoring.test.ts`, `app/api/contests/invite-code.test.ts`) and chains `pytest` for `api/tests/test_judge_units.py` (40+ judge unit tests). Ad-hoc scratch test files must still be deleted before committing.
 
 ---
 
