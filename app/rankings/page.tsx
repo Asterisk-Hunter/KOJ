@@ -369,24 +369,24 @@ export default function RankingsPage() {
 
         {!rankingsLoading && !rankingsError && data && data.rows.length > 0 && (
           <div className="border border-kjborder rounded-lg overflow-x-auto bg-kjbg">
-            <table className="w-full min-w-[760px] text-xs font-mono border-collapse">
+            <table className="w-full min-w-[680px] text-[11px] font-mono border-collapse">
               <thead>
                 <tr className="bg-kjsurface border-b border-kjborder">
-                  <th className="px-4 py-3.5 text-left text-kjtext-muted uppercase tracking-wider w-14">Rank</th>
-                  <th className="px-4 py-3.5 text-left text-kjtext-muted uppercase tracking-wider min-w-[160px]">Contestant</th>
-                  <th className="px-3 py-3.5 text-center text-kjtext-muted uppercase tracking-wider w-16">Solved</th>
-                  <th className="px-3 py-3.5 text-center text-kjtext-muted uppercase tracking-wider w-20">Time</th>
+                  <th className="sticky left-0 z-20 bg-kjsurface px-3 py-2 text-left text-kjtext-muted uppercase tracking-wider w-10 border-r border-kjborder/40">#</th>
+                  <th className="sticky left-10 z-20 bg-kjsurface px-3 py-2 text-left text-kjtext-muted uppercase tracking-wider min-w-[140px] border-r border-kjborder/40">Contestant</th>
+                  <th className="px-2 py-2 text-center text-kjtext-muted uppercase tracking-wider w-10">OK</th>
+                  <th className="px-2 py-2 text-center text-kjtext-muted uppercase tracking-wider w-14">Pen.</th>
 
-                  {/* DOMjudge Problem Columns with Balloons */}
+                  {/* Problem Columns — compact balloon + label */}
                   {data.problems.map((p) => (
-                    <th key={p.problemId} className="px-3 py-3 text-center min-w-[72px]" title={p.title}>
-                      <div className="flex flex-col items-center gap-1">
+                    <th key={p.problemId} className="px-1 py-1.5 text-center min-w-[56px]" title={p.title}>
+                      <div className="flex flex-col items-center gap-0.5">
                         <span
-                          className="w-4 h-4 rounded-full inline-block shadow-sm"
+                          className="w-3 h-3 rounded-full inline-block"
                           style={{ backgroundColor: p.balloonColor }}
-                          title={`Problem ${p.label}: ${p.title} (${p.balloonName} Balloon)`}
+                          title={`Problem ${p.label}: ${p.title}`}
                         />
-                        <span className="font-bold text-kjtext text-xs">{p.label}</span>
+                        <span className="font-bold text-kjtext">{p.label}</span>
                       </div>
                     </th>
                   ))}
@@ -409,10 +409,10 @@ export default function RankingsPage() {
                     key={row.userId}
                     className="border-b border-kjborder/60 hover:bg-kjsurface/50 transition-colors"
                   >
-                    {/* Rank */}
-                    <td className="px-4 py-3 text-kjtext font-bold">
+                    {/* Rank — sticky */}
+                    <td className="sticky left-0 z-10 bg-kjbg px-3 py-1.5 text-kjtext font-bold border-r border-kjborder/40">
                       {row.rank <= 3 ? (
-                        <span className={`inline-block px-1.5 py-0.5 rounded text-[11px] font-bold ${
+                        <span className={`inline-block px-1 py-px rounded text-[10px] font-bold ${
                           row.rank === 1
                             ? "bg-yellow-400/20 text-yellow-300 border border-yellow-400/40"
                             : row.rank === 2
@@ -426,50 +426,48 @@ export default function RankingsPage() {
                       )}
                     </td>
 
-                    {/* Username */}
-                    <td className="px-4 py-3 text-kjtext font-medium">
+                    {/* Username — sticky */}
+                    <td className="sticky left-10 z-10 bg-kjbg px-3 py-1.5 text-kjtext font-medium border-r border-kjborder/40">
                       <span className="hover:text-kjprimary transition-colors cursor-default">
                         {row.username}
                       </span>
                     </td>
 
-                    {/* Solved Count */}
-                    <td className="px-3 py-3 text-center">
-                      <span className="inline-block px-2 py-0.5 rounded font-bold text-green-400 bg-green-400/10 border border-green-400/20">
-                        {row.solvedCount}
-                      </span>
+                    {/* Solved Count — CF style: just a bold number */}
+                    <td className="px-2 py-1.5 text-center font-bold text-kjtext tabular-nums">
+                      {row.solvedCount}
                     </td>
 
-                    {/* Penalty Time */}
-                    <td className="px-3 py-3 text-center text-kjtext-muted tabular-nums">
+                    {/* Penalty — monospace tabular */}
+                    <td className="px-2 py-1.5 text-center text-kjtext-muted tabular-nums">
                       {row.penalty}
                     </td>
 
-                    {/* Per Problem Score Cells (DOMjudge Style) */}
+                    {/* Per Problem Cells — tight CF density */}
                     {data.problems.map((p) => {
                       const entry = row.perProblem.find((item) => item.problemId === p.problemId);
 
                       if (!entry || entry.status === "--") {
                         return (
-                          <td key={p.problemId} className="px-2 py-2 text-center text-kjtext-muted/30">
+                          <td key={p.problemId} className="px-1 py-1.5 text-center text-kjtext-muted/25 text-[10px]">
                             ·
                           </td>
                         );
                       }
 
-                      // First to solve (First Blood / Star)
+                      // First to solve
                       if (entry.status === "AC" && entry.isFirstToSolve) {
                         return (
                           <td
                             key={p.problemId}
-                            className="px-2 py-2 text-center bg-emerald-950/90 border border-emerald-500/60 text-emerald-200 shadow-[inset_0_0_8px_rgba(16,185,129,0.3)]"
+                            className="px-1 py-1.5 text-center bg-emerald-950/90 border border-emerald-500/50 text-emerald-200 shadow-[inset_0_0_6px_rgba(16,185,129,0.25)]"
                             title={`First to solve! ${entry.attempts} attempt(s) in ${entry.timeMinutes ?? 0} mins`}
                           >
-                            <div className="font-bold flex items-center justify-center gap-0.5 text-emerald-300 text-xs">
+                            <div className="font-bold flex items-center justify-center gap-px text-emerald-300 text-[10px]">
                               <span>★</span>
-                              <span>+{entry.attempts > 1 ? entry.attempts - 1 : ""}</span>
+                              {entry.attempts > 1 && <span>+{entry.attempts - 1}</span>}
                             </div>
-                            <div className="text-[10px] text-emerald-400/80 font-mono">
+                            <div className="text-[9px] text-emerald-400/70 tabular-nums">
                               {entry.timeMinutes ?? 0}&apos;
                             </div>
                           </td>
@@ -481,31 +479,31 @@ export default function RankingsPage() {
                         return (
                           <td
                             key={p.problemId}
-                            className="px-2 py-2 text-center bg-green-950/40 border border-green-600/30 text-green-300"
+                            className="px-1 py-1.5 text-center bg-green-950/40 border border-green-600/25 text-green-300"
                             title={`Accepted in ${entry.attempts} attempt(s), ${entry.timeMinutes ?? 0} mins`}
                           >
-                            <div className="font-bold text-xs">
-                              +{entry.attempts > 1 ? entry.attempts - 1 : ""}
+                            <div className="font-bold text-[10px]">
+                              {entry.attempts > 1 ? `+${entry.attempts - 1}` : ""}
                             </div>
-                            <div className="text-[10px] text-green-400/80 font-mono">
+                            <div className="text-[9px] text-green-400/70 tabular-nums">
                               {entry.timeMinutes ?? 0}&apos;
                             </div>
                           </td>
                         );
                       }
 
-                      // Pending (During Scoreboard Freeze)
+                      // Pending (Frozen)
                       if (entry.status === "PENDING") {
                         return (
                           <td
                             key={p.problemId}
-                            className="px-2 py-2 text-center bg-cyan-950/40 border border-cyan-500/30 text-cyan-300"
+                            className="px-1 py-1.5 text-center bg-cyan-950/30 border border-dashed border-cyan-500/30 text-cyan-300"
                             title={`${entry.attempts} attempt(s) submitted (frozen)`}
                           >
-                            <div className="font-bold text-xs text-cyan-300">
-                              {entry.attempts} ?
+                            <div className="font-bold text-[10px] text-cyan-300">
+                              {entry.attempts}?
                             </div>
-                            <div className="text-[9px] text-cyan-400/70 uppercase">
+                            <div className="text-[8px] text-cyan-400/50 uppercase tracking-wide">
                               frozen
                             </div>
                           </td>
@@ -516,14 +514,11 @@ export default function RankingsPage() {
                       return (
                         <td
                           key={p.problemId}
-                          className="px-2 py-2 text-center bg-red-950/30 border border-red-800/30 text-red-400"
+                          className="px-1 py-1.5 text-center bg-red-950/20 border border-red-800/20 text-red-400/70"
                           title={`${entry.attempts} failed attempt(s)`}
                         >
-                          <div className="font-bold text-xs">
-                            -{entry.attempts}
-                          </div>
-                          <div className="text-[10px] text-red-400/50">
-                            --
+                          <div className="font-bold text-[10px]">
+                            &minus;{entry.attempts}
                           </div>
                         </td>
                       );
@@ -532,24 +527,24 @@ export default function RankingsPage() {
                 ))}
               </tbody>
 
-              {/* DOMjudge Scoreboard Summary Bottom Row */}
+              {/* Summary Row */}
               {data.summary && data.summary.length > 0 && (
                 <tfoot>
                   <tr className="bg-kjsurface/90 border-t-2 border-kjborder text-kjtext-muted font-bold">
-                    <td colSpan={2} className="px-4 py-3 text-left uppercase tracking-wider text-[11px]">
-                      Summary (Solves / Tries)
+                    <td colSpan={2} className="sticky left-0 z-10 bg-kjsurface/90 px-3 py-1.5 text-left uppercase tracking-wider text-[10px] border-r border-kjborder/40">
+                      TOTAL
                     </td>
-                    <td className="px-3 py-3 text-center text-green-400 font-mono">
+                    <td className="px-2 py-1.5 text-center text-green-400 tabular-nums">
                       {data.summary.reduce((acc, s) => acc + s.totalSolved, 0)}
                     </td>
-                    <td className="px-3 py-3 text-center font-mono">
+                    <td className="px-2 py-1.5 text-center tabular-nums">
                       {data.summary.reduce((acc, s) => acc + s.totalAttempts, 0)}
                     </td>
 
                     {data.summary.map((s) => (
-                      <td key={s.problemId} className="px-2 py-2.5 text-center text-[11px] font-mono">
+                      <td key={s.problemId} className="px-1 py-1 text-center text-[10px] tabular-nums">
                         <div className="text-green-400 font-bold">{s.totalSolved}</div>
-                        <div className="text-[10px] text-kjtext-muted/60">{s.totalAttempts} tries</div>
+                        <div className="text-[9px] text-kjtext-muted/50">{s.totalAttempts}t</div>
                       </td>
                     ))}
                   </tr>
@@ -561,22 +556,22 @@ export default function RankingsPage() {
 
         {/* Legend */}
         {data && data.rows.length > 0 && (
-          <div className="flex flex-wrap gap-4 text-xs font-mono text-kjtext-muted border-t border-kjborder pt-4">
+          <div className="flex flex-wrap gap-x-5 gap-y-1.5 text-[10px] font-mono text-kjtext-muted border-t border-kjborder pt-3">
             <span className="flex items-center gap-1.5">
-              <span className="w-3 h-3 bg-emerald-950 border border-emerald-500 rounded text-[9px] text-emerald-300 flex items-center justify-center font-bold">★</span>
+              <span className="w-2.5 h-2.5 bg-emerald-950 border border-emerald-500 rounded-sm text-emerald-300 flex items-center justify-center font-bold leading-none text-[7px]">★</span>
               First to Solve
             </span>
             <span className="flex items-center gap-1.5">
-              <span className="w-3 h-3 bg-green-950/60 border border-green-600 rounded text-[9px] text-green-400 flex items-center justify-center font-bold">+</span>
+              <span className="w-2.5 h-2.5 bg-green-950/60 border border-green-600 rounded-sm text-green-400 flex items-center justify-center font-bold leading-none text-[7px]">+</span>
               Solved
             </span>
             <span className="flex items-center gap-1.5">
-              <span className="w-3 h-3 bg-red-950/60 border border-red-800 rounded text-[9px] text-red-400 flex items-center justify-center font-bold">-</span>
-              Attempted / Rejected
+              <span className="w-2.5 h-2.5 bg-red-950/60 border border-red-800 rounded-sm text-red-400 flex items-center justify-center font-bold leading-none text-[7px]">&minus;</span>
+              Attempted
             </span>
             <span className="flex items-center gap-1.5">
-              <span className="w-3 h-3 bg-cyan-950/60 border border-cyan-600 rounded text-[9px] text-cyan-400 flex items-center justify-center font-bold">?</span>
-              Pending (Frozen)
+              <span className="w-2.5 h-2.5 bg-cyan-950/60 border border-dashed border-cyan-600 rounded-sm text-cyan-400 flex items-center justify-center font-bold leading-none text-[7px]">?</span>
+              Frozen
             </span>
           </div>
         )}

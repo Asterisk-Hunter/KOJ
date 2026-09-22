@@ -563,11 +563,12 @@ export default function ProblemDetailPage() {
             </div>
 
             {leftTab === "statement" && (
-              <div className="space-y-6">
+              <div className="space-y-5">
+                {/* Problem meta + title */}
                 <div>
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <span className="text-xs uppercase tracking-widest font-mono text-kjprimary">Problem #{problem.id}</span>
-                    <span className={`text-[11px] font-mono border rounded-full px-2 py-0.5 ${
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[10px] uppercase tracking-[0.2em] font-mono text-kjprimary font-bold">Problem #{problem.id}</span>
+                    <span className={`text-[10px] font-mono border rounded px-1.5 py-px ${
                       problem.difficulty === "easy"
                         ? "text-green-400 border-green-400/20 bg-green-400/5"
                         : problem.difficulty === "medium"
@@ -577,58 +578,63 @@ export default function ProblemDetailPage() {
                       {problem.difficulty}
                     </span>
                     {problem.tags?.map((t) => (
-                      <span key={t} className="text-[11px] font-mono border border-kjborder rounded px-1.5 text-kjtext-muted bg-kjsurface">
+                      <span key={t} className="text-[10px] font-mono border border-kjborder rounded px-1.5 text-kjtext-muted bg-kjsurface">
                         {t}
                       </span>
                     ))}
                   </div>
-                  <h1 className="text-2xl sm:text-3xl font-mono font-bold text-kjtext mt-2">{problem.title}</h1>
+                  <h1 className="text-xl sm:text-2xl font-mono font-bold text-kjtext mt-2 leading-tight">{problem.title}</h1>
                 </div>
 
-                <div className="prose prose-invert max-w-none text-sm leading-6 text-kjtext font-sans">
+                {/* Statement — reading prose */}
+                <div className="prose prose-invert max-w-none text-[13px] leading-[1.7] text-kjtext/90 font-sans">
                   <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
                     {problem.statement}
                   </Markdown>
                 </div>
 
-                <div>
-                  <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted mb-2">Input format</h2>
-                  <div className="bg-kjsurface border border-kjborder rounded p-4 text-xs font-mono text-kjtext prose prose-invert max-w-none">
+                {/* Input Format — left-accent callout */}
+                <div className="border-l-2 border-kjprimary/40 bg-kjsurface/40 rounded-r-lg px-4 py-3">
+                  <h2 className="text-[10px] uppercase tracking-[0.15em] font-mono text-kjprimary mb-1.5 font-bold">Input format</h2>
+                  <div className="text-xs font-mono text-kjtext/80 prose prose-invert max-w-none">
                     <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
                       {problem.inputFormat}
                     </Markdown>
                   </div>
                 </div>
 
-                <div>
-                  <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted mb-2">Output format</h2>
-                  <div className="bg-kjsurface border border-kjborder rounded p-4 text-xs font-mono text-kjtext prose prose-invert max-w-none">
+                {/* Output Format — left-accent callout */}
+                <div className="border-l-2 border-kjsecondary/40 bg-kjsurface/40 rounded-r-lg px-4 py-3">
+                  <h2 className="text-[10px] uppercase tracking-[0.15em] font-mono text-kjsecondary mb-1.5 font-bold">Output format</h2>
+                  <div className="text-xs font-mono text-kjtext/80 prose prose-invert max-w-none">
                     <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
                       {problem.outputFormat}
                     </Markdown>
                   </div>
                 </div>
 
-                <div>
-                  <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted mb-2">Constraints</h2>
-                  <div className="bg-kjsurface border border-kjborder rounded p-4 text-xs font-mono text-kjtext prose prose-invert max-w-none">
+                {/* Constraints — amber accent for visibility */}
+                <div className="border-l-2 border-amber-500/50 bg-amber-950/15 rounded-r-lg px-4 py-3">
+                  <h2 className="text-[10px] uppercase tracking-[0.15em] font-mono text-amber-400 mb-1.5 font-bold">Constraints</h2>
+                  <div className="text-xs font-mono text-kjtext/80 prose prose-invert max-w-none">
                     <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
                       {problem.constraints}
                     </Markdown>
                   </div>
                 </div>
 
-                {/* Public Sample Testcases with One-Click Copy */}
-                <div className="space-y-4">
-                  <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted">Sample cases</h2>
+                {/* Sample Test Cases — CF-style callouts */}
+                <div className="space-y-3">
+                  <h2 className="text-[10px] uppercase tracking-[0.15em] font-mono text-kjtext-muted font-bold">Sample cases</h2>
                   {problem.samples.length === 0 ? (
                     <p className="text-xs font-mono text-kjtext-muted">No public sample test cases configured.</p>
                   ) : (
                     problem.samples.map((s, idx) => (
-                      <div key={idx} className="grid sm:grid-cols-2 gap-3 font-mono">
-                        <div className="bg-kjbg border border-kjborder rounded p-4 text-xs text-kjtext whitespace-pre-wrap">
-                          <div className="flex justify-between items-center mb-2">
-                            <span className="text-kjtext-muted text-[11px]">SAMPLE INPUT{problem.samples.length > 1 ? ` #${idx + 1}` : ""}</span>
+                      <div key={idx} className="grid sm:grid-cols-2 gap-0 font-mono rounded-lg overflow-hidden border border-kjborder">
+                        {/* Input half */}
+                        <div className="bg-kjsurface/60 border-b sm:border-b-0 sm:border-r border-kjborder">
+                          <div className="flex justify-between items-center px-3 py-1.5 border-b border-kjborder/60 bg-kjsurface/80">
+                            <span className="text-kjtext-muted text-[10px] uppercase tracking-wider font-bold">Input{problem.samples.length > 1 ? ` ${idx + 1}` : ""}</span>
                             <button
                               type="button"
                               onClick={() => {
@@ -636,20 +642,21 @@ export default function ProblemDetailPage() {
                                 setCopiedSample(`in-${idx}`);
                                 setTimeout(() => setCopiedSample(null), 1500);
                               }}
-                              className={`flex items-center gap-1 text-[10px] uppercase font-mono px-1.5 py-0.5 rounded transition-colors cursor-pointer ${
+                              className={`text-[9px] uppercase font-mono px-1.5 py-0.5 rounded transition-colors cursor-pointer ${
                                 copiedSample === `in-${idx}`
                                   ? "text-green-400 bg-green-400/10"
-                                  : "text-kjprimary hover:bg-kjprimary/10"
+                                  : "text-kjtext-muted hover:text-kjprimary hover:bg-kjprimary/10"
                               }`}
                             >
-                              {copiedSample === `in-${idx}` ? "✓ Copied" : "Copy"}
+                              {copiedSample === `in-${idx}` ? "✓" : "copy"}
                             </button>
                           </div>
-                          {s.input}
+                          <pre className="p-3 text-xs text-kjtext whitespace-pre-wrap max-h-40 overflow-y-auto">{s.input}</pre>
                         </div>
-                        <div className="bg-kjbg border border-kjborder rounded p-4 text-xs text-kjtext whitespace-pre-wrap">
-                          <div className="flex justify-between items-center mb-2">
-                            <span className="text-kjtext-muted text-[11px]">SAMPLE OUTPUT{problem.samples.length > 1 ? ` #${idx + 1}` : ""}</span>
+                        {/* Output half */}
+                        <div className="bg-kjsurface/40">
+                          <div className="flex justify-between items-center px-3 py-1.5 border-b border-kjborder/60 bg-kjsurface/60">
+                            <span className="text-kjtext-muted text-[10px] uppercase tracking-wider font-bold">Output{problem.samples.length > 1 ? ` ${idx + 1}` : ""}</span>
                             <button
                               type="button"
                               onClick={() => {
@@ -657,16 +664,16 @@ export default function ProblemDetailPage() {
                                 setCopiedSample(`out-${idx}`);
                                 setTimeout(() => setCopiedSample(null), 1500);
                               }}
-                              className={`flex items-center gap-1 text-[10px] uppercase font-mono px-1.5 py-0.5 rounded transition-colors cursor-pointer ${
+                              className={`text-[9px] uppercase font-mono px-1.5 py-0.5 rounded transition-colors cursor-pointer ${
                                 copiedSample === `out-${idx}`
                                   ? "text-green-400 bg-green-400/10"
-                                  : "text-kjprimary hover:bg-kjprimary/10"
+                                  : "text-kjtext-muted hover:text-kjprimary hover:bg-kjprimary/10"
                               }`}
                             >
-                              {copiedSample === `out-${idx}` ? "✓ Copied" : "Copy"}
+                              {copiedSample === `out-${idx}` ? "✓" : "copy"}
                             </button>
                           </div>
-                          {s.expectedOutput}
+                          <pre className="p-3 text-xs text-kjtext whitespace-pre-wrap max-h-40 overflow-y-auto">{s.expectedOutput}</pre>
                         </div>
                       </div>
                     ))

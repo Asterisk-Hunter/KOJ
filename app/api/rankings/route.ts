@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contests, problems, submissions, users } from "@/db/schema";
 import { getRedis } from "@/lib/redis";
@@ -119,10 +119,16 @@ export async function GET(req: NextRequest) {
     .from(submissions)
     .where(eq(submissions.contestId, contestId));
 
-  const userRows = await db.select().from(users);
+  const submittedUserIds = [...new Set(submissionRows.map((s) => s.userId))];
   const userMap = new Map<string, string>();
-  for (const u of userRows) {
-    userMap.set(u.clerkId, u.username);
+  if (submittedUserIds.length > 0) {
+    const userRows = await db
+      .select()
+      .from(users)
+      .where(inArray(users.clerkId, submittedUserIds));
+    for (const u of userRows) {
+      userMap.set(u.clerkId, u.username);
+    }
   }
 
   const contestStartMs = contest.startsAt.getTime();

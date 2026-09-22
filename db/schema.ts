@@ -1,5 +1,6 @@
 import {
   boolean,
+  index,
   integer,
   jsonb,
   pgEnum,
@@ -90,36 +91,48 @@ export const problems = pgTable("problems", {
     .defaultNow(),
 });
 
-export const contests = pgTable("contests", {
-  id: serial("id").primaryKey(),
-  createdBy: text("created_by")
-    .notNull()
-    .references(() => users.clerkId),
-  slug: text("slug").notNull().unique(),
-  title: text("title").notNull(),
-  description: text("description").notNull().default(""),
-  startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
-  endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
-  status: contestStatus("status").notNull().default("draft"),
-  inviteCode: text("invite_code"),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const contests = pgTable(
+  "contests",
+  {
+    id: serial("id").primaryKey(),
+    createdBy: text("created_by")
+      .notNull()
+      .references(() => users.clerkId),
+    slug: text("slug").notNull().unique(),
+    title: text("title").notNull(),
+    description: text("description").notNull().default(""),
+    startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+    endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+    status: contestStatus("status").notNull().default("draft"),
+    inviteCode: text("invite_code"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("contests_status_ends_at_idx").on(table.status, table.endsAt),
+  ],
+);
 
-export const problemTestCases = pgTable("problem_test_cases", {
-  id: serial("id").primaryKey(),
-  problemId: integer("problem_id")
-    .notNull()
-    .references(() => problems.id, { onDelete: "cascade" }),
-  input: text("input").notNull(),
-  expectedOutput: text("expected_output").notNull(),
-  isSample: boolean("is_sample").notNull().default(false),
-  position: integer("position").notNull().default(0),
-});
+export const problemTestCases = pgTable(
+  "problem_test_cases",
+  {
+    id: serial("id").primaryKey(),
+    problemId: integer("problem_id")
+      .notNull()
+      .references(() => problems.id, { onDelete: "cascade" }),
+    input: text("input").notNull(),
+    expectedOutput: text("expected_output").notNull(),
+    isSample: boolean("is_sample").notNull().default(false),
+    position: integer("position").notNull().default(0),
+  },
+  (table) => [
+    index("problem_test_cases_problem_sample_idx").on(table.problemId, table.isSample),
+  ],
+);
 
 export const contestProblems = pgTable(
   "contest_problems",
@@ -155,30 +168,39 @@ export const contestRegistrations = pgTable(
   ],
 );
 
-export const submissions = pgTable("submissions", {
-  id: serial("id").primaryKey(),
-  userId: text("user_id")
-    .notNull()
-    .references(() => users.clerkId),
-  problemId: integer("problem_id")
-    .notNull()
-    .references(() => problems.id),
-  contestId: integer("contest_id").references(() => contests.id),
-  language: text("language").notNull(),
-  code: text("code").notNull(),
-  status: submissionStatus("status").notNull().default("pending"),
-  executionTimeMs: integer("execution_time_ms"),
-  memoryUsedMb: integer("memory_used_mb"),
-  passedTests: integer("passed_tests"),
-  totalTests: integer("total_tests"),
-  errorMessage: text("error_message"),
-  caseResults: jsonb("case_results"),
-  submittedAt: timestamp("submitted_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  completedAt: timestamp("completed_at", { withTimezone: true }),
-  startedAt: timestamp("started_at", { withTimezone: true }),
-});
+export const submissions = pgTable(
+  "submissions",
+  {
+    id: serial("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.clerkId),
+    problemId: integer("problem_id")
+      .notNull()
+      .references(() => problems.id),
+    contestId: integer("contest_id").references(() => contests.id),
+    language: text("language").notNull(),
+    code: text("code").notNull(),
+    status: submissionStatus("status").notNull().default("pending"),
+    executionTimeMs: integer("execution_time_ms"),
+    memoryUsedMb: integer("memory_used_mb"),
+    passedTests: integer("passed_tests"),
+    totalTests: integer("total_tests"),
+    errorMessage: text("error_message"),
+    caseResults: jsonb("case_results"),
+    submittedAt: timestamp("submitted_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("submissions_contest_id_idx").on(table.contestId),
+    index("submissions_user_problem_idx").on(table.userId, table.problemId),
+    index("submissions_user_contest_idx").on(table.userId, table.contestId),
+    index("submissions_status_submitted_at_idx").on(table.status, table.submittedAt),
+  ],
+);
 
 export const notes = pgTable("notes", {
   id: serial("id").primaryKey(),

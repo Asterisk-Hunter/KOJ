@@ -164,13 +164,13 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Ensure users row
-  const existingUser = await db
+  // Ensure users row and check suspension in one query
+  const userRow = await db
     .select()
     .from(users)
     .where(eq(users.clerkId, userId))
     .limit(1);
-  if (existingUser.length === 0) {
+  if (userRow.length === 0) {
     try {
       const client = await clerkClient();
       const clerkUser = await client.users.getUser(userId);
@@ -195,15 +195,7 @@ export async function POST(req: NextRequest) {
     } catch {
       return jsonError("failed to resolve user", 500);
     }
-  }
-
-  // Suspended users cannot submit (run or submit mode).
-  const suspensionRows = await db
-    .select({ suspended: users.suspended })
-    .from(users)
-    .where(eq(users.clerkId, userId))
-    .limit(1);
-  if (suspensionRows.length > 0 && suspensionRows[0].suspended) {
+  } else if (userRow[0].suspended) {
     return jsonError("account suspended", 403);
   }
 
@@ -265,7 +257,7 @@ export async function POST(req: NextRequest) {
         submission_id: submissionId,
         sample_only: mode === "run",
       }),
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(60000),
     });
   } catch {
     await db

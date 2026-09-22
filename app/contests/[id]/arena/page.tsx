@@ -230,20 +230,67 @@ export default function ContestArenaPage() {
   return (
     <>
       <Navigation />
-      <main className="pt-20 max-w-5xl mx-auto px-4 py-8">
-        <p className="text-xs font-mono text-kjprimary tracking-widest mb-3">LIVE ARENA</p>
-        <h1 className="text-3xl font-mono text-kjtext">{contest.title}</h1>
-        <p className="text-kjtext-muted mt-3 text-sm">{contest.description || "—"}</p>
-        <div className="mt-8 grid md:grid-cols-2 gap-4">
-          <div className="bg-kjsurface border border-kjborder rounded-lg p-5">
-            <h2 className="font-mono text-kjtext mb-4 text-sm">Problem queue</h2>
-            {sorted.length === 0 ? (
-              <div className="text-center py-6">
-                <p className="text-sm font-mono text-kjtext-muted">No problems in this contest.</p>
-                <p className="text-xs font-mono text-kjtext-muted/60 mt-1">Check back later or contact the contest organizer.</p>
+      <main className="pt-20 max-w-5xl mx-auto px-4 py-6">
+        {/* CF-style Contest Header Bar */}
+        <div className="border border-kjborder rounded-lg overflow-hidden bg-kjsurface/60">
+          {/* Top row: title + live badge */}
+          <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 border-b border-kjborder bg-kjsurface/80">
+            <div className="flex items-center gap-3">
+              <span className="flex items-center gap-1.5 text-[10px] font-mono font-bold uppercase tracking-widest text-kjprimary">
+                <span className="w-1.5 h-1.5 rounded-full bg-kjprimary animate-pulse" />
+                Live Arena
+              </span>
+              <h1 className="text-sm sm:text-base font-mono font-bold text-kjtext">{contest.title}</h1>
+            </div>
+            <Link
+              href={`/rankings?contestId=${contest.numericId}`}
+              className="text-[10px] font-mono text-kjprimary border border-kjprimary/30 px-2.5 py-1 rounded hover:bg-kjprimary/10 transition-colors"
+            >
+              STANDINGS →
+            </Link>
+          </div>
+
+          {/* Stats row: timer + solved + problems */}
+          <div className="flex flex-col sm:flex-row items-stretch divide-y sm:divide-y-0 sm:divide-x divide-kjborder">
+            {/* Timer — the focal point */}
+            <div className="flex-1 flex items-center justify-center px-5 py-3">
+              <div className="text-center">
+                <p className="text-[9px] uppercase tracking-[0.2em] font-mono text-kjtext-muted font-bold mb-1">Time Remaining</p>
+                <p className={`text-2xl sm:text-3xl font-mono font-bold tabular-nums tracking-wider ${
+                  isCritical
+                    ? "text-red-400 animate-pulse"
+                    : isUrgent
+                      ? "text-yellow-400"
+                      : "text-kjprimary text-glow"
+                }`}>{timeRemaining}</p>
               </div>
-            ) : (
-              sorted.map((p, idx) => {
+            </div>
+
+            {/* Solved progress */}
+            <div className="flex items-center justify-center px-5 py-3 min-w-[160px]">
+              <div className="text-center">
+                <p className="text-[9px] uppercase tracking-[0.2em] font-mono text-kjtext-muted font-bold mb-1">Solved</p>
+                <div className="flex items-baseline justify-center gap-1">
+                  <span className="text-xl font-mono font-bold text-kjtext tabular-nums">{solvedCount}</span>
+                  <span className="text-xs font-mono text-kjtext-muted">/</span>
+                  <span className="text-sm font-mono text-kjtext-muted tabular-nums">{contest.problemsCount}</span>
+                </div>
+                {/* Progress bar */}
+                <div className="mt-1.5 h-1 bg-kjborder rounded-full overflow-hidden w-full max-w-[100px] mx-auto">
+                  <div
+                    className="h-full bg-kjprimary/80 rounded-full transition-all duration-500"
+                    style={{ width: `${contest.problemsCount > 0 ? (solvedCount / contest.problemsCount) * 100 : 0}%` }}
+                  />
+                </div>
+                {loadingSubmissions && (
+                  <p className="text-[9px] font-mono text-kjtext-muted/50 mt-1 animate-pulse">syncing…</p>
+                )}
+              </div>
+            </div>
+
+            {/* Problem strip — quick glance */}
+            <div className="flex items-center justify-center gap-1.5 px-5 py-3 flex-wrap">
+              {sorted.map((p, idx) => {
                 const letter = String.fromCharCode(65 + idx);
                 const balloonColor = BALLOON_COLORS[idx % BALLOON_COLORS.length];
                 const pStatus = problemStatusMap.get(p.id);
@@ -251,71 +298,93 @@ export default function ContestArenaPage() {
                   <Link
                     key={p.id}
                     href={`/problems/${p.id}?contestId=${contest.numericId}`}
-                    className="flex justify-between items-center border-b border-kjborder/60 py-3 text-sm text-kjtext hover:text-kjprimary transition-colors group"
+                    className={`group relative flex items-center justify-center w-8 h-8 rounded border text-[10px] font-mono font-bold transition-all ${
+                      pStatus?.isSolved
+                        ? "border-green-500/40 bg-green-500/10 text-green-400"
+                        : pStatus && pStatus.attempts > 0
+                          ? "border-yellow-500/30 bg-yellow-500/5 text-yellow-400"
+                          : "border-kjborder hover:border-kjprimary/50 text-kjtext-muted hover:text-kjtext"
+                    }`}
+                    title={`${letter}: ${p.title}${pStatus?.isSolved ? " (solved)" : pStatus ? ` (${pStatus.attempts} attempts)` : ""}`}
                   >
-                    <div className="flex items-center gap-3">
-                      <span
-                        className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white shadow-sm"
-                        style={{ backgroundColor: balloonColor }}
-                        title={`Problem ${letter} (${p.title})`}
-                      >
-                        {letter}
-                      </span>
-                      <span className="font-mono text-sm">{p.title}</span>
-                      <span className={`text-[10px] font-mono border rounded px-1.5 py-0.5 ${
-                        p.difficulty === "easy"
-                          ? "text-green-400 border-green-400/20"
-                          : p.difficulty === "medium"
-                            ? "text-yellow-400 border-yellow-400/20"
-                            : "text-red-400 border-red-400/20"
-                      }`}>
-                        {p.difficulty}
-                      </span>
-                      {pStatus?.isSolved ? (
-                        <span className="text-[10px] font-mono border rounded px-1.5 py-0.5 text-green-400 border-green-400/20">
-                          SOLVED
-                        </span>
-                      ) : pStatus && pStatus.attempts > 0 ? (
-                        <span className="text-[10px] font-mono border rounded px-1.5 py-0.5 text-yellow-400 border-yellow-400/20">
-                          ATTEMPTS {pStatus.attempts}
-                        </span>
-                      ) : null}
-                    </div>
-                    <span className="text-xs text-kjprimary border border-kjborder/70 rounded px-2 py-0.5 group-hover:border-kjprimary transition-colors font-mono">
-                      SOLVE →
-                    </span>
+                    {pStatus?.isSolved ? (
+                      <span className="text-green-400">✓</span>
+                    ) : (
+                      letter
+                    )}
+                    {/* Balloon dot */}
+                    <span
+                      className="absolute -top-1 -right-1 w-2 h-2 rounded-full border border-kjbg"
+                      style={{ backgroundColor: balloonColor }}
+                    />
                   </Link>
                 );
-              })
-            )}
-          </div>
-          <div className="bg-kjsurface border border-kjborder rounded-lg p-5">
-            <h2 className="font-mono text-kjtext mb-4 text-sm">Contest panel</h2>
-            <p className={`font-mono text-3xl tabular-nums ${
-              isCritical
-                ? "text-red-400 animate-pulse"
-                : isUrgent
-                  ? "text-yellow-400"
-                  : "text-kjprimary text-glow"
-            }`}>{timeRemaining}</p>
-            <p className="text-sm text-kjtext-muted mt-3">
-              {solvedCount}/{contest.problemsCount} solved · {contest.problemsCount} problems · scoring is solved count, then penalty.
-            </p>
-            {loadingSubmissions && (
-              <p className="text-[10px] font-mono text-kjtext-muted/60 mt-1 animate-pulse">syncing attempts…</p>
-            )}
-            <p className="text-xs font-mono text-kjtext-muted mt-2">{contest.participants} participants registered</p>
-            <Link
-              href={`/rankings?contestId=${contest.numericId}`}
-              className="inline-block mt-6 border border-kjborder px-4 py-2 rounded text-xs font-mono text-kjprimary hover:border-kjprimary transition-colors"
-            >
-              LEADERBOARD →
-            </Link>
+              })}
+            </div>
           </div>
         </div>
+
+        {/* Problem Queue */}
+        <div className="mt-6 bg-kjsurface border border-kjborder rounded-lg overflow-hidden">
+          <div className="px-5 py-3 border-b border-kjborder flex items-center justify-between">
+            <h2 className="font-mono text-xs uppercase tracking-wider text-kjtext-muted font-bold">Problems</h2>
+            <span className="text-[10px] font-mono text-kjtext-muted">{sorted.length} problems</span>
+          </div>
+          {sorted.length === 0 ? (
+            <div className="text-center py-8">
+              <p className="text-sm font-mono text-kjtext-muted">No problems in this contest.</p>
+              <p className="text-xs font-mono text-kjtext-muted/60 mt-1">Check back later or contact the contest organizer.</p>
+            </div>
+          ) : (
+            sorted.map((p, idx) => {
+              const letter = String.fromCharCode(65 + idx);
+              const balloonColor = BALLOON_COLORS[idx % BALLOON_COLORS.length];
+              const pStatus = problemStatusMap.get(p.id);
+              return (
+                <Link
+                  key={p.id}
+                  href={`/problems/${p.id}?contestId=${contest.numericId}`}
+                  className="flex justify-between items-center px-5 py-2.5 border-b border-kjborder/60 last:border-b-0 text-sm text-kjtext hover:bg-kjsurface/80 hover:text-kjprimary transition-colors group"
+                >
+                  <div className="flex items-center gap-3">
+                    <span
+                      className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white shadow-sm"
+                      style={{ backgroundColor: balloonColor }}
+                    >
+                      {letter}
+                    </span>
+                    <span className="font-mono text-sm">{p.title}</span>
+                    <span className={`text-[10px] font-mono border rounded px-1.5 py-0.5 ${
+                      p.difficulty === "easy"
+                        ? "text-green-400 border-green-400/20"
+                        : p.difficulty === "medium"
+                          ? "text-yellow-400 border-yellow-400/20"
+                          : "text-red-400 border-red-400/20"
+                    }`}>
+                      {p.difficulty}
+                    </span>
+                    {pStatus?.isSolved ? (
+                      <span className="text-[10px] font-mono text-green-400 border border-green-400/20 px-1.5 py-0.5 rounded">
+                        ✓ SOLVED
+                      </span>
+                    ) : pStatus && pStatus.attempts > 0 ? (
+                      <span className="text-[10px] font-mono text-yellow-400 border border-yellow-400/20 px-1.5 py-0.5 rounded">
+                        {pStatus.attempts}×
+                      </span>
+                    ) : null}
+                  </div>
+                  <span className="text-[10px] text-kjprimary border border-kjborder/70 rounded px-2 py-0.5 group-hover:border-kjprimary transition-colors font-mono">
+                    SOLVE →
+                  </span>
+                </Link>
+              );
+            })
+          )}
+        </div>
+
         <Link
           href={`/contests/${encodeURIComponent(contest.id)}`}
-          className="inline-block mt-8 text-xs font-mono text-kjtext-muted hover:text-kjprimary"
+          className="inline-block mt-5 text-[10px] font-mono text-kjtext-muted hover:text-kjprimary"
         >
           ← Contest details
         </Link>
