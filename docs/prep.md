@@ -1,63 +1,78 @@
-# KOJ — Viva & Demo Prep (read this the night before)
+# KOJ — Ultimate Viva & Demo Prep (read this the night before)
 
 ## 0. Facts to never get wrong
 
-- Live site: **https://koj-peach.vercel.app** (not koj.iiitk.ac.in — that's a placeholder).
+- Live site: **https://koj-peach.vercel.app**.
 - Stack: Next.js 16 + React 19 + TypeScript + Tailwind v4 · FastAPI judge · Neon Postgres + Drizzle · Clerk auth · Upstash Redis (optional cache).
-- Judge sandbox is the **rlimit subprocess backend on production**: per-run temp dir, kernel CPU/memory/process/output caps — prove it any time, `/health` returns `"sandbox":"rlimit"`. (A Docker container backend exists in code for self-hosted hosts with a daemon; Cloud Run has none, so prod never uses it.) Never claim containers run on Cloud Run.
-- Auth truth is **Neon `users.role`**, not Clerk org roles (that path was deliberately removed after it over-granted). Clerk = identity only.
-- 4 languages (C, C++, Python, Java), 7 verdicts, ICPC scoring, SSE realtime (poll-push, 2s ticker).
-- Repo: `Prajwal-k-tech/KOJ`, `main` branch. Never mention Asterisk-Hunter (infra-only location of the Neon project).
+- Judge sandbox on production: **OS-isolated subprocess with kernel-enforced CPU, memory, process, and output caps** — prove it any time, `/health` returns `"sandbox":"rlimit"`.
+- Auth truth is **Neon `users.role`**, not Clerk. Clerk = identity only.
+- 4 languages (C, C++, Python, Java), 7 verdicts (AC/WA/TLE/MLE/RE/CE + PE for whitespace-only diffs), ICPC scoring, SSE realtime (poll-push, 2s ticker).
+- Repo: `Prajwal-k-tech/KOJ`, `main` branch.
 
-## 1. Demo script (~12 min, two accounts: admin + contestant, two browsers)
+## 1. Explain KOJ in 30 seconds
 
-1. **Problems** (1 min): open `/problems`, filter by difficulty, open Two Sum. Point out samples, limits, editor.
-2. **Contest** (2 min, admin): `/admin` → show contest list → open a live contest → countdown, problem list, invite-code field if private.
-3. **Register** (1 min, contestant): `/contests/<slug>` → REGISTER → arena appears.
-4. **Submit** (3 min, contestant): paste a correct Python solution → SUBMIT → verdict streams live (no refresh) → open submission → **per-test table** shows each case.
-5. **Wrong answer** (2 min): submit a buggy version → WA with the failed test visible → fix → resubmit → AC. Mention the 30s rate limit if it triggers (429 + cooldown UI).
-6. **Standings** (2 min): `/rankings?contestId=<slug>` → row appears, penalty = AC minutes + 20 × wrongs. Refresh-free update.
-7. **Admin close** (1 min): `/admin` → users/roles, observability metrics, problem lifecycle draft → contest_active → published.
-8. Buffer (3 min): questions during demo.
+KOJ is a self-hosted online programming contest platform for IIIT Kottayam: staff author problems and run timed contests, students register and submit code, an isolated judge service executes it safely, and everyone sees an ICPC leaderboard. The point is institutional control — own problems, own users, own rules — and every contest becomes reusable practice material afterward.
 
-Rehearse twice. Pre-create both accounts. Have a known-good solution pasted in a scratch file (network hiccups happen).
+## 2. Roles — who can do what (memorize this table)
 
-## 2. Architecture (one breath + diagram talk)
+| Role | Default? | Can do | Cannot do |
+|---|---|---|---|
+| `contestant` | **yes, every new signup** | browse, register, submit, own history, public rankings | everything staff |
+| `problem_setter` | by admin grant | create problems, edit **own** problems, manage their test cases, import, publish own | delete problems, touch contests, manage users, see metrics |
+| `contest_setter` | by admin grant | create/manage contests, attach/remove problems, publish/unpublish/archive, invite codes | create problems, manage users, see metrics |
+| `admin` | by admin grant (or `ADMIN_CLERK_IDS` bootstrap) | everything: users/roles/suspend, delete, metrics, submissions browser | — (cannot demote self) |
+
+Enforcement is triple-layered: server gates on every route (`requireAdmin`/`requireContestManager`/`requireSetter`/`requireStaff`), a layout gate that redirects non-staff away from `/admin`, and UI that hides unauthorized controls entirely. Verified by full isolation audit: zero leaks. Suspended users get 403 on submit.
+
+## 3. Architecture in one breath + diagram talk
 
 Browser → Next.js Route Handlers (auth, validation, contest rules) → `POST /api/submissions` returns 202 → fire-and-forget `POST /judge-async` (secret header) → Cloud Run judge: semaphore slot → advisory lock → load code+cases → compile → run per case under limits → compare → verdict persisted to Neon → browser learns via SSE. DB is always the source of truth; Redis only accelerates.
 
 Styles to name-drop: **Layered** (presentation/API/data), **Pipe-and-Filter** (receive→compile→execute→check→verdict), **Event-Driven** (SSE push), **Master-Slave** (API dispatches, subprocess executes unaware of the web).
 
-## 3. RBAC (examiners love this)
-
-Four DB roles: `contestant` (default) / `problem_setter` / `contest_setter` / `admin`. Enforced server-side on every route (`requireAdmin`/`requireContestManager`/`requireSetter`/`requireStaff`) + layout gate redirects non-staff + UI mirrors gates ( hide-don't-403: unauthorized controls don't render). `ADMIN_CLERK_IDS` env bootstraps the first admin. Verified: full isolation audit, zero leaks; setters can't delete, touch contests, or see admin sections.
+Problem flow: `draft → contest_active → published`. Contest flow: `draft → live → ended → archived` (lazy settlement, no cron). Submission: `pending → running → terminal verdict`.
 
 ## 4. Judge internals (if pressed)
 
-- Dual backend selected by `JUDGE_SANDBOX_MODE` (`auto` = Docker CLI present? containers : rlimit).
-- Docker path: one container per case, no network, non-root, read-only FS, seccomp, CPU/PID/output caps, forced `rm -f` cleanup.
-- rlimit path: temp dir per run, `RLIMIT_CPU/AS/NPROC`, wall-clock timeout, peak-RSS sampling.
-- Verdicts: AC/WA/TLE/MLE/RE/CE + PE (whitespace-only diff flagged separately so students fix formatting, not logic).
+- Per-run temp dir; `RLIMIT_CPU/AS/NPROC`; wall-clock timeout; peak-memory sampling.
+- gcc `-O2 -std=c11`, g++ `-O2 -std=c++17`, javac (Solution/Main auto-detect, `-Xmx` capped), Python interpreted.
+- Output compared whitespace-normalized; whitespace-only diffs get PE, not WA.
 - Failure philosophy: infra failure → `pending` + flag (retryable), NEVER a false contestant verdict.
-- Concurrency: 4 uvicorn workers, semaphore cap, 503 + Retry-After when saturated; connection pool hardened against Neon idle-kill (lifetime/check/retry, proven over a 7-minute idle).
+- Concurrency: 4 uvicorn workers, semaphore cap, 503 + Retry-After when saturated; DB pool hardened against Neon idle-kill (proven over a 7-minute idle).
+- Per-test results persisted (`case_results`) and shown per case on the submission page.
 
-## 5. Likely viva questions + model answers
+## 5. Realtime, scoring, rate limits
+
+- SSE poll-push: 2s leaderboard ticker, 1s submission stream with auto-reconnect; Redis (8s standings TTL) accelerates, DB fallback always correct.
+- Penalty per solved problem = minutes to first AC + 20 × wrong attempts before it (CE excluded, standard ICPC). Sort: solved desc, penalty asc. Freeze masks the last 60 live minutes.
+- 1 submission / 30s / problem → 429 + Retry-After + visible cooldown.
+
+## 6. Likely viva questions + model answers
 
 - *Why a separate judge service?* Blast radius (untrusted code never touches web/DB creds), independent scaling, site survives judge outage.
-- *Why rlimit on prod instead of Docker?* Cloud Run has no Docker daemon; the code auto-selects. Constraint-driven, documented, honest.
-- *Why SSE, not WebSockets?* One-way status flow; serverless-friendly (60s function cap with auto-reconnect); no connection state to manage.
-- *How do you stop cheating?* Hidden tests (never leave the server), editorial hidden during live contests, rate limits, isolated execution, invite codes hashed with scrypt.
-- *What if two judges race on one submission?* Advisory lock per submission id; loser gets 503 + retries.
-- *What if the judge crashes mid-run?* Submission stays `pending` with infra flag; redispatch recovers; contestant never sees a false verdict.
-- *Why Neon + Drizzle + Clerk?* Managed Postgres with branching (safe migrations), type-safe queries (no SQL injection class), auth you don't hand-roll (bcrypt/sessions/OAuth/JWT).
-- *Scale to 500 users?* Stateless front (scale horizontally), judge concurrency cap + Cloud Run max-instances, Redis cache already wired, DB indexes in place. Load test is the honest gap.
-- *Custom checkers / more languages?* Explicitly deferred (documented); checker interface point exists in pipeline design.
+- *Why not containers?* Our host (Cloud Run) has no container daemon; kernel rlimits give equivalent caps with zero orchestrator. Honest constraint-driven call, proven live.
+- *Why SSE, not WebSockets?* One-way status flow; serverless-friendly with auto-reconnect; no connection state.
+- *How do you stop cheating?* Hidden tests never leave the server, editorial hidden during live contests, rate limits, isolated execution, scrypt-hashed invite codes.
+- *Two judges race one submission?* Advisory lock per submission id; loser gets 503 + retries.
+- *Judge crashes mid-run?* Row stays `pending` with infra flag; redispatch recovers; contestant never sees a false verdict.
+- *Why Neon + Drizzle + Clerk?* Managed Postgres with branching, type-safe queries (no SQL-injection class), auth never hand-rolled.
+- *Scale to 500 users?* Stateless front, capped judge concurrency + Cloud Run max-instances, Redis cache wired, DB indexes in place. Load test is the honest gap.
+- *Auth vs auth?* Clerk answers who-you-are; Neon roles answer what-you-may-do. Never mixed.
 - *Testing?* 45-check E2E sweep, 0 critical issues; tsc + lint + build gates on every change; independent review gates per phase.
 
-## 6. Traps — do NOT say these
+## 7. Traps — do NOT say these
 
-- Never claim Docker runs on Cloud Run (health says rlimit).
-- Never claim Clerk org roles control access (removed; DB roles do).
+- Never claim containers run on Cloud Run (health says rlimit).
+- Never claim Clerk roles control access (DB roles do).
 - Never claim load testing was done (architecturally ready, unexecuted).
+- Never claim a production Clerk instance exists (all test keys; go-prod is future work).
 - Never read from the PPT — explain, don't recite.
-- Every member must be able to whiteboard the submit→verdict flow. If one person only memorized their slice, the viva will find it.
+- Every member must whiteboard the submit→verdict flow. Never say "that was my teammate's part" for core questions.
+
+## 8. Team checklist (tonight)
+
+- Rehearse the demo twice on the presentation network with two accounts (admin + contestant).
+- Pre-create both accounts; keep a known-good and a known-bad solution in a scratch file.
+- Screenshots/recording of the happy path as backup (labeled with date), attempt live first.
+- Each member: 30-second pitch, architecture sketch, scoring formula, one trade-off, one limitation — without notes.
+- Agree handoff order, but everyone answers core questions first.
