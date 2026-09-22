@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { desc, eq, ilike, or } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
+import { clerkClient } from "@clerk/nextjs/server";
 import { db } from "@/db";
 import { users } from "@/db/schema";
 import { jsonError, requireAdmin } from "@/app/api/admin/authz";
@@ -14,7 +15,35 @@ function parseRole(v: unknown): Role | null {
   return null;
 }
 
-/** Admin: list users (newest first). Supports `?q=` (username/email search), `?role=`, `?limit=`. */
+type ClerkDirUser = {
+  id: string;
+  username?: string | null;
+  firstName?: string | null;
+  primaryEmailAddressId?: string | null;
+  emailAddresses?: Array<{ id: string; emailAddress: string }>;
+  createdAt?: number;
+};
+
+function dirEmail(u: ClerkDirUser): string {
+  const list = u.emailAddresses ?? [];
+  return (
+    list.find((e) => e.id === u.primaryEmailAddressId)?.emailAddress ??
+    list[0]?.emailAddress ??
+    ""
+  );
+}
+
+function dirName(u: ClerkDirUser): string {
+  const email = dirEmail(u);
+  return u.username ?? u.firstName ?? (email ? email.split("@")[0] : u.id);
+}
+
+/**
+ * Admin: list users newest-first. Clerk is the source of truth for signups
+ * (a Neon row only exists after first activity), so the directory is read
+ * from Clerk and enriched with Neon role/suspended. `role` defaults to
+ * `contestant` and `synced` is false until the row exists.
+ */
 export async function GET(req: NextRequest) {
   const grant = await requireAdmin();
   if (!grant.ok) return grant.response;
@@ -38,33 +67,45 @@ export async function GET(req: NextRequest) {
     if (!role) return jsonError("role must be contestant, setter, or admin", 400);
   }
 
-  const conditions = [];
-  if (q) {
-    const pattern = `%${q.replace(/[%_]/g, "")}%`;
-    conditions.push(or(ilike(users.username, pattern), ilike(users.email, pattern)));
+  let list: { data: ClerkDirUser[]; totalCount: number };
+  try {
+    const client = await clerkClient();
+    const res = await client.users.getUserList({
+      limit,
+      ...(q ? { query: q } : {}),
+      orderBy: "-created_at",
+    });
+    list = { data: res.data as ClerkDirUser[], totalCount: res.totalCount };
+  } catch {
+    return jsonError("could not reach Clerk directory", 502);
   }
-  if (role) conditions.push(eq(users.role, role));
 
-  const rows =
-    conditions.length > 0
-      ? await db
-          .select()
-          .from(users)
-          .where(conditions.length === 1 ? conditions[0] : or(...conditions))
-          .orderBy(desc(users.createdAt))
-          .limit(limit)
-      : await db.select().from(users).orderBy(desc(users.createdAt)).limit(limit);
+  const clerkIds = list.data.map((u) => u.id);
+  const neonRows =
+    clerkIds.length > 0
+      ? await db.select().from(users).where(inArray(users.clerkId, clerkIds))
+      : [];
+  const neonById = new Map(neonRows.map((r) => [r.clerkId, r]));
 
-  return NextResponse.json({
-    users: rows.map((u) => ({
-      clerkId: u.clerkId,
-      username: u.username,
-      email: u.email,
-      role: u.role,
-      suspended: u.suspended,
-      createdAt: u.createdAt.toISOString(),
-    })),
+  let merged = list.data.map((u) => {
+    const neon = neonById.get(u.id);
+    const email = dirEmail(u);
+    return {
+      clerkId: u.id,
+      username: dirName(u),
+      email,
+      role: neon?.role ?? "contestant",
+      suspended: neon?.suspended ?? false,
+      synced: neon !== undefined,
+      createdAt:
+        typeof u.createdAt === "number"
+          ? new Date(u.createdAt).toISOString()
+          : new Date(0).toISOString(),
+    };
   });
+  if (role) merged = merged.filter((m) => m.role === role);
+
+  return NextResponse.json({ users: merged, total: list.totalCount });
 }
 
 /**
@@ -107,6 +148,32 @@ export async function PATCH(req: NextRequest) {
   }
   if (patch.role === undefined && patch.suspended === undefined) {
     return jsonError("role or suspended is required", 400);
+  }
+
+  // Backfill from Clerk so admin actions work even before first user activity.
+  const existing = await db
+    .select({ clerkId: users.clerkId })
+    .from(users)
+    .where(eq(users.clerkId, clerkId))
+    .limit(1);
+  if (existing.length === 0) {
+    let cu: ClerkDirUser | null = null;
+    try {
+      cu = (await (await clerkClient()).users.getUser(clerkId)) as ClerkDirUser;
+    } catch {
+      return jsonError("user not found", 404);
+    }
+    const email = dirEmail(cu);
+    await db
+      .insert(users)
+      .values({
+        clerkId,
+        username: dirName(cu),
+        email: email || `${clerkId}@placeholder.local`,
+        role: "contestant",
+        suspended: false,
+      })
+      .onConflictDoNothing();
   }
 
   const updated = await db
