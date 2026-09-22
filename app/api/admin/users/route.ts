@@ -197,7 +197,7 @@ export async function PATCH(req: NextRequest) {
     try {
       cu = (await (await clerkClient()).users.getUser(clerkId)) as ClerkDirUser;
     } catch {
-      return jsonError("user not found", 404);
+      return jsonError("user no longer exists in Clerk — run Sync to reconcile", 404);
     }
     const email = dirEmail(cu);
     await db

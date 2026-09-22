@@ -52,7 +52,7 @@ async function handleUserUpdated(u: UserPayload): Promise<void> {
   await db.update(users).set(patch).where(eq(users.clerkId, u.id));
 }
 
-async function handleUserDeleted(clerkId: string): Promise<void> {
+export async function handleUserDeleted(clerkId: string): Promise<"deleted" | "anonymized"> {
   const [sub, reg, authored, created] = await Promise.all([
     db.select({ id: submissions.id }).from(submissions).where(eq(submissions.userId, clerkId)).limit(1),
     db
@@ -74,9 +74,10 @@ async function handleUserDeleted(clerkId: string): Promise<void> {
         updatedAt: new Date(),
       })
       .where(eq(users.clerkId, clerkId));
-    return;
+    return "anonymized";
   }
   await db.delete(users).where(eq(users.clerkId, clerkId));
+  return "deleted";
 }
 
 /**

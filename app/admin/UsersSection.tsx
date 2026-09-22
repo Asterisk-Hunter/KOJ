@@ -25,6 +25,7 @@ export default function UsersSection() {
   const [busy, setBusy] = useState<string | null>(null);
   const [total, setTotal] = useState<number | null>(null);
   const [degraded, setDegraded] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const reqId = useRef(0);
 
   // Immediate fetch (used after mutations). Typing goes through the
@@ -64,6 +65,29 @@ export default function UsersSection() {
     return () => clearTimeout(t);
   }, [load]);
 
+  async function handleSync() {
+    setSyncing(true);
+    setNotice(null);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/users/sync", { method: "POST" });
+      const j = (await res.json().catch(() => null)) as {
+        checked?: number;
+        removed?: number;
+        anonymized?: number;
+        error?: string;
+      } | null;
+      if (!res.ok) throw new Error(j?.error ?? `failed (${res.status})`);
+      setNotice(
+        `Directory synced: ${j?.checked ?? 0} checked, ${j?.removed ?? 0} removed, ${j?.anonymized ?? 0} anonymized.`,
+      );
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  }
   async function handleSuspend(clerkId: string, suspended: boolean) {
     setBusy(clerkId);
     setNotice(null);
@@ -118,6 +142,15 @@ export default function UsersSection() {
             placeholder="Search username/email"
             className={`${inputCls} w-52`}
           />
+          <button
+            type="button"
+            onClick={() => void handleSync()}
+            disabled={syncing}
+            title="Reconcile with Clerk: purge FK-free deleted users, anonymize the rest"
+            className={`${inputCls} text-xs uppercase tracking-widest hover:text-kjprimary disabled:opacity-50 cursor-pointer`}
+          >
+            {syncing ? "Syncing…" : "Sync"}
+          </button>
           <select
             value={roleFilter}
             onChange={(e) => setRoleFilter(e.target.value)}
