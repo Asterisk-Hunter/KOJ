@@ -4,6 +4,7 @@ import Link from "next/link";
 import { SignInButton, SignUpButton, UserButton, useAuth } from "@clerk/nextjs";
 import { useEffect, useState } from "react";
 import Navigation from "@/app/components/Navigation";
+import GlitchingTerminal from "@/app/components/GlitchingTerminal";
 
 const features = [
   {
@@ -90,9 +91,9 @@ export default function LandingPage() {
     <div className="min-h-screen flex flex-col">
       <Navigation />
       {/* Hero Section */}
-      <section className="flex-1 flex items-center justify-center px-4 sm:px-6 lg:px-8 py-16">
-        <div className="max-w-3xl mx-auto w-full">
-          <div className="text-left">
+      <section className="flex-1 flex items-center justify-center px-4 sm:px-6 lg:px-8 py-20">
+        <div className="max-w-7xl mx-auto w-full flex flex-col lg:flex-row items-center gap-12 lg:gap-20">
+          <div className="flex-1 text-left">
             <h1 className="text-7xl sm:text-8xl font-mono font-bold text-kjprimary text-glow mb-4 leading-none">
               KOJ
             </h1>
@@ -133,6 +134,11 @@ export default function LandingPage() {
               <Link href="/problems" className="text-xs font-mono text-kjtext-muted hover:text-kjprimary">Browse problems →</Link>
               <Link href="/contests" className="text-xs font-mono text-kjtext-muted hover:text-kjprimary">View contests →</Link>
             </div>
+          </div>
+
+          {/* Right - Terminal */}
+          <div className="flex-1 w-full max-w-xl">
+            <GlitchingTerminal />
           </div>
         </div>
       </section>
