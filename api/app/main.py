@@ -230,6 +230,20 @@ def judge_async_endpoint(
     if not _judge_authorized(x_judge_secret):
         raise HTTPException(status_code=401, detail="unauthorized")
 
+    # Verify submission exists before acquiring a judge slot — prevents
+    # non-existent IDs from consuming capacity or advisory locks.
+    try:
+        with db.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM submissions WHERE id = %s", (submission_id,))
+                if cur.fetchone() is None:
+                    raise HTTPException(status_code=404, detail="submission not found")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("submission existence check failed for %s", submission_id)
+        raise HTTPException(status_code=500, detail="submission lookup failed")
+
     key = _sanitized_idempotency_key(idempotency_key)
     if idempotency_key is not None and key is None:
         logger.warning("judge-async ignoring malformed Idempotency-Key")
