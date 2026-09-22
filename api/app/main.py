@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import json
 import logging
 import threading
 from collections.abc import Callable
@@ -16,7 +17,15 @@ from pydantic import BaseModel, Field
 
 from . import db
 from .config import settings
-from .judge import SUPPORTED_LANGUAGES, JudgeCase, JudgeRequest, JudgeResponse, execute_judge
+from .judge import (
+    SUPPORTED_LANGUAGES,
+    JudgeCase,
+    JudgeRequest,
+    JudgeResponse,
+    execute_judge,
+    resolve_sandbox_backend,
+    warm_go_cache,
+)
 
 # Never log request bodies or case stdin/expected/stdout. Uvicorn access
 # logging records method/path/status only (no bodies) by default — keep
@@ -143,6 +152,9 @@ async def lifespan(app: FastAPI):
     except Exception:
         # Health degrades (db=false) instead of crashing the service.
         logger.exception("psycopg pool init failed; /health will report degraded")
+    # Warm the Go build cache off the critical path: a cold cache makes the
+    # first Go submission pay a full standard-library build.
+    threading.Thread(target=warm_go_cache, name="go-cache-warm", daemon=True).start()
     logger.info("KOJ API starting on %s:%s", settings.FASTAPI_HOST, settings.FASTAPI_PORT)
     yield
     db.close_pool()
@@ -184,6 +196,9 @@ def health() -> JSONResponse:
     payload: dict[str, object] = {
         "status": "ok" if db_ok else "degraded",
         "db": db_ok,
+        # Which sandbox is actually active — without this, a judge running
+        # with no usable sandbox still reported a healthy service.
+        "sandbox": resolve_sandbox_backend(),
     }
     return JSONResponse(content=payload, status_code=200)
 
@@ -388,7 +403,29 @@ def judge_async_endpoint(
             headers={"Retry-After": str(_JUDGE_SATURATED_RETRY_AFTER_S)},
         )
 
-    # 8. Update submission with verdict
+    # 8. Serialize per-case results (best-effort: never fail the verdict write)
+    case_results_json: str | None = None
+    try:
+        serialized_cases = []
+        for case in (result.cases or [])[:100]:
+            serialized_cases.append(
+                {
+                    "index": getattr(case, "index", None),
+                    "passed": bool(getattr(case, "passed", False)),
+                    "verdict": str(getattr(case, "verdict", "")),
+                    "runtime_ms": getattr(case, "runtime_ms", None),
+                    "stdout": str(getattr(case, "stdout", "") or "")[:2048],
+                    "stderr": str(getattr(case, "stderr", "") or "")[:2048],
+                }
+            )
+        case_results_json = json.dumps(serialized_cases)
+    except Exception:
+        logger.exception(
+            "failed to serialize case results for submission %s", submission_id
+        )
+        case_results_json = None
+
+    # 9. Update submission with verdict
     _update_submission_status(
         submission_id,
         result.status,
@@ -397,6 +434,7 @@ def judge_async_endpoint(
         result.execution_time_ms,
         result.error_message,
         now,
+        case_results=case_results_json,
     )
 
     # 9. Return 202
@@ -433,6 +471,7 @@ def _update_submission_status(
     error_message: str | None,
     completed_at: datetime | None,
     infra_error: bool = False,
+    case_results: str | None = None,
 ) -> None:
     """Best-effort update of submission verdict.
 
@@ -448,9 +487,9 @@ def _update_submission_status(
                     "UPDATE submissions SET status = %s, passed_tests = %s, "
                     "total_tests = %s, execution_time_ms = %s, "
                     "error_message = %s, completed_at = %s, "
-                    "judge_infra_error = %s "
+                    "judge_infra_error = %s, case_results = %s::jsonb "
                     "WHERE id = %s AND status IN ('pending', 'running')",
-                    (status, passed_tests, total_tests, execution_time_ms, error_message, completed_at, infra_error, submission_id),
+                    (status, passed_tests, total_tests, execution_time_ms, error_message, completed_at, infra_error, case_results, submission_id),
                 )
     except Exception:
         logger.exception("Failed to update submission %s status to %s", submission_id, status)
