@@ -211,13 +211,15 @@ export default function AdminPage() {
                       <Link href={`/problems/${problem.id}`} className="border border-kjborder rounded px-3 py-1.5 text-[11px] font-mono text-kjtext-muted">
                         VIEW
                       </Link>
-                      <button
-                        onClick={() => void handleDeleteProblem(problem.id)}
-                        disabled={deletingId === problem.id}
-                        className="border border-kjborder rounded px-3 py-1.5 text-[11px] font-mono text-kjtext-muted hover:text-red-400 disabled:opacity-50"
-                      >
-                        {deletingId === problem.id ? "…" : "DEL"}
-                      </button>
+                      {data?.role === "admin" && (
+                        <button
+                          onClick={() => void handleDeleteProblem(problem.id)}
+                          disabled={deletingId === problem.id}
+                          className="border border-kjborder rounded px-3 py-1.5 text-[11px] font-mono text-kjtext-muted hover:text-red-400 disabled:opacity-50"
+                        >
+                          {deletingId === problem.id ? "…" : "DEL"}
+                        </button>
+                      )}
                     </div>
                   </div>
                   {editingProblemId === problem.id && (
