@@ -8,7 +8,15 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const SUPPORTED_LANGUAGES = ["python", "c", "c++", "java"] as const;
+const SUPPORTED_LANGUAGES = [
+  "python",
+  "c",
+  "c++",
+  "java",
+  "go",
+  "rust",
+  "javascript",
+] as const;
 type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
 
 interface SingleRunBody {
@@ -80,7 +88,7 @@ export async function POST(req: NextRequest) {
     typeof language !== "string" ||
     !(SUPPORTED_LANGUAGES as readonly string[]).includes(language as SupportedLanguage)
   ) {
-    return jsonError("supported languages: python, c, c++, java", 400);
+    return jsonError(`supported languages: ${SUPPORTED_LANGUAGES.join(", ")}`, 400);
   }
 
   if (typeof code !== "string" || code.trim().length === 0) {
@@ -100,7 +108,11 @@ export async function POST(req: NextRequest) {
     Math.max(16, typeof b.memoryMb === "number" && Number.isInteger(b.memoryMb) ? b.memoryMb : 256),
   );
 
-  let judgeCases: Array<{ stdin: string; expected_stdout: string }>;
+  // Every case on this endpoint is interactive: it is either a sample the problem
+  // already shows publicly or a stdin the caller typed themselves. None of it is
+  // hidden-test content, so it is always flagged as a sample — otherwise the judge
+  // redacts stdout and the runner shows "(no stdout)" beside a passing verdict.
+  let judgeCases: Array<{ stdin: string; expected_stdout: string; is_sample: boolean }>;
   const isMultiCase = Array.isArray(b.cases) && b.cases.length > 0;
   let customExpectedProvided = false;
 
@@ -121,6 +133,7 @@ export async function POST(req: NextRequest) {
     judgeCases = b.cases.map((c) => ({
       stdin: typeof c.stdin === "string" ? c.stdin : "",
       expected_stdout: typeof c.expectedOutput === "string" ? c.expectedOutput : "",
+      is_sample: true,
     }));
   } else {
     // Single custom test run
@@ -134,7 +147,7 @@ export async function POST(req: NextRequest) {
     if (Buffer.byteLength(expectedOutput, "utf8") > 64 * 1024) {
       return jsonError("expected output exceeds 64KB limit", 400);
     }
-    judgeCases = [{ stdin: input, expected_stdout: expectedOutput }];
+    judgeCases = [{ stdin: input, expected_stdout: expectedOutput, is_sample: true }];
   }
 
   const fastApiUrl =

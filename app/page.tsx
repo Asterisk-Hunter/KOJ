@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { SignInButton, SignUpButton, UserButton, useAuth } from "@clerk/nextjs";
 import { useEffect, useState } from "react";
-import GlitchingTerminal from "@/app/components/GlitchingTerminal";
 import Navigation from "@/app/components/Navigation";
 
 const features = [
@@ -53,15 +52,10 @@ type ContestSummary = {
   participants: number;
 };
 
-type AuthMeResponse = {
-  authenticated?: boolean;
-};
-
 export default function LandingPage() {
   const { isLoaded, isSignedIn } = useAuth();
   const [recentProblems, setRecentProblems] = useState<ProblemSummary[]>([]);
   const [activeContests, setActiveContests] = useState<ContestSummary[]>([]);
-  const [hasServerSession, setHasServerSession] = useState<boolean | null>(null);
 
   useEffect(() => {
     fetch("/api/problems")
@@ -92,32 +86,13 @@ export default function LandingPage() {
       .catch(() => {});
   }, []);
 
-  useEffect(() => {
-    if (!isSignedIn) return;
-
-    let cancelled = false;
-    fetch("/api/auth/me")
-      .then((response) => (response.ok ? response.json() : null))
-      .then((data: AuthMeResponse | null) => {
-        if (!cancelled) setHasServerSession(Boolean(data?.authenticated));
-      })
-      .catch(() => {
-        if (!cancelled) setHasServerSession(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isSignedIn]);
-
   return (
     <div className="min-h-screen flex flex-col">
       <Navigation />
       {/* Hero Section */}
-      <section className="flex-1 flex items-center justify-center px-4 sm:px-6 lg:px-8 py-20">
-        <div className="max-w-7xl mx-auto w-full flex flex-col lg:flex-row items-center gap-12 lg:gap-20">
-          {/* Left - Text */}
-          <div className="flex-1 text-center lg:text-left">
+      <section className="flex-1 flex items-center justify-center px-4 sm:px-6 lg:px-8 py-16">
+        <div className="max-w-3xl mx-auto w-full">
+          <div className="text-left">
             <h1 className="text-7xl sm:text-8xl font-mono font-bold text-kjprimary text-glow mb-4 leading-none">
               KOJ
             </h1>
@@ -142,39 +117,22 @@ export default function LandingPage() {
                     </button>
                   </SignInButton>
                 </>
-              ) : hasServerSession === true ? (
+              ) : (
                 <>
                   <Link
                     href="/dashboard"
                     className="bg-kjprimary text-[#050505] font-mono font-semibold text-sm uppercase tracking-widest px-8 py-3 rounded hover:glow transition-all"
                   >
-                    Enter App
+                    Dashboard
                   </Link>
                   <UserButton />
                 </>
-              ) : hasServerSession === false ? (
-                <div className="flex items-center gap-3 text-left">
-                  <div>
-                    <p className="font-mono text-xs text-kjtext">Session synchronization required</p>
-                    <p className="font-mono text-[11px] text-kjtext-muted mt-1">
-                      This browser cannot provide KOJ&apos;s localhost session token.
-                    </p>
-                  </div>
-                  <UserButton />
-                </div>
-              ) : (
-                <p className="font-mono text-xs text-kjtext-muted">Checking secure session...</p>
               )}
             </div>
             <div className="flex gap-3 justify-center lg:justify-start mt-5">
               <Link href="/problems" className="text-xs font-mono text-kjtext-muted hover:text-kjprimary">Browse problems →</Link>
               <Link href="/contests" className="text-xs font-mono text-kjtext-muted hover:text-kjprimary">View contests →</Link>
             </div>
-          </div>
-
-          {/* Right - Terminal */}
-          <div className="flex-1 w-full max-w-xl">
-            <GlitchingTerminal />
           </div>
         </div>
       </section>

@@ -23,15 +23,15 @@
 - **Timed enforcement:** submissions rejected if contest not `live` — implemented
 - **Contest creation / editing / publishing:** [Implemented on `feat/srs-high-priority`] admin-only `POST/GET /api/admin/contests`, `PATCH/DELETE /api/admin/contests/[id]` (publish/unpublish/end/archive transitions), add/remove problems via `/api/admin/contests/[id]/problems`, contest manager UI in `/admin`. Past-due `live` contests auto-flip to `ended` (lazy settle on contest reads/writes) and linked problems publish to the archive.
 
-### Code Submission & Judging — [Implemented: Python, C, C++, Java]
-- **Submission UI:** `app/problems/[id]/page.tsx` and `app/contests/[id]/arena/page.tsx` — language selector (python/c/c++/java), Monaco/editor, Run (samples) vs Submit (all cases).
+### Code Submission & Judging — [Implemented: Python, C, C++, Java, Go, Rust, JavaScript]
+- **Submission UI:** `app/problems/[id]/page.tsx` and `app/contests/[id]/arena/page.tsx` — language selector (python/c/c++/java/go/rust/javascript), CodeMirror, Run (samples) vs Submit (all cases). All seven languages are verified live against production (AC + TLE each).
 - **Codeforces Interactive Workspace:**
   - **Custom Test Runner (`POST /api/judge/run`):** Non-persisted real-time interactive testing with arbitrary user-supplied `stdin` and optional expected output diffing. Execution time, memory, stdout, and stderr displayed immediately.
   - **Sample Cases Runner:** Multi-tab sample testing with per-case pass/fail badges, expected vs actual stdout diffs, and execution metrics.
   - **In-Workspace Submissions Drawer:** Tab showing recent submissions on the problem with real-time SSE verdict streaming.
   - **Fast I/O Starter Templates:** Preloaded CP templates for C++ (`bits/stdc++.h` + fast I/O), Python 3.11, Java, and C with one-click reset and copy buttons.
 - **Submission flow:** `POST /api/submissions` validates auth/ids/code/mode → inserts `pending→running` → calls FastAPI `POST /judge` → persists verdict to Neon → returns result (see `docs/status.md` pipeline)
-- **Judge module:** `api/app/judge.py` — per-language prepare (py_compile / gcc / g++ / javac), isolated temp workdir per submission, `subprocess.run` per case with `RLIMIT_AS` (POSIX, except Java — heap capped via `-Xmx`) + wall timeout `time_limit_ms+2s`, whitespace-normalized comparison, verdicts `AC/WA/TLE/MLE/RE/CE`
+- **Judge module:** `api/app/judge.py` — two backends selected by `JUDGE_SANDBOX_MODE` (`docker` = container sandbox; `rlimit` = host toolchain, the isolation level SRS §2.5 sanctions and what production/Cloud Run runs). Per-language prepare (py_compile / gcc / g++ / javac / `go build` / `rustc` / node), isolated temp workdir per submission, `RLIMIT_CPU/AS/NPROC/FSIZE` + wall timeout `time_limit_ms+2s`, whitespace-normalized comparison, verdicts `AC/WA/TLE/MLE/RE/CE/PE`. `RLIMIT_AS` does not describe the JVM/Go/Node, so those are bounded by `-Xmx`/`GOMEMLIMIT`/`--max-old-space-size`; `/health` reports the active backend as `sandbox`.
 - **Verdict types:** `accepted`, `wrong_answer`, `time_limit_exceeded`, `memory_limit_exceeded`, `runtime_error`, `compilation_error` — mapped to `submission_status`
 - **Multiple submissions:** all stored; `GET /api/submissions?problemId=&contestId=` lists caller's history
 
@@ -72,7 +72,7 @@
 
 ## Stretch goals — all [Planned]
 
-- Support for a third language (C++/Java) — judge currently python-only
+- ~~Support for additional languages~~ — done: all seven languages (python/c/c++/java/go/rust/javascript) are implemented and verified live.
 - Syntax highlighting in code editor
 - Discussion/editorial threads per problem, unlocked after contest ends
 - Code similarity / plagiarism detection

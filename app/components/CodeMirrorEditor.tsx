@@ -20,8 +20,18 @@ import { bracketMatching, indentOnInput } from "@codemirror/language";
 import { cpp } from "@codemirror/lang-cpp";
 import { python } from "@codemirror/lang-python";
 import { java } from "@codemirror/lang-java";
+import { go } from "@codemirror/lang-go";
+import { rust } from "@codemirror/lang-rust";
+import { javascript } from "@codemirror/lang-javascript";
 
-export type EditorLanguage = "python" | "c++" | "c" | "java";
+export type EditorLanguage =
+  | "python"
+  | "c++"
+  | "c"
+  | "java"
+  | "go"
+  | "rust"
+  | "javascript";
 
 interface CodeMirrorEditorProps {
   value: string;
@@ -38,6 +48,12 @@ function getLanguageExtension(lang: EditorLanguage) {
       return python();
     case "java":
       return java();
+    case "go":
+      return go();
+    case "rust":
+      return rust();
+    case "javascript":
+      return javascript();
     case "c++":
     case "c":
     default:

@@ -166,6 +166,11 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Publishing an unjudgeable problem would hand out free accepts for it.
+  if (initialStatus === "published" && validatedCases.length === 0) {
+    return jsonError("publish requires at least one test case", 400);
+  }
+
   // Insert problem and test cases in a single transaction
   const result = await db.transaction(async (tx) => {
     const inserted = await tx

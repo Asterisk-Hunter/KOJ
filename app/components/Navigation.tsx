@@ -87,7 +87,7 @@ export default function Navigation() {
         <div className="flex items-center justify-between h-14">
           {/* Logo */}
           <Link href="/" className="font-mono font-bold text-lg text-kjprimary text-glow">
-            IIITK Judge
+            KOJ
           </Link>
 
           {/* Desktop links */}
@@ -222,7 +222,7 @@ export default function Navigation() {
                     onClick={() => setMobileOpen(false)}
                     className="text-xs font-mono text-kjprimary border border-kjprimary/40 px-3 py-1 rounded"
                   >
-                    ADMIN CONSOLE →
+                    ADMIN CONSOLE
                   </Link>
                 )}
               </div>

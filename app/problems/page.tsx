@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { useAuth } from "@clerk/nextjs";
 import PageHeader from "@/app/components/PageHeader";
 
 type DifficultyFilter = "All" | "Easy" | "Medium" | "Hard";
@@ -18,7 +19,8 @@ type ProblemItem = {
   difficulty: string;
   category: string;
   acceptance: string;
-  status: string;
+  // null for signed-out visitors (see app/api/problems/route.ts)
+  status: string | null;
 };
 
 function badge(difficulty: string) {
@@ -35,6 +37,9 @@ function capitalize(s: string) {
 
 export default function ProblemsPage() {
   const router = useRouter();
+  // Progress filters and the status legend are meaningless without a session —
+  // hide them rather than showing a control that can never match anything.
+  const { isSignedIn } = useAuth();
   const [search, setSearch] = useState("");
   const [difficulty, setDifficulty] = useState<DifficultyFilter>("All");
   const [category, setCategory] = useState<string>("All");
@@ -211,13 +216,15 @@ export default function ProblemsPage() {
         {/* Filter Pills Bar: Status & Category */}
         <div className="flex flex-wrap items-center justify-between gap-3 mb-6 pb-2 border-b border-kjborder/40">
           <div className="flex gap-2 flex-wrap items-center">
-            <span className="text-[11px] uppercase tracking-widest font-mono text-kjtext-muted">Status:</span>
-            {[
-              { id: "all", label: "All" },
-              { id: "solved", label: "Solved ●" },
-              { id: "attempted", label: "Attempted ◐" },
-              { id: "unsolved", label: "Todo ○" },
-            ].map((s) => (
+            {isSignedIn && (
+              <>
+                <span className="text-[11px] uppercase tracking-widest font-mono text-kjtext-muted">Status:</span>
+                {[
+                  { id: "all", label: "All" },
+                  { id: "solved", label: "Solved ●" },
+                  { id: "attempted", label: "Attempted ◐" },
+                  { id: "unsolved", label: "Todo ○" },
+                ].map((s) => (
               <button
                 key={s.id}
                 onClick={() => setStatusFilter(s.id as StatusFilter)}
@@ -229,7 +236,9 @@ export default function ProblemsPage() {
               >
                 {s.label}
               </button>
-            ))}
+                ))}
+              </>
+            )}
           </div>
 
           {availableCategories.length > 0 && (
@@ -253,7 +262,9 @@ export default function ProblemsPage() {
             <span className="text-xs uppercase tracking-widest font-mono text-kjtext-muted">
               {loading ? "loading…" : `${filteredProblems.length} ${filteredProblems.length === 1 ? "problem" : "problems"}`}
             </span>
-            <span className="text-xs font-mono text-kjtext-muted">● solved &nbsp; ◐ attempted &nbsp; ○ new</span>
+            {isSignedIn && (
+              <span className="text-xs font-mono text-kjtext-muted">● solved &nbsp; ◐ attempted &nbsp; ○ new</span>
+            )}
           </div>
 
           {loading ? (

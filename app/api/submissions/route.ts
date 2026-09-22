@@ -66,13 +66,24 @@ export async function POST(req: NextRequest) {
       return jsonError("contestId must be a positive integer or null", 400);
     }
   }
-  // Validate language (SRS REQ-JUDGE-02 v1 set)
-  const SUPPORTED_LANGUAGES = ["python", "c", "c++", "java"] as const;
+  // Validate language (SRS REQ-JUDGE-02 v1 set + TBD-03 additions)
+  const SUPPORTED_LANGUAGES = [
+    "python",
+    "c",
+    "c++",
+    "java",
+    "go",
+    "rust",
+    "javascript",
+  ] as const;
   if (
     typeof language !== "string" ||
     !(SUPPORTED_LANGUAGES as readonly string[]).includes(language)
   ) {
-    return jsonError("supported languages: python, c, c++, java", 400);
+    return jsonError(
+      `supported languages: ${SUPPORTED_LANGUAGES.join(", ")}`,
+      400,
+    );
   }
   // Validate code
   if (typeof code !== "string" || code.trim().length === 0) {

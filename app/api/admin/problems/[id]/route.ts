@@ -190,6 +190,17 @@ export async function PATCH(
         400,
       );
     }
+    if (to === "published") {
+      // Same rule as POST: no test cases means every submission would be
+      // unjudgeable, which the judge reports as infrastructure failure.
+      const cases = await db
+        .select({ id: problemTestCases.id })
+        .from(problemTestCases)
+        .where(eq(problemTestCases.problemId, problem.id));
+      if (cases.length === 0) {
+        return jsonError("publish requires at least one test case", 400);
+      }
+    }
     patch.status = to as "draft" | "published";
   }
 

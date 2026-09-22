@@ -116,6 +116,9 @@ export default function SubmissionsPage() {
                 <option value="c++">C++</option>
                 <option value="c">C</option>
                 <option value="java">Java</option>
+                <option value="go">Go</option>
+                <option value="rust">Rust</option>
+                <option value="javascript">JavaScript</option>
               </select>
             </div>
           </div>

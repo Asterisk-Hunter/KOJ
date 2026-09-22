@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field, PostgresDsn
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -68,6 +70,18 @@ class Settings(BaseSettings):
         default="eclipse-temurin:17-jdk-jammy",
         description="Sandbox image for java compile+run.",
     )
+    JUDGE_DOCKER_IMAGE_GO: str = Field(
+        default="golang:1.22-bookworm",
+        description="Sandbox image for go compile+run.",
+    )
+    JUDGE_DOCKER_IMAGE_RUST: str = Field(
+        default="rust:1.79-bookworm",
+        description="Sandbox image for rust compile+run.",
+    )
+    JUDGE_DOCKER_IMAGE_NODE: str = Field(
+        default="node:20-bookworm-slim",
+        description="Sandbox image for javascript run.",
+    )
     JUDGE_DOCKER_CPUS: float = Field(
         default=1.0,
         ge=0.1,
@@ -93,6 +107,16 @@ class Settings(BaseSettings):
     JUDGE_SECCOMP_PROFILE: str = Field(
         default="/etc/koj/seccomp-koj.json",
         description="Docker daemon host path to the repo-managed seccomp profile (api/seccomp-koj.json provisioned to this path). Always passed as --security-opt seccomp=...; missing/invalid profile fails closed.",
+    )
+
+    JUDGE_SANDBOX_MODE: Literal["auto", "docker", "rlimit"] = Field(
+        default="auto",
+        description=(
+            "Sandbox backend. 'docker' = container backend only (fails closed without "
+            "a Docker daemon, see api/DEPLOYMENT_CONTRACT.md). 'rlimit' = host-toolchain "
+            "backend with resource.setrlimit CPU/AS/NPROC/FSIZE limits (SRS §2.5 constraint 3). "
+            "'auto' = Docker when the CLI is present, else rlimit (Cloud Run)."
+        ),
     )
 
     @property

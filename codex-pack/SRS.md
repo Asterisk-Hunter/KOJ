@@ -1,86 +1,161 @@
-# KOJ — SRS v1.0 Requirement Catalog (with implementation status)
+# KOJ — Software Requirements Specification (SRS v1.0)
 
-Reconstructed 2026-09-21 from per-requirement code audits (each item verified against
-file:line evidence + independent review gates). Priority scheme is the SRS's own:
-High = must-have v1 (all met), Medium/Low = explicitly deferrable.
+**Canonical document:** `KOJ_SRS.pdf` — "Software Requirements Specification for Kottayam
+Online Judge - KOJ", Version 1.0 approved, prepared by Prajwal, Chandra Teja, Shivkarthik,
+Hari Krishnan S (Group 3, IIIT Kottayam), 4 August 2026. IEEE 830-1998 format.
 
-## 4.1 Authentication & User Management — all High met
+**Searchable full text:** `SRS.txt` — extracted from the PDF and repaired so that all 68
+`REQ-*` identifiers are intact and greppable:
 
-- REQ-AUTH-01 email/password registration — MET (Clerk catch-all routes)
-- REQ-AUTH-02 OAuth GitHub + Google — MET (dashboard SSO, buttons live)
-- REQ-AUTH-03 default `contestant` role — MET (DB default)
-- REQ-AUTH-04 admin role change — MET (admin users API + UI, self-change refused)
-- REQ-AUTH-05 Clerk JWT sessions — MET (proxy + `auth()` on writes)
-- REQ-AUTH-06 duplicate email rejection — MET (unique constraint + webhook dedupe)
-- REQ-AUTH-07 password reset via email — Medium; Clerk-provided, unverified end-to-end
+```bash
+grep -A3 'REQ-JUDGE-06' SRS.txt     # one requirement with its description
+grep -n 'business rule\|BR-0' SRS.txt
+```
 
-## 4.2 Problem Management — all High met
+**Implementation status:** `SRS-TRACEABILITY.md` maps every requirement to MET / PARTIAL /
+DEVIATION / UNVERIFIED / NOT MET with the evidence that was actually checked.
 
-- REQ-PROB-01 create (title/statement/time/memory/difficulty) — MET (+ bulk/Polygon import, KaTeX math)
-- REQ-PROB-02 test cases as input/output pairs — MET
-- REQ-PROB-03 10MB per-file cap — MET (all upload paths)
-- REQ-PROB-04 state machine Draft → Contest-Active → Published — MET (lifecycle transitions)
-- REQ-PROB-05 draft visible to setter/admin only — MET (404 otherwise)
-- REQ-PROB-06 contest-active visible to registered participants only — MET
-- REQ-PROB-07 published visible to all — MET
-- REQ-PROB-08 markdown rendering — Medium, MET (react-markdown + KaTeX)
-- REQ-PROB-09 draft editing — MET
-- REQ-PROB-10 post-start edit lock — MET (403 + UI badges)
+> Do not treat the SRS as a description of what exists. It is the target. Where the running
+> system differs, `SRS-TRACEABILITY.md` names the difference and `CONTEXT.md` explains why.
 
-## 4.3 Code Submission & Judge Pipeline — all High met
+## Requirement index
 
-- REQ-JUDGE-01 POST → 202 + submission ID — MET
-- REQ-JUDGE-02 C, C++, Python, Java — MET (Go/Rust/JS are Medium, deferred)
-- REQ-JUDGE-03 gcc/g++/javac (+ Java Main/Solution detect) — MET
-- REQ-JUDGE-04 CPU rlimit — MET
-- REQ-JUDGE-05 wall-clock timeout — MET
-- REQ-JUDGE-06 memory rlimit (−Xmx for Java) — MET
-- REQ-JUDGE-07 fork-bomb guard — MET
-- REQ-JUDGE-08 isolated working directory — MET
-- REQ-JUDGE-09 whitespace-normalized comparison — MET
-- REQ-JUDGE-10 all test cases → single verdict — MET
-- REQ-JUDGE-11 AC/WA/TLE/MLE/RE/CE/PE — MET
-- REQ-JUDGE-12 realtime verdict delivery — MET (SSE + EventSource + fallback)
-- REQ-JUDGE-13 10 concurrent judges — MET (4 workers + autoscale + concurrency cap)
-- REQ-JUDGE-14 DB logging of results — MET (incl. per-test `case_results`)
-- REQ-JUDGE-15 custom checkers — Medium/v2, DEFERRED
-- REQ-JUDGE-16 custom time limit per problem (default 2s) — MET
-- REQ-JUDGE-17 custom memory limit per problem (default 256MB) — MET
+Priority per the SRS: **H** = must have for v1, **M** = should have, **L** = nice to have.
 
-## 4.4 Contest Management — all High met
+### 4.1 Authentication and User Management (all H unless noted)
 
-- REQ-CONT-01 create (title/desc/start/end/mode) — MET (+ full CRUD + publish/unpublish/archive)
-- REQ-CONT-02 open + invite-code registration — MET (scrypt-hashed codes)
-- REQ-CONT-03 add existing problems — MET
-- REQ-CONT-04 auto visible-at-start / lock-at-end — MET (lazy settler on reads + writes)
-- REQ-CONT-05 one-click open registration — MET
-- REQ-CONT-06 invite-code path — MET
-- REQ-CONT-07 post-end submission lock — MET
-- REQ-CONT-08 countdown timer — Medium, MET
-- REQ-CONT-09 team mode — Low, DEFERRED
+| ID | Requirement |
+|---|---|
+| REQ-AUTH-01 | Register with email and password |
+| REQ-AUTH-02 | OAuth login via GitHub and Google |
+| REQ-AUTH-03 | New users get the Contestant role by default |
+| REQ-AUTH-04 | Admins can change user roles |
+| REQ-AUTH-05 | Session state via Clerk (JWT verified through JWKS) |
+| REQ-AUTH-06 | Reject duplicate email registration with a clear error |
+| REQ-AUTH-07 | Password reset via email (**M**) |
 
-## 4.5 Live Leaderboard — all High met
+### 4.2 Problem Management
 
-- REQ-LB-01 ICPC scoring — MET
-- REQ-LB-02 penalty formula — MET (wrong-only verdicts filtered)
-- REQ-LB-03 realtime push — MET (SSE ticker, Redis-accelerated)
-- REQ-LB-04 update ≤2s — MET (2s ticks; architecturally sound, unloaded-tested)
-- REQ-LB-05 visible during + after — MET (live/ended/archived)
-- REQ-LB-06 per-problem status — Medium, MET (cells + attempts + solve counts + balloons)
+| ID | Requirement |
+|---|---|
+| REQ-PROB-01 | Create problems with title, statement (markdown), time limit, memory limit, difficulty |
+| REQ-PROB-02 | Upload test cases as input/output text-file pairs |
+| REQ-PROB-03 | Enforce a 10 MB maximum per test-case file |
+| REQ-PROB-04 | Problem state machine: Draft → Contest-Active → Published |
+| REQ-PROB-05 | Draft problems visible only to their setter and admins |
+| REQ-PROB-06 | Contest-Active problems visible only to registered participants during the contest |
+| REQ-PROB-07 | Published problems visible to all users for practice |
+| REQ-PROB-08 | Markdown rendering in statements (**M**) |
+| REQ-PROB-09 | Setters can edit problems in Draft |
+| REQ-PROB-10 | No editing of Contest-Active problems after the contest starts |
 
-## 4.6 Rate Limiting — all High met
+### 4.3 Code Submission and Judge Pipeline
 
-- REQ-RATE-01 1 submission / 30s / user / problem — MET
-- REQ-RATE-02 429 + Retry-After — MET
-- REQ-RATE-03 submit-button countdown — Medium, MET
+| ID | Requirement |
+|---|---|
+| REQ-JUDGE-01 | Accept submissions via POST and return a submission ID |
+| REQ-JUDGE-02 | Support C, C++, Python, Java (v1) |
+| REQ-JUDGE-03 | Compile C/C++ with gcc/g++ and Java with javac |
+| REQ-JUDGE-04 | CPU time limits via `resource.setrlimit(RLIMIT_CPU)` |
+| REQ-JUDGE-05 | Wall-clock limits via subprocess timeout |
+| REQ-JUDGE-06 | Memory limits via `resource.setrlimit(RLIMIT_AS)` |
+| REQ-JUDGE-07 | Bound subprocess count per submission (fork-bomb guard) |
+| REQ-JUDGE-08 | Execute in an isolated working directory containing only judge files |
+| REQ-JUDGE-09 | Whitespace-normalised output comparison |
+| REQ-JUDGE-10 | Run all test cases and return a single verdict |
+| REQ-JUDGE-11 | Verdicts: AC, WA, TLE, MLE, RE, CE, PE |
+| REQ-JUDGE-12 | Deliver verdicts in real time (spec: WebSocket) |
+| REQ-JUDGE-13 | Handle 10 concurrent judging tasks |
+| REQ-JUDGE-14 | Log every submission result (id, verdict, time, memory) |
+| REQ-JUDGE-15 | Custom checker programs (**M**, v2) |
+| REQ-JUDGE-16 | Per-problem time limit, default 2 s |
+| REQ-JUDGE-17 | Per-problem memory limit, default 256 MB |
 
-## 5. Nonfunctional — High met, perf partially load-verified
+### 4.4 Contest Management
 
-- PERF-01 submission ID ≤1s, PERF-03 50 concurrent users, PERF-04 leaderboard ≤2s — MET by architecture, not load-tested
-- PERF-02 verdict ≤5s, PERF-06 10 concurrent judges — same caveat
-- SAFE-01/02/03 sandbox/kill/fork-guard — MET (process-level rlimits; Docker/seccomp is v2)
-- SEC-01 HTTPS, SEC-02 bcrypt-via-Clerk, SEC-03 JWT on routes, SEC-04 admin gates, SEC-06 sanitization — MET; SEC-05 CSRF Medium, framework-handled
+| ID | Requirement |
+|---|---|
+| REQ-CONT-01 | Admins create contests with title, description, start, end, registration mode |
+| REQ-CONT-02 | Two registration modes: Open Enrollment and Invite-Based |
+| REQ-CONT-03 | Add existing problems to a contest |
+| REQ-CONT-04 | Problems open automatically at start, lock at end |
+| REQ-CONT-05 | One-click registration for open contests |
+| REQ-CONT-06 | Invite-code registration for private contests |
+| REQ-CONT-07 | No submissions to contest problems after the end time |
+| REQ-CONT-08 | Countdown timer showing time remaining (**M**) |
+| REQ-CONT-09 | Team contest mode (**L**) |
 
-## 2.6 Documentation deliverables — all present
+### 4.5 Live Leaderboard
 
-README, problem setter guide, user guide, deployment guide — all in `docs/` (copied into this pack).
+| ID | Requirement |
+|---|---|
+| REQ-LB-01 | Rank by problems solved (desc) then penalty (asc) |
+| REQ-LB-02 | Penalty = first-AC time in minutes + 20 × wrong before first AC |
+| REQ-LB-03 | Real-time update via push from the backend |
+| REQ-LB-04 | Leaderboard updates within 2 seconds of a verdict |
+| REQ-LB-05 | Visible to all users during and after the contest |
+| REQ-LB-06 | Per-problem status (solved/unsolved/attempted) (**M**) |
+
+### 4.6 Rate Limiting and Abuse Prevention
+
+| ID | Requirement |
+|---|---|
+| REQ-RATE-01 | 1 submission per 30 seconds per user per problem |
+| REQ-RATE-02 | HTTP 429 with a `Retry-After` header when exceeded |
+| REQ-RATE-03 | Visible countdown on the submit button (**M**) |
+
+### 5.1 Performance
+
+| ID | Requirement |
+|---|---|
+| REQ-PERF-01 | Submission accepted with an ID within 1 second |
+| REQ-PERF-02 | Verdict within 5 seconds for simple problems |
+| REQ-PERF-03 | 50 concurrent users without responses over 3 seconds |
+| REQ-PERF-04 | Leaderboard updates within 2 seconds of a verdict write |
+| REQ-PERF-05 | Problem list page loads within 2 seconds (**M**) |
+| REQ-PERF-06 | Up to 10 concurrent judging tasks per instance |
+
+### 5.2 Safety
+
+| ID | Requirement |
+|---|---|
+| REQ-SAFE-01 | Submitted code cannot access or modify files outside the sandbox |
+| REQ-SAFE-02 | Kill any submission exceeding its CPU or wall-clock limit |
+| REQ-SAFE-03 | Limit child processes to prevent fork bombs |
+| REQ-SAFE-04 | Never expose one user's source code to another (**M**) |
+
+### 5.3 Security
+
+| ID | Requirement |
+|---|---|
+| REQ-SEC-01 | HTTPS for all frontend↔backend traffic |
+| REQ-SEC-02 | Passwords hashed with bcrypt (Clerk) |
+| REQ-SEC-03 | Validate JWT tokens on authenticated routes |
+| REQ-SEC-04 | Admin-only endpoints verify the Admin role before processing |
+| REQ-SEC-05 | CSRF protection for state-changing requests (**M**) |
+| REQ-SEC-06 | Sanitise input against SQL injection and XSS |
+
+### 5.4 Quality attributes and 5.5 Business rules
+
+Availability 99.5 % during contests · Reliability (no incorrect AC) · Maintainability ·
+Testability (40+ judge unit tests) · Usability (no tutorial needed) · Portability (Docker-free
+deployment).
+
+| ID | Business rule |
+|---|---|
+| BR-01 | Only Admins can create contests |
+| BR-02 | Only Problem Setters and Admins can create problems |
+| BR-03 | Only Admins can change user roles |
+| BR-04 | A problem must be in Draft before it can be added to a contest |
+| BR-05 | Submissions to a contest problem are locked after the contest end time |
+| BR-06 | A user can only register for a contest before it starts |
+| BR-07 | Penalty counts only after the first AC; later ACs do not change it |
+| BR-08 | Problems in an active contest cannot be edited |
+
+### §6 Other requirements and Appendix B (TBD list)
+
+Database must contain users, problems, test_cases, submissions, contests, contest_problems,
+contest_registrations and leaderboards · realtime SSE/push + optional Redis (TBD-01, now
+implemented as optional) · custom checkers via testlib (TBD-02) · Go/Rust/JS (TBD-03) · team
+mode (TBD-04) · password reset (TBD-05) · exact Azure/GCP deployment (TBD-06) · interactive
+problems (TBD-07).

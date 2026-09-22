@@ -66,7 +66,7 @@ All handlers: `runtime="nodejs"`, `dynamic="force-dynamic"`, validation returns 
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET` | `/health` | None | Liveness + DB check; mirrors Next `/api/health` shape but for FastAPI |
-| `POST` | `/judge` | `X-Judge-Secret` | Internal only; validates `language=="python"` (422 otherwise); compiles via `py_compile`, executes per case with `subprocess.run`, compares outputs |
+| `POST` | `/judge` | `X-Judge-Secret` | Internal only; validates `language` against the seven supported (422 otherwise); two sandbox backends chosen by `JUDGE_SANDBOX_MODE` (`docker` on a container host, `rlimit` on Cloud Run — production uses `rlimit`, reported by `/health` as `sandbox`); executes per case with resource limits and compares outputs |
 
 CORS: `allow_origins=[http://localhost:3000, FASTAPI_URL, FRONTEND_URL]` — never `*`. `JUDGE_INTERNAL_SECRET` must match on both sides.
 
@@ -98,7 +98,7 @@ No `contest_setter` value exists yet — see Role gap below.
 | `contests` | `id` serial | `created_by→users.clerkId`, `slug` unique, `title`, `description`, `starts_at`, `ends_at`, `status` default `draft` |
 | `contest_problems` | `(contest_id, problem_id)` composite | `contest_id→contests.id CASCADE`, `problem_id→problems.id CASCADE`, `position` |
 | `contest_registrations` | `(contest_id, user_id)` composite | `contest_id→contests.id CASCADE`, `user_id→users.clerkId CASCADE`, `registered_at` |
-| `submissions` | `id` serial | `user_id→users.clerkId`, `problem_id→problems.id`, `contest_id→contests.id` nullable, `language` (currently `python` only), `code`, `status` default `pending`, `execution_time_ms`, `memory_used_mb`, `passed_tests`, `total_tests`, `error_message`, `submitted_at`, `started_at`, `completed_at` |
+| `submissions` | `id` serial | `user_id→users.clerkId`, `problem_id→problems.id`, `contest_id→contests.id` nullable, `language` (`python\|c\|c++\|java\|go\|rust\|javascript`), `code`, `status` default `pending`, `execution_time_ms`, `memory_used_mb`, `passed_tests`, `total_tests`, `error_message`, `submitted_at`, `started_at`, `completed_at` |
 | `notes` | `id` serial | Legacy starter table; not used by KOJ features |
 
 ### Seeded data (via `scripts/seed.ts`)
@@ -207,7 +207,7 @@ Explicitly not implemented on this branch:
 5. **Production FastAPI deployment** — host FastAPI separately (Render/Railway/Fly); set `FRONTEND_URL` for CORS; replace localhost fallback
 6. **Webhook syncing** — Clerk webhooks to sync `users` and org memberships into Neon (lazy-create covers Sprint 1 but not org role changes)
 7. **Tests** — no test runner installed (`package.json` has no Jest/Vitest/Playwright); `docs/testing.md` describes intended strategy but no tests exist yet; add unit (judge), integration (submit→judge→DB), and E2E (Clerk) suites
-8. **Language expansion** — C++/Java support in judge (currently `python` only, validated at both layers)
+8. ~~**Language expansion** — additional languages in the judge~~ — **done**: python/c/c++/java/go/rust/javascript, validated at both layers and verified live (AC + TLE each).
 9. **Audit fixes** — resolve 1 high / 4 moderate via coordinated Drizzle upgrade
 
 ---

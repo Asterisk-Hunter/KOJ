@@ -51,12 +51,59 @@ int main() {
 import java.io.*;
 import java.util.*;
 
-public class Main {
+public class Solution {
     public static void main(String[] args) throws Exception {
         BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
         // Write your solution here
     }
 }`,
+  go: `// Codeforces / ICPC Go Template
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+)
+
+var (
+	in  = bufio.NewReaderSize(os.Stdin, 1<<20)
+	out = bufio.NewWriterSize(os.Stdout, 1<<20)
+)
+
+func solve() {
+	// Write your solution here
+}
+
+func main() {
+	defer out.Flush()
+	solve()
+}`,
+  rust: `// Codeforces / ICPC Rust Template
+use std::io::{self, Read, Write};
+
+fn solve(input: &str, out: &mut impl Write) {
+    // Write your solution here
+    let _ = input;
+    writeln!(out).ok();
+}
+
+fn main() {
+    let mut input = String::new();
+    io::stdin().read_to_string(&mut input).unwrap();
+    let mut out = io::BufWriter::new(io::stdout().lock());
+    solve(&input, &mut out);
+}`,
+  javascript: `// Codeforces / ICPC Node.js Template
+const data = require("fs").readFileSync(0, "utf8").split(/\\s+/);
+let pos = 0;
+const nextInt = () => Number(data[pos++]);
+
+function solve() {
+  // Write your solution here
+}
+
+solve();`,
 };
 
 type ProblemResponse = {
@@ -118,6 +165,34 @@ function formatStatus(status: string) {
   return status.replaceAll("_", " ");
 }
 
+// The editor's code lives in component state, so navigating away (e.g. to /submissions
+// to check a verdict) used to discard it and re-seed the starter template. Drafts are
+// kept per problem + language; the server always renders the starter, so they are
+// restored in an effect rather than in useState to keep hydration identical.
+const draftKey = (problemId: string, lang: string) => `koj:draft:${problemId}:${lang}`;
+
+function readDraft(problemId: string, lang: string): string | null {
+  try {
+    const value = window.localStorage.getItem(draftKey(problemId, lang));
+    return value !== null && value.trim() !== "" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeDraft(problemId: string, lang: string, value: string) {
+  try {
+    // An empty editor or an untouched starter is not worth remembering.
+    if (value.trim() === "" || value === (STARTERS[lang] ?? "")) {
+      window.localStorage.removeItem(draftKey(problemId, lang));
+    } else {
+      window.localStorage.setItem(draftKey(problemId, lang), value);
+    }
+  } catch {
+    // Storage disabled or over quota — a lost draft must never break the editor.
+  }
+}
+
 export default function ProblemDetailPage() {
   const params = useParams<{ id: string }>();
   const searchParams = useSearchParams();
@@ -155,6 +230,31 @@ export default function ProblemDetailPage() {
   const lineCount = Math.max(1, currentCode.split("\n").length);
 
   const activeEsRef = useRef<EventSource | null>(null);
+  const draftsHydratedRef = useRef(false);
+
+  // Restore this problem's saved drafts once, on the client.
+  useEffect(() => {
+    draftsHydratedRef.current = false;
+    setCodeByLang(() => {
+      const restored: Record<string, string> = { ...STARTERS };
+      for (const lang of Object.keys(STARTERS)) {
+        const saved = readDraft(id, lang);
+        if (saved !== null) restored[lang] = saved;
+      }
+      return restored;
+    });
+    draftsHydratedRef.current = true;
+  }, [id]);
+
+  // Persist edits, debounced so typing does not hit storage on every keystroke.
+  useEffect(() => {
+    if (!draftsHydratedRef.current) return;
+    const timer = window.setTimeout(() => {
+      const value = codeByLang[language];
+      if (value !== undefined) writeDraft(id, language, value);
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [id, language, codeByLang]);
 
   useEffect(() => {
     return () => {
@@ -435,6 +535,7 @@ export default function ProblemDetailPage() {
   function handleResetCode() {
     if (window.confirm(`Reset ${language.toUpperCase()} code to default starter template?`)) {
       setCodeByLang((prev) => ({ ...prev, [language]: STARTERS[language] ?? "" }));
+      writeDraft(id, language, STARTERS[language] ?? "");
     }
   }
 
@@ -806,9 +907,12 @@ export default function ProblemDetailPage() {
                 aria-label="Select language"
               >
                 <option value="python">Python 3.11</option>
-                <option value="c++">C++ (G++ 20)</option>
-                <option value="c">C (GCC 11)</option>
-                <option value="java">Java (OpenJDK 17)</option>
+                <option value="c++">C++ (G++ 14)</option>
+                <option value="c">C (GCC 14)</option>
+                <option value="java">Java (OpenJDK 21)</option>
+                <option value="go">Go 1.24</option>
+                <option value="rust">Rust</option>
+                <option value="javascript">JavaScript (Node 20)</option>
               </select>
             </div>
 

@@ -128,12 +128,16 @@ export async function GET(req: NextRequest) {
     const stats = completedByProblem.get(p.id);
     const acceptance = !stats || stats.total === 0 ? "—" : `${((stats.accepted / stats.total) * 100).toFixed(1)}%`;
 
-    let status: "solved" | "attempted" | "unsolved" = "unsolved";
+    // null for signed-out visitors: they have no progress, and reporting
+    // "unsolved" would invent a state for a user who never submitted.
+    let status: "solved" | "attempted" | "unsolved" | null = null;
     if (userId) {
       const statuses = userStatusMap.get(p.id) ?? [];
-      if (statuses.includes("accepted")) status = "solved";
-      else if (statuses.some((s) => s !== "pending")) status = "attempted";
-      else status = "unsolved";
+      status = statuses.includes("accepted")
+        ? "solved"
+        : statuses.some((s) => s !== "pending")
+          ? "attempted"
+          : "unsolved";
     }
 
     return {

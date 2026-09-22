@@ -8,7 +8,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc g++ default-jdk-headless \
+    && apt-get install -y --no-install-recommends \
+        gcc g++ default-jdk-headless \
+        golang-go rustc nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /srv
