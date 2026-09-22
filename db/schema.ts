@@ -2,6 +2,7 @@ import {
   boolean,
   index,
   integer,
+  jsonb,
   pgEnum,
   pgTable,
   primaryKey,
@@ -198,6 +199,7 @@ export const submissions = pgTable(
     passedTests: integer("passed_tests"),
     totalTests: integer("total_tests"),
     errorMessage: text("error_message"),
+    caseResults: jsonb("case_results"),
     submittedAt: timestamp("submitted_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
