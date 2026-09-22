@@ -60,3 +60,12 @@ next-env.d.ts
 
 # Local deepwork progress
 .slim/deepwork/
+
+# Codex share pack secrets (local-only handoff file, never commit)
+codex-pack/share.env
+
+# Local agent tooling (not project code)
+.agents/
+.claude/
+agent/
+skills-lock.json
