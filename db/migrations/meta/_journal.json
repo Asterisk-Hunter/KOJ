@@ -15,6 +15,27 @@
       "when": 1789540894754,
       "tag": "0001_young_kylun",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789969916227,
+      "tag": "0002_confused_boomerang",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789988856130,
+      "tag": "0003_vengeful_sumo",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790053970832,
+      "tag": "0004_steady_talisman",
+      "breakpoints": true
     }
   ]
 }

@@ -24,21 +24,28 @@
 - **Contest creation / editing / publishing:** [Implemented on `feat/srs-high-priority`] admin-only `POST/GET /api/admin/contests`, `PATCH/DELETE /api/admin/contests/[id]` (publish/unpublish/end/archive transitions), add/remove problems via `/api/admin/contests/[id]/problems`, contest manager UI in `/admin`. Past-due `live` contests auto-flip to `ended` (lazy settle on contest reads/writes) and linked problems publish to the archive.
 
 ### Code Submission & Judging — [Implemented: Python, C, C++, Java]
-- **Submission UI:** `app/problems/[id]/page.tsx` and `app/contests/[id]/arena/page.tsx` — language selector (python/c/c++/java), code editor, Run (samples) vs Submit (all cases)
+- **Submission UI:** `app/problems/[id]/page.tsx` and `app/contests/[id]/arena/page.tsx` — language selector (python/c/c++/java), Monaco/editor, Run (samples) vs Submit (all cases).
+- **Codeforces Interactive Workspace:**
+  - **Custom Test Runner (`POST /api/judge/run`):** Non-persisted real-time interactive testing with arbitrary user-supplied `stdin` and optional expected output diffing. Execution time, memory, stdout, and stderr displayed immediately.
+  - **Sample Cases Runner:** Multi-tab sample testing with per-case pass/fail badges, expected vs actual stdout diffs, and execution metrics.
+  - **In-Workspace Submissions Drawer:** Tab showing recent submissions on the problem with real-time SSE verdict streaming.
+  - **Fast I/O Starter Templates:** Preloaded CP templates for C++ (`bits/stdc++.h` + fast I/O), Python 3.11, Java, and C with one-click reset and copy buttons.
 - **Submission flow:** `POST /api/submissions` validates auth/ids/code/mode → inserts `pending→running` → calls FastAPI `POST /judge` → persists verdict to Neon → returns result (see `docs/status.md` pipeline)
 - **Judge module:** `api/app/judge.py` — per-language prepare (py_compile / gcc / g++ / javac), isolated temp workdir per submission, `subprocess.run` per case with `RLIMIT_AS` (POSIX, except Java — heap capped via `-Xmx`) + wall timeout `time_limit_ms+2s`, whitespace-normalized comparison, verdicts `AC/WA/TLE/MLE/RE/CE`
 - **Verdict types:** `accepted`, `wrong_answer`, `time_limit_exceeded`, `memory_limit_exceeded`, `runtime_error`, `compilation_error` — mapped to `submission_status`
 - **Multiple submissions:** all stored; `GET /api/submissions?problemId=&contestId=` lists caller's history
 
-### Real-Time Submission Status — [Planned]
-- Intended: Redis pub/sub → Next.js SSE for live `Pending → Running → Verdict` updates
-- Current: synchronous judge call (55s abort, `maxDuration=60`); status transitions `pending→running→final` persisted before response. No WebSocket/Realtime.
-- Previous wording referencing Supabase Realtime subscriptions is obsolete and removed.
+### Real-Time Submission Status — [Implemented]
+- Live verdict updates via Server-Sent Events (`GET /api/submissions/[id]/events`) and contest leaderboard updates (`GET /api/contests/[id]/events`).
+- Interactive submission drawer in problem workspace streams live verdict transitions (`pending` → `running` → `verdict`).
 
-### Leaderboard — [Implemented, on-demand]
-- **Ranking:** `GET /api/rankings?contestId=` — ICPC style: `solved_count DESC, penalty ASC` where `penalty = minutes_to_first_AC + 20*wrong_before_AC`
-- **Live updates:** not yet realtime — computed from `submissions` on each request; Redis cache + SSE is planned
-- **Post-contest:** standings available for `live|ended|archived` contests; no freeze distinction yet
+### Leaderboard & DOMjudge Scoreboard — [Implemented]
+- **Ranking:** `GET /api/rankings?contestId=` — ICPC style: `solved_count DESC, penalty ASC` where `penalty = minutes_to_first_AC + 20*wrong_before_AC`. Compilation errors (`CE`) do not incur penalties.
+- **12-Color Balloon Palette:** Distinct DOMjudge balloon colors associated with problems across problem letters, arena header, and scoreboard columns.
+- **First-to-Solve (First Blood):** Earliest AC submission on each problem is highlighted with a gold star badge (`★`) and dark green cell styling.
+- **Scoreboard Freeze:** Standings in the final 60 minutes of live contests are frozen (`?` pending indicator) to preserve suspense without leaking post-freeze solve times.
+- **Problem Summary Footer:** DOMjudge-style bottom row displaying total solves, total attempts, and acceptance percentage per problem.
+- **Contestant Search Filter:** Client-side real-time filter by contestant username.
 
 ### Problem Archive — [Implemented]
 - Published problems remain available 24/7 for practice via `GET /api/problems` and `GET /api/problems/[id]`

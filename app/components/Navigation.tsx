@@ -47,8 +47,8 @@ const navLinks = [
     ),
   },
   {
-    href: "/submissions/1042",
-    signedOutHref: "/submissions/1042",
+    href: "/submissions",
+    signedOutHref: "/submissions",
     label: "Submissions",
     icon: <span className="font-mono text-xs">#</span>,
   },
@@ -56,7 +56,7 @@ const navLinks = [
 
 export default function Navigation() {
   const pathname = usePathname();
-  const { isSignedIn } = useAuth();
+  const { isSignedIn, has } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
@@ -90,7 +90,7 @@ export default function Navigation() {
             })}
           </div>
 
-          {/* Desktop auth controls */}
+            {/* Desktop auth controls */}
           <div className="hidden md:flex items-center gap-4">
             {!isSignedIn ? (
               <>
@@ -106,13 +106,27 @@ export default function Navigation() {
                 </SignUpButton>
               </>
             ) : (
-              <UserButton
-                appearance={{
-                  elements: {
-                    avatarBox: "w-8 h-8",
-                  },
-                }}
-              />
+              <div className="flex items-center gap-3">
+                {Boolean(has?.({ role: "org:admin" }) || has?.({ role: "org:contest_setter" })) && (
+                  <Link
+                    href="/admin"
+                    className={`text-[10px] font-mono px-2 py-0.5 rounded border transition-colors ${
+                      pathname.startsWith("/admin")
+                        ? "bg-kjprimary/20 text-kjprimary border-kjprimary/50 font-bold"
+                        : "border-kjborder text-kjtext-muted hover:text-kjprimary hover:border-kjprimary/40"
+                    }`}
+                  >
+                    ADMIN
+                  </Link>
+                )}
+                <UserButton
+                  appearance={{
+                    elements: {
+                      avatarBox: "w-8 h-8",
+                    },
+                  }}
+                />
+              </div>
             )}
           </div>
 
@@ -172,13 +186,24 @@ export default function Navigation() {
                 </SignUpButton>
               </>
             ) : (
-              <UserButton
-                appearance={{
-                  elements: {
-                    avatarBox: "w-8 h-8",
-                  },
-                }}
-              />
+              <div className="flex items-center justify-between">
+                <UserButton
+                  appearance={{
+                    elements: {
+                      avatarBox: "w-8 h-8",
+                    },
+                  }}
+                />
+                {Boolean(has?.({ role: "org:admin" }) || has?.({ role: "org:contest_setter" })) && (
+                  <Link
+                    href="/admin"
+                    onClick={() => setMobileOpen(false)}
+                    className="text-xs font-mono text-kjprimary border border-kjprimary/40 px-3 py-1 rounded"
+                  >
+                    ADMIN CONSOLE →
+                  </Link>
+                )}
+              </div>
             )}
           </div>
         </div>

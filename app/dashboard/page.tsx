@@ -60,6 +60,49 @@ export default async function DashboardPage() {
   const usersCount = usersCountRows[0]?.count ?? 0;
   const submissionsTodayCount = submissionsTodayRows[0]?.count ?? 0;
 
+  // Personal contestant statistics
+  const [userSubmissions, userAcceptedRows] = await Promise.all([
+    db
+      .select({
+        id: submissions.id,
+        problemId: submissions.problemId,
+        problemTitle: problems.title,
+        status: submissions.status,
+        executionTimeMs: submissions.executionTimeMs,
+        submittedAt: submissions.submittedAt,
+      })
+      .from(submissions)
+      .leftJoin(problems, eq(submissions.problemId, problems.id))
+      .where(eq(submissions.userId, userId))
+      .orderBy(sql`${submissions.submittedAt} DESC`)
+      .limit(6),
+    db
+      .select({
+        problemId: submissions.problemId,
+        difficulty: problems.difficulty,
+      })
+      .from(submissions)
+      .leftJoin(problems, eq(submissions.problemId, problems.id))
+      .where(sql`${submissions.userId} = ${userId} AND ${submissions.status} = 'accepted'`),
+  ]);
+
+  const solvedProblemMap = new Map<number, string>();
+  for (const row of userAcceptedRows) {
+    if (row.problemId && !solvedProblemMap.has(row.problemId)) {
+      solvedProblemMap.set(row.problemId, row.difficulty ?? "easy");
+    }
+  }
+
+  const userSolvedTotal = solvedProblemMap.size;
+  let userEasy = 0;
+  let userMedium = 0;
+  let userHard = 0;
+  for (const diff of solvedProblemMap.values()) {
+    if (diff === "easy") userEasy++;
+    else if (diff === "medium") userMedium++;
+    else if (diff === "hard") userHard++;
+  }
+
   const liveContests = await db
     .select()
     .from(contests)
@@ -137,6 +180,90 @@ export default async function DashboardPage() {
           <StatCard label="ACTIVE CONTESTS" value={liveContestsCount} icon="★" accent />
           <StatCard label="REGISTERED USERS" value={usersCount} icon="@" accent />
           <StatCard label="SUBMISSIONS TODAY" value={submissionsTodayCount} icon="→" />
+        </section>
+
+        {/* Personal Progress Section (LeetCode/CF style) */}
+        <section className="mb-16">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <h2 className="uppercase font-mono tracking-widest text-sm text-kjprimary">
+                My Progress
+              </h2>
+              <div className="h-px w-24 bg-kjprimary/30" />
+            </div>
+            <Link
+              href="/submissions"
+              className="text-xs font-mono text-kjtext-muted hover:text-kjprimary transition-colors"
+            >
+              All submissions →
+            </Link>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+            <div className="bg-kjsurface border border-kjborder rounded-lg p-5">
+              <p className="text-xs font-mono text-kjtext-muted">SOLVED</p>
+              <p className="text-3xl font-mono font-bold text-kjprimary mt-2">
+                {userSolvedTotal}
+                <span className="text-xs text-kjtext-muted font-normal ml-2">/ {publishedProblemsCount}</span>
+              </p>
+            </div>
+            <div className="bg-kjsurface border border-green-500/20 rounded-lg p-5">
+              <p className="text-xs font-mono text-green-400">EASY</p>
+              <p className="text-3xl font-mono font-bold text-green-400 mt-2">{userEasy}</p>
+            </div>
+            <div className="bg-kjsurface border border-yellow-500/20 rounded-lg p-5">
+              <p className="text-xs font-mono text-yellow-400">MEDIUM</p>
+              <p className="text-3xl font-mono font-bold text-yellow-400 mt-2">{userMedium}</p>
+            </div>
+            <div className="bg-kjsurface border border-red-500/20 rounded-lg p-5">
+              <p className="text-xs font-mono text-red-400">HARD</p>
+              <p className="text-3xl font-mono font-bold text-red-400 mt-2">{userHard}</p>
+            </div>
+          </div>
+
+          {/* Recent Activity */}
+          {userSubmissions.length > 0 && (
+            <div className="bg-kjsurface border border-kjborder rounded-lg p-5">
+              <div className="flex justify-between items-center mb-4">
+                <p className="text-xs uppercase font-mono text-kjtext-muted tracking-wider">Recent Submissions</p>
+                <Link href="/submissions" className="text-xs font-mono text-kjprimary hover:underline">
+                  View full history →
+                </Link>
+              </div>
+              <div className="divide-y divide-kjborder/60 text-xs font-mono">
+                {userSubmissions.map((s) => (
+                  <div key={s.id} className="py-2.5 flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span
+                        className={`border rounded-full px-2 py-0.5 text-[10px] uppercase ${
+                          s.status === "accepted"
+                            ? "text-green-400 border-green-400/20 bg-green-400/10"
+                            : "text-red-400 border-red-400/20 bg-red-400/10"
+                        }`}
+                      >
+                        {s.status.replaceAll("_", " ")}
+                      </span>
+                      <Link
+                        href={`/problems/${s.problemId}`}
+                        className="text-kjtext hover:text-kjprimary truncate font-sans font-medium"
+                      >
+                        {s.problemTitle ?? `Problem #${s.problemId}`}
+                      </Link>
+                    </div>
+                    <div className="flex items-center gap-4 text-kjtext-muted shrink-0">
+                      {s.executionTimeMs !== null && <span>{s.executionTimeMs} ms</span>}
+                      <Link
+                        href={`/submissions/${s.id}`}
+                        className="text-kjprimary hover:underline text-[11px]"
+                      >
+                        #{s.id}
+                      </Link>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
 
         {/* Active Contests */}

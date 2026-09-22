@@ -68,6 +68,7 @@ class JudgeResponse(BaseModel):
     passed_tests: int
     total_tests: int
     execution_time_ms: int
+    memory_used_mb: int = 0
     error_message: str | None = None
     cases: list[CaseResult]
 
@@ -171,11 +172,16 @@ def _prepare(language: str, code: str, workdir: Path, memory_mb: int) -> tuple[l
         return [str(workdir / "solution")], None
 
     if language == "java":
-        if "class Solution" not in code:
-            return [], "Java submissions must declare 'public class Solution'"
-        src = workdir / "Solution.java"
+        main_class = "Solution"
+        if "class Main" in code:
+            main_class = "Main"
+        elif "class Solution" in code:
+            main_class = "Solution"
+        else:
+            return [], "Java submissions must declare 'public class Main' or 'public class Solution'"
+        src = workdir / f"{main_class}.java"
         src.write_text(code, encoding="utf-8")
-        err = _compile(src, ["javac", "Solution.java"])
+        err = _compile(src, ["javac", f"{main_class}.java"])
         if err is not None:
             return [], err
         heap_mb = max(64, memory_mb * 3 // 4)
@@ -187,7 +193,7 @@ def _prepare(language: str, code: str, workdir: Path, memory_mb: int) -> tuple[l
             "-XX:MaxMetaspaceSize=96M",
             "-cp",
             str(workdir),
-            "Solution",
+            main_class,
         ], None
 
     return [], f"Unsupported language: {language}"
@@ -250,6 +256,7 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
 
         results: list[CaseResult] = []
         max_runtime = 0
+        peak_memory_kb = 0
         aggregate: Verdict = "accepted"
         first_error: str | None = None
 
@@ -266,6 +273,13 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
                     **kwargs,
                 )
                 elapsed_ms = int((time.monotonic() - start) * 1000)
+                # Sample peak child memory (ru_maxrss is in KB on Linux)
+                if _HAS_RESOURCE:
+                    try:
+                        usage = resource.getrusage(resource.RUSAGE_CHILDREN)  # type: ignore[attr-defined]
+                        peak_memory_kb = max(peak_memory_kb, usage.ru_maxrss)
+                    except (ValueError, OSError):
+                        pass
                 # Enforce time_limit_ms wall as TLE if elapsed exceeds limit (best-effort)
                 # If process exceeded resource limit, it may be killed; treat as memory limit
                 # but we map non-zero exit generally to runtime_error unless we detect TLE
@@ -419,6 +433,7 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
             passed_tests=passed,
             total_tests=total,
             execution_time_ms=max_runtime,
+            memory_used_mb=max(1, peak_memory_kb // 1024) if peak_memory_kb > 0 else 0,
             error_message=error_message,
             cases=results,
         )

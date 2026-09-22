@@ -4,7 +4,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import Navigation from "@/app/components/Navigation";
 
 type SubmissionDetail = {
@@ -20,6 +20,14 @@ type SubmissionDetail = {
   passedTests: number | null;
   totalTests: number | null;
   errorMessage: string | null;
+  caseResults: Array<{
+    index: number;
+    passed: boolean;
+    verdict: string;
+    runtime_ms: number;
+    stdout: string;
+    stderr: string;
+  }> | null;
   submittedAt: string | null;
   completedAt: string | null;
   startedAt: string | null;
@@ -54,6 +62,7 @@ export default function SubmissionStatusPage() {
   const [problem, setProblem] = useState<ProblemBrief | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [expandedTests, setExpandedTests] = useState<Set<number>>(new Set());
 
   const fetchSubmission = useCallback(async () => {
     if (!id) return;
@@ -66,6 +75,11 @@ export default function SubmissionStatusPage() {
     try {
       const res = await fetch(`/api/submissions/${encodeURIComponent(id)}`, { cache: "no-store" });
       if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          setError("__AUTH_REQUIRED__");
+          setLoading(false);
+          return;
+        }
         const j = (await res.json().catch(() => null)) as { error?: string } | null;
         throw new Error(j?.error ?? `failed (${res.status})`);
       }
@@ -95,15 +109,34 @@ export default function SubmissionStatusPage() {
     void fetchSubmission();
   }, [fetchSubmission]);
 
-  // polling only while pending/running
+  // Subscribe to SSE for real-time verdict delivery (REQ-JUDGE-12)
+  const sseSubId = submission?.id;
+  const sseSubStatus = submission?.status;
   useEffect(() => {
-    if (!submission) return;
-    if (!PENDING.has(submission.status)) return;
-    const interval = setInterval(() => {
+    if (sseSubId === undefined || sseSubStatus === undefined) return;
+    if (!PENDING.has(sseSubStatus)) return;
+
+    const es = new EventSource(`/api/submissions/${sseSubId}/events`);
+    es.addEventListener("status", (ev) => {
+      try {
+        const data = JSON.parse(ev.data) as Partial<SubmissionDetail>;
+        setSubmission((prev) => prev ? { ...prev, ...data } : prev);
+      } catch { /* ignore */ }
+    });
+    es.addEventListener("done", (ev) => {
+      es.close();
+      try {
+        const data = JSON.parse(ev.data) as Partial<SubmissionDetail>;
+        setSubmission((prev) => prev ? { ...prev, ...data } : prev);
+      } catch { /* ignore */ }
+    });
+    es.addEventListener("error", () => {
+      es.close();
+      // Fallback: refetch once on SSE failure
       void fetchSubmission();
-    }, 2000);
-    return () => clearInterval(interval);
-  }, [submission, fetchSubmission]);
+    });
+    return () => es.close();
+  }, [sseSubId, sseSubStatus, fetchSubmission]);
 
   const statusInfo = submission ? formatStatus(submission.status) : null;
   const submittedLabel = submission?.submittedAt ? new Date(submission.submittedAt).toLocaleString() : "--";
@@ -132,6 +165,30 @@ export default function SubmissionStatusPage() {
   }
 
   if (error) {
+    if (error === "__AUTH_REQUIRED__") {
+      return (
+        <>
+          <Navigation />
+          <main className="pt-20 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            <Link href="/problems" className="text-xs font-mono text-kjtext-muted hover:text-kjprimary">
+              ← Back to problems
+            </Link>
+            <div className="mt-8 bg-kjsurface border border-kjborder rounded-lg p-10 text-center max-w-md mx-auto">
+              <p className="text-sm font-mono text-kjtext mb-2">Sign in required</p>
+              <p className="text-xs font-mono text-kjtext-muted mb-5">
+                You need to be signed in to view this submission. This submission may belong to another user.
+              </p>
+              <Link
+                href="/sign-in"
+                className="inline-block bg-kjprimary text-kjbg font-mono font-bold text-xs px-6 py-2.5 rounded hover:glow-sm transition-all"
+              >
+                SIGN IN →
+              </Link>
+            </div>
+          </main>
+        </>
+      );
+    }
     return (
       <>
         <Navigation />
@@ -139,7 +196,9 @@ export default function SubmissionStatusPage() {
           <Link href="/problems" className="text-xs font-mono text-kjtext-muted hover:text-kjprimary">
             ← Back to problems
           </Link>
-          <div className="mt-6 border border-red-500/30 bg-red-500/10 rounded p-4 text-xs font-mono text-red-400">Error: {error}</div>
+          <div className="mt-6 border border-red-500/30 bg-red-500/10 rounded p-4 text-xs font-mono text-red-400">
+            {error}
+          </div>
         </main>
       </>
     );
@@ -150,7 +209,21 @@ export default function SubmissionStatusPage() {
       <>
         <Navigation />
         <main className="pt-20 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <p className="text-xs font-mono text-kjtext-muted">Submission not found.</p>
+          <Link href="/problems" className="text-xs font-mono text-kjtext-muted hover:text-kjprimary">
+            ← Back to problems
+          </Link>
+          <div className="mt-8 bg-kjsurface border border-kjborder rounded-lg p-10 text-center max-w-md mx-auto">
+            <p className="text-sm font-mono text-kjtext mb-2">Submission not found</p>
+            <p className="text-xs font-mono text-kjtext-muted mb-5">
+              This submission may have been deleted or the ID is invalid.
+            </p>
+            <Link
+              href="/submissions"
+              className="inline-block border border-kjborder text-kjprimary hover:border-kjprimary font-mono text-xs px-4 py-2 rounded transition-colors"
+            >
+              View my submissions →
+            </Link>
+          </div>
         </main>
       </>
     );
@@ -160,7 +233,10 @@ export default function SubmissionStatusPage() {
     <>
       <Navigation />
       <main className="pt-20 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <Link href={problem ? `/problems/${problem.id}` : "/problems"} className="text-xs font-mono text-kjtext-muted hover:text-kjprimary">
+        <Link
+          href={problem ? `/problems/${problem.id}${submission.contestId ? `?contestId=${submission.contestId}` : ""}` : "/problems"}
+          className="text-xs font-mono text-kjtext-muted hover:text-kjprimary"
+        >
           ← Return to problem
         </Link>
         <div className="mt-6 flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4">
@@ -168,7 +244,17 @@ export default function SubmissionStatusPage() {
             <p className="text-xs uppercase tracking-widest font-mono text-kjprimary">Submission monitor</p>
             <h1 className="text-3xl font-mono font-bold text-kjtext mt-2">Submission #{submission.id}</h1>
           </div>
-          <span className={`font-mono text-sm ${statusInfo?.color}`}>{statusInfo?.label}</span>
+          <div className="flex flex-col items-end gap-2">
+            <span className={`font-mono text-sm font-bold ${statusInfo?.color}`}>{statusInfo?.label}</span>
+            {submission.contestId && (
+              <Link
+                href={`/rankings?contestId=${submission.contestId}`}
+                className="text-xs font-mono text-kjprimary hover:underline"
+              >
+                View contest standings →
+              </Link>
+            )}
+          </div>
         </div>
 
         <section className="mt-8 bg-kjsurface border border-kjborder rounded-lg p-6">
@@ -191,21 +277,106 @@ export default function SubmissionStatusPage() {
             </div>
           </div>
 
-          <div className="mt-10">
-            <div className="flex justify-between text-xs font-mono text-kjtext-muted mb-2">
-              <span>TEST CASE PROGRESS</span>
-              <span>
-                {submission.passedTests !== null && submission.totalTests !== null
-                  ? `${submission.passedTests} / ${submission.totalTests}`
-                  : PENDING.has(submission.status)
-                    ? "queued"
-                    : "--"}
-              </span>
+          {submission.caseResults && submission.caseResults.length > 0 ? (
+            <div className="mt-8">
+              <div className="flex justify-between text-xs font-mono text-kjtext-muted mb-3">
+                <span>TEST CASE RESULTS</span>
+                <span>
+                  {submission.passedTests !== null && submission.totalTests !== null
+                    ? `${submission.passedTests} / ${submission.totalTests}`
+                    : `${submission.caseResults.filter((c) => c.passed).length} / ${submission.caseResults.length}`}
+                </span>
+              </div>
+              <div className="border border-kjborder rounded-lg overflow-hidden">
+                <table className="w-full text-xs font-mono">
+                  <thead>
+                    <tr className="bg-kjbg border-b border-kjborder text-kjtext-muted">
+                      <th className="text-left py-2.5 px-4 uppercase tracking-wider">Test #</th>
+                      <th className="text-left py-2.5 px-4 uppercase tracking-wider">Result</th>
+                      <th className="text-right py-2.5 px-4 uppercase tracking-wider">Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {submission.caseResults.map((tc) => (
+                      <Fragment key={tc.index}>
+                        <tr
+                          className={`border-b border-kjborder/50 ${
+                            !tc.passed ? "cursor-pointer hover:bg-kjbg/60" : ""
+                          }`}
+                          onClick={
+                            !tc.passed
+                              ? () =>
+                                  setExpandedTests((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(tc.index)) next.delete(tc.index);
+                                    else next.add(tc.index);
+                                    return next;
+                                  })
+                              : undefined
+                          }
+                        >
+                          <td className="py-2 px-4 text-kjtext tabular-nums">{tc.index + 1}</td>
+                          <td className="py-2 px-4">
+                            <span
+                              className={
+                                tc.passed
+                                  ? "text-green-400"
+                                  : tc.verdict === "time_limit_exceeded"
+                                    ? "text-yellow-400"
+                                    : "text-red-400"
+                              }
+                            >
+                              {tc.passed ? "✓ PASS" : `✗ ${tc.verdict.replace(/_/g, " ").toUpperCase()}`}
+                            </span>
+                          </td>
+                          <td className="py-2 px-4 text-right text-kjtext-muted tabular-nums">
+                            {tc.runtime_ms != null ? `${tc.runtime_ms} ms` : "--"}
+                          </td>
+                        </tr>
+                        {!tc.passed && expandedTests.has(tc.index) && (
+                          <tr>
+                            <td colSpan={3} className="bg-kjbg px-4 py-3 border-b border-kjborder/50">
+                              <p className="text-[10px] uppercase tracking-wider text-kjtext-muted mb-1.5">
+                                stdout
+                              </p>
+                              <pre className="text-xs font-mono text-kjtext whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
+                                {tc.stdout || "(no output)"}
+                              </pre>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
-            <div className="h-2 rounded bg-kjbg overflow-hidden">
-              <div className="h-full bg-kjprimary transition-all duration-700" style={{ width: `${progress}%` }} />
+          ) : (
+            <div className="mt-10">
+              <div className="flex justify-between text-xs font-mono text-kjtext-muted mb-2">
+                <span>TEST CASE PROGRESS</span>
+                <span>
+                  {submission.passedTests !== null && submission.totalTests !== null
+                    ? `${submission.passedTests} / ${submission.totalTests}`
+                    : PENDING.has(submission.status)
+                      ? "queued"
+                      : "--"}
+                </span>
+              </div>
+              <div className="h-2.5 rounded bg-kjbg overflow-hidden">
+                <div
+                  className={`h-full transition-all duration-700 rounded ${
+                    submission.status === "accepted"
+                      ? "bg-gradient-to-r from-green-500 to-green-400"
+                      : TERMINAL.has(submission.status) && submission.status !== "accepted"
+                        ? "bg-gradient-to-r from-red-500 to-red-400"
+                        : "bg-kjprimary"
+                  }`}
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
             </div>
-          </div>
+          )}
         </section>
 
         <div className="grid sm:grid-cols-3 gap-4 mt-4">
@@ -250,8 +421,18 @@ export default function SubmissionStatusPage() {
           </pre>
         </section>
 
-        {PENDING.has(submission.status) && <p className="mt-4 text-xs font-mono text-kjtext-muted">Polling DB every 2s until terminal verdict…</p>}
-        {isTerminal && <p className="mt-4 text-xs font-mono text-kjtext-muted">Terminal verdict reached — polling stopped.</p>}
+        {PENDING.has(submission.status) && (
+          <div className="mt-4 flex items-center gap-2 text-xs font-mono text-kjtext-muted">
+            <span className="inline-block w-2 h-2 bg-yellow-400 rounded-full animate-pulse" />
+            Live update via SSE — waiting for verdict…
+          </div>
+        )}
+        {isTerminal && (
+          <div className="mt-4 flex items-center gap-2 text-xs font-mono text-kjtext-muted">
+            <span className={`inline-block w-2 h-2 rounded-full ${submission.status === "accepted" ? "bg-green-400" : "bg-red-400"}`} />
+            Terminal verdict reached.
+          </div>
+        )}
       </main>
     </>
   );

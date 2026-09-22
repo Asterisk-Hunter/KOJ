@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { asc, eq, sql } from "drizzle-orm";
+import { asc, eq, not, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contestRegistrations, contests } from "@/db/schema";
 import { settleExpiredContests } from "@/app/api/contests/lifecycle";
@@ -42,6 +42,7 @@ export async function GET() {
   const contestRows = await db
     .select()
     .from(contests)
+    .where(not(eq(contests.status, "draft")))
     .orderBy(asc(contests.startsAt));
 
   // Batch counts

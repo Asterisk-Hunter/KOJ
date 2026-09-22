@@ -9,7 +9,9 @@ import ContestsSection from "@/app/admin/ContestsSection";
 import UsersSection from "@/app/admin/UsersSection";
 import ProblemTestCases from "@/app/admin/ProblemTestCases";
 import ProblemManagerSection from "@/app/admin/ProblemManagerSection";
+import ProblemStudio from "@/app/admin/ProblemStudio";
 import SubmissionsSection from "@/app/admin/SubmissionsSection";
+import ObservabilitySection from "@/app/admin/ObservabilitySection";
 
 type Summary = {
   role?: "admin" | "problem_setter" | "contest_setter";
@@ -18,36 +20,13 @@ type Summary = {
   recentUsers: Array<{ clerkId: string; username: string; email: string; role: string; createdAt: string }>;
 };
 
-type CreateForm = {
-  title: string;
-  statement: string;
-  inputFormat: string;
-  outputFormat: string;
-  constraints: string;
-  difficulty: string;
-  tags: string;
-  timeLimitMs: string;
-  memoryLimitMb: string;
-};
-
 export default function AdminPage() {
   const [data, setData] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [form, setForm] = useState<CreateForm>({
-    title: "",
-    statement: "",
-    inputFormat: "",
-    outputFormat: "",
-    constraints: "",
-    difficulty: "easy",
-    tags: "",
-    timeLimitMs: "1000",
-    memoryLimitMb: "256",
-  });
+  const [showStudio, setShowStudio] = useState(false);
   const [createMessage, setCreateMessage] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [expandedTests, setExpandedTests] = useState<number | null>(null);
   const [editingProblemId, setEditingProblemId] = useState<number | null>(null);
@@ -74,55 +53,7 @@ export default function AdminPage() {
     void fetchSummary();
   }, []);
 
-  async function handleCreate(e: React.FormEvent) {
-    e.preventDefault();
-    setCreateMessage(null);
-    setCreateError(null);
-    setCreating(true);
-    try {
-      const payload = {
-        title: form.title,
-        statement: form.statement,
-        inputFormat: form.inputFormat,
-        outputFormat: form.outputFormat,
-        constraints: form.constraints,
-        difficulty: form.difficulty,
-        tags: form.tags
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean),
-        timeLimitMs: Number(form.timeLimitMs),
-        memoryLimitMb: Number(form.memoryLimitMb),
-      };
-      const res = await fetch("/api/admin/problems", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
-        const j = (await res.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(j?.error ?? `create failed (${res.status})`);
-      }
-      const j = (await res.json()) as { id: number };
-      setCreateMessage(`Created problem #${j.id}`);
-      setForm({
-        title: "",
-        statement: "",
-        inputFormat: "",
-        outputFormat: "",
-        constraints: "",
-        difficulty: "easy",
-        tags: "",
-        timeLimitMs: "1000",
-        memoryLimitMb: "256",
-      });
-      void fetchSummary();
-    } catch (err) {
-      setCreateError(err instanceof Error ? err.message : "create failed");
-    } finally {
-      setCreating(false);
-    }
-  }
+
 
   async function handleDeleteProblem(id: number) {
     if (
@@ -190,11 +121,31 @@ export default function AdminPage() {
         {createMessage && <p className="mb-5 border border-kjprimary/20 bg-kjprimary/5 text-kjprimary rounded p-3 text-xs font-mono">{createMessage}</p>}
         {createError && <p className="mb-5 border border-red-500/20 bg-red-500/10 text-red-400 rounded p-3 text-xs font-mono">{createError}</p>}
 
+        {showStudio && (
+          <div className="mb-8">
+            <ProblemStudio
+              onProblemCreated={() => {
+                void fetchSummary();
+              }}
+              onCancel={() => setShowStudio(false)}
+            />
+          </div>
+        )}
+
         <div className={`grid gap-6 ${data?.role === "problem_setter" ? "grid-cols-1" : "xl:grid-cols-2"}`}>
           <section className="bg-kjsurface border border-kjborder rounded-lg overflow-hidden">
-            <div className="px-5 py-4 border-b border-kjborder flex justify-between items-center">
+            <div className="px-5 py-4 border-b border-kjborder flex justify-between items-center flex-wrap gap-2">
               <h2 className="font-mono text-sm text-kjtext">Problem management</h2>
-              <span className="text-[11px] font-mono text-kjtext-muted">{data ? `${data.counts.problems} total` : ""}</span>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowStudio((prev) => !prev)}
+                  className="bg-kjprimary text-kjbg hover:glow-sm px-3 py-1 rounded text-xs font-bold uppercase transition-all cursor-pointer"
+                >
+                  {showStudio ? "✕ Close Studio" : "+ New Problem / ⚡ Import"}
+                </button>
+                <span className="text-[11px] font-mono text-kjtext-muted">{data ? `${data.counts.problems} total` : ""}</span>
+              </div>
             </div>
             {data && data.recentProblems.length === 0 && (
               <p className="px-5 py-8 text-center text-xs font-mono text-kjtext-muted">No problems yet. Create one below.</p>
@@ -279,90 +230,16 @@ export default function AdminPage() {
                   {expandedTests === problem.id && <ProblemTestCases problemId={problem.id} />}
                 </div>
               ))}
-            <form onSubmit={handleCreate} className="p-5 space-y-3 bg-kjbg/30">
-              <h3 className="font-mono text-xs text-kjprimary uppercase tracking-widest">Create problem</h3>
-              <input
-                value={form.title}
-                onChange={(e) => setForm({ ...form, title: e.target.value })}
-                placeholder="Title"
-                required
-                className="w-full bg-kjsurface border border-kjborder rounded px-3 py-2 text-sm font-mono text-kjtext"
-              />
-              <textarea
-                value={form.statement}
-                onChange={(e) => setForm({ ...form, statement: e.target.value })}
-                placeholder="Statement"
-                required
-                rows={3}
-                className="w-full bg-kjsurface border border-kjborder rounded px-3 py-2 text-sm font-mono text-kjtext"
-              />
-              <div className="grid sm:grid-cols-2 gap-3">
-                <textarea
-                  value={form.inputFormat}
-                  onChange={(e) => setForm({ ...form, inputFormat: e.target.value })}
-                  placeholder="Input format"
-                  required
-                  rows={2}
-                  className="bg-kjsurface border border-kjborder rounded px-3 py-2 text-sm font-mono text-kjtext"
-                />
-                <textarea
-                  value={form.outputFormat}
-                  onChange={(e) => setForm({ ...form, outputFormat: e.target.value })}
-                  placeholder="Output format"
-                  required
-                  rows={2}
-                  className="bg-kjsurface border border-kjborder rounded px-3 py-2 text-sm font-mono text-kjtext"
-                />
-              </div>
-              <textarea
-                value={form.constraints}
-                onChange={(e) => setForm({ ...form, constraints: e.target.value })}
-                placeholder="Constraints"
-                required
-                rows={2}
-                className="w-full bg-kjsurface border border-kjborder rounded px-3 py-2 text-sm font-mono text-kjtext"
-              />
-              <div className="grid sm:grid-cols-3 gap-3">
-                <select
-                  value={form.difficulty}
-                  onChange={(e) => setForm({ ...form, difficulty: e.target.value })}
-                  className="bg-kjsurface border border-kjborder rounded px-3 py-2 text-sm font-mono text-kjtext"
-                >
-                  <option value="easy">easy</option>
-                  <option value="medium">medium</option>
-                  <option value="hard">hard</option>
-                </select>
-                <input
-                  value={form.timeLimitMs}
-                  onChange={(e) => setForm({ ...form, timeLimitMs: e.target.value })}
-                  placeholder="Time ms"
-                  inputMode="numeric"
-                  required
-                  className="bg-kjsurface border border-kjborder rounded px-3 py-2 text-sm font-mono text-kjtext"
-                />
-                <input
-                  value={form.memoryLimitMb}
-                  onChange={(e) => setForm({ ...form, memoryLimitMb: e.target.value })}
-                  placeholder="Memory MB"
-                  inputMode="numeric"
-                  required
-                  className="bg-kjsurface border border-kjborder rounded px-3 py-2 text-sm font-mono text-kjtext"
-                />
-              </div>
-              <input
-                value={form.tags}
-                onChange={(e) => setForm({ ...form, tags: e.target.value })}
-                placeholder="Tags comma-separated (e.g. arrays, dp)"
-                className="w-full bg-kjsurface border border-kjborder rounded px-3 py-2 text-sm font-mono text-kjtext"
-              />
+            <div className="p-5 border-t border-kjborder bg-kjbg/30 text-center space-y-2">
+              <p className="text-xs text-kjtext-muted">Need to author or import competitive programming problems?</p>
               <button
-                type="submit"
-                disabled={creating}
-                className="w-full bg-kjprimary text-kjbg font-mono text-xs font-bold tracking-widest px-5 py-3 rounded disabled:opacity-50"
+                type="button"
+                onClick={() => setShowStudio(true)}
+                className="border border-kjprimary text-kjprimary hover:bg-kjprimary/10 px-4 py-2 rounded text-xs font-bold transition-all cursor-pointer"
               >
-                {creating ? "CREATING…" : "CREATE PROBLEM"}
+                ⚡ Open Problem Authoring Studio & 1-Click Importer
               </button>
-            </form>
+            </div>
           </section>
 
           {data?.role === "admin" && (
@@ -403,6 +280,7 @@ export default function AdminPage() {
         {(data?.role === "admin" || data?.role === "contest_setter") && <ContestsSection />}
         {data?.role === "admin" && <UsersSection />}
         {data?.role === "admin" && <SubmissionsSection />}
+        {data?.role === "admin" && <ObservabilitySection />}
       </main>
     </>
   );

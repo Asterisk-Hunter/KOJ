@@ -147,12 +147,16 @@ export default function ContestsPage() {
             </button>
           </div>
         ) : contests.length === 0 ? (
-          <div className="bg-kjsurface/40 border border-kjborder rounded-lg p-8 text-sm font-mono text-kjtext-muted">
-            No contests found. Check back soon.
+          <div className="bg-kjsurface/40 border border-kjborder rounded-lg p-8 text-center">
+            <p className="text-sm font-mono text-kjtext-muted mb-1">No contests found</p>
+            <p className="text-xs font-mono text-kjtext-muted/60">Check back soon — new contests are added regularly.</p>
           </div>
         ) : visible.length === 0 ? (
-          <div className="bg-kjsurface/40 border border-kjborder rounded-lg p-8 text-sm font-mono text-kjtext-muted">
-            No contests match &ldquo;{filter}&rdquo;.
+          <div className="bg-kjsurface/40 border border-kjborder rounded-lg p-8 text-center">
+            <p className="text-sm font-mono text-kjtext-muted mb-1">No {filter.toLowerCase()} contests</p>
+            <p className="text-xs font-mono text-kjtext-muted/60">
+              Try selecting a different filter above.
+            </p>
           </div>
         ) : (
           <div className="grid md:grid-cols-2 gap-4">
@@ -191,11 +195,17 @@ export default function ContestsPage() {
                 </div>
                 <div className="flex gap-3">
                   <Link
-                    href={`/contests/${encodeURIComponent(contest.id)}`}
+                    href={
+                      contest.status === "Active" && contest.registered
+                        ? `/contests/${encodeURIComponent(contest.id)}/arena`
+                        : `/contests/${encodeURIComponent(contest.id)}`
+                    }
                     className="bg-kjprimary text-kjbg font-mono font-bold text-xs px-4 py-2 rounded"
                   >
                     {contest.status === "Active"
-                      ? "ENTER ARENA"
+                      ? contest.registered
+                        ? "ENTER ARENA"
+                        : "VIEW DETAILS"
                       : contest.status === "Finished"
                         ? "VIEW RESULTS"
                         : "VIEW DETAILS"}

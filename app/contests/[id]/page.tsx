@@ -213,7 +213,7 @@ export default function ContestDetailPage() {
             <p className="text-[11px] uppercase tracking-widest font-mono text-kjtext-muted">
               {countdownLabel(contest.status)}
             </p>
-            <p className="text-3xl font-mono text-kjprimary mt-2">{countdown}</p>
+            <p className="text-3xl font-mono text-kjprimary mt-2 text-glow tabular-nums">{countdown}</p>
             <p className="text-xs font-mono text-kjtext-muted mt-2">
               {formatDuration(contest.startsAt, contest.endsAt)} · {contest.participants} participants
             </p>
@@ -233,7 +233,7 @@ export default function ContestDetailPage() {
               <span className="text-xs font-mono text-kjtext-muted">{contest.problemsCount} total</span>
             </div>
             {contest.problems.length === 0 ? (
-              <p className="px-5 py-8 text-sm font-mono text-kjtext-muted">No problems assigned to this contest.</p>
+              <p className="px-5 py-8 text-sm font-mono text-kjtext-muted text-center">No problems assigned to this contest yet.</p>
             ) : (
               contest.problems
                 .slice()
@@ -242,16 +242,22 @@ export default function ContestDetailPage() {
                   <Link
                     href={`/problems/${problem.id}?contestId=${contest.numericId}`}
                     key={problem.id}
-                    className="flex items-center justify-between px-5 py-4 border-b border-kjborder/70 hover:bg-kjsurface"
+                    className="flex items-center justify-between px-5 py-4 border-b border-kjborder/70 hover:bg-kjsurface transition-colors group"
                   >
                     <div className="flex gap-4 items-center">
-                      <span className="font-mono text-kjtext-muted">{String.fromCharCode(65 + index)}</span>
-                      <span className="text-sm text-kjtext">{problem.title}</span>
-                      <span className="text-[11px] font-mono text-kjtext-muted border border-kjborder rounded px-1.5 py-0.5">
+                      <span className="font-mono text-kjtext-muted w-5 text-center">{String.fromCharCode(65 + index)}</span>
+                      <span className="text-sm text-kjtext group-hover:text-kjprimary transition-colors">{problem.title}</span>
+                      <span className={`text-[11px] font-mono border rounded px-1.5 py-0.5 ${
+                        problem.difficulty === "easy"
+                          ? "text-green-400 border-green-400/20"
+                          : problem.difficulty === "medium"
+                            ? "text-yellow-400 border-yellow-400/20"
+                            : "text-red-400 border-red-400/20"
+                      }`}>
                         {problem.difficulty}
                       </span>
                     </div>
-                    <span className="text-xs font-mono text-kjprimary">OPEN →</span>
+                    <span className="text-xs font-mono text-kjprimary opacity-0 group-hover:opacity-100 transition-opacity">OPEN →</span>
                   </Link>
                 ))
             )}
@@ -262,19 +268,22 @@ export default function ContestDetailPage() {
               {showRegister ? (
                 <>
                   {contest.inviteRequired && !contest.registered && (
-                    <input
-                      value={inviteCode}
-                      onChange={(e) => setInviteCode(e.target.value)}
-                      placeholder="Invite code"
-                      className="w-full mb-3 bg-kjbg border border-kjborder rounded px-4 py-3 text-xs font-mono text-kjtext placeholder:text-kjtext-muted/50"
-                    />
+                    <div className="mb-3">
+                      <label className="block text-[11px] font-mono text-kjtext-muted mb-1.5">Invite code required</label>
+                      <input
+                        value={inviteCode}
+                        onChange={(e) => setInviteCode(e.target.value)}
+                        placeholder="Enter invite code"
+                        className="w-full bg-kjbg border border-kjborder rounded px-4 py-3 text-xs font-mono text-kjtext placeholder:text-kjtext-muted/50 focus:border-kjprimary focus:outline-none"
+                      />
+                    </div>
                   )}
                   <button
                     onClick={() => void handleRegister()}
-                    disabled={contest.registered || registering}
-                    className="w-full bg-kjprimary text-kjbg font-mono font-bold text-xs px-4 py-3 rounded disabled:opacity-60 disabled:cursor-not-allowed"
+                    disabled={contest.registered || registering || (contest.inviteRequired && !inviteCode.trim())}
+                    className="w-full bg-kjprimary text-kjbg font-mono font-bold text-xs px-4 py-3 rounded disabled:opacity-60 disabled:cursor-not-allowed hover:glow-sm transition-all"
                   >
-                    {contest.registered ? "REGISTERED" : registering ? "REGISTERING…" : "REGISTER NOW"}
+                    {contest.registered ? "✓ REGISTERED" : registering ? "REGISTERING…" : "REGISTER NOW"}
                   </button>
                 </>
               ) : null}
@@ -287,11 +296,11 @@ export default function ContestDetailPage() {
                 </Link>
               ) : contest.status === "Active" && !contest.registered ? (
                 <p className="mt-3 text-xs font-mono text-kjtext-muted border border-kjborder rounded p-3">
-                  Registration required to enter arena.
+                  Registration closed (contest already in progress).
                 </p>
               ) : null}
               <Link
-                href="/rankings"
+                href={`/rankings?contestId=${contest.numericId}`}
                 className="block text-center mt-3 text-xs font-mono text-kjprimary hover:underline"
               >
                 OPEN LEADERBOARD →

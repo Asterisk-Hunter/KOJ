@@ -1,34 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@clerk/nextjs/server";
-import { eq } from "drizzle-orm";
 import { db } from "@/db";
-import { problems, users } from "@/db/schema";
+import { problems, problemTestCases } from "@/db/schema";
+import { ensureUserRow, jsonError, requireSetter } from "@/app/api/admin/authz";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function jsonError(message: string, status: number) {
-  return NextResponse.json({ error: message }, { status });
-}
-
-async function isAdminOrSetter(userId: string): Promise<boolean> {
-  const authObj = await auth();
-  let clerkAdmin = false;
-  try {
-    const hasFn = (authObj as unknown as { has?: (arg: unknown) => Promise<boolean> | boolean }).has;
-    if (typeof hasFn === "function") {
-      const res = hasFn.call(authObj, { role: "org:admin" });
-      clerkAdmin = res instanceof Promise ? await res : Boolean(res);
-    }
-  } catch {
-    clerkAdmin = false;
-  }
-  if (clerkAdmin) return true;
-  const rows = await db.select().from(users).where(eq(users.clerkId, userId)).limit(1);
-  if (rows.length === 0) return false;
-  const role = rows[0].role;
-  return role === "admin" || role === "problem_setter";
-}
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_CASES = 100;
 
 type Difficulty = "easy" | "medium" | "hard";
 
@@ -40,19 +19,15 @@ function validateDifficulty(v: unknown): Difficulty | null {
 }
 
 export async function POST(req: NextRequest) {
-  const { userId } = await auth();
-  if (!userId) {
-    return jsonError("unauthorized", 401);
-  }
-  const authorized = await isAdminOrSetter(userId);
-  if (!authorized) {
-    return jsonError("forbidden", 403);
+  const grant = await requireSetter();
+  if (!grant.ok) {
+    return grant.response;
   }
 
-  // Require real users row
-  const userRows = await db.select().from(users).where(eq(users.clerkId, userId)).limit(1);
-  if (userRows.length === 0) {
-    return jsonError("user not found", 400);
+  const userId = grant.userId;
+  const ok = await ensureUserRow(userId);
+  if (!ok) {
+    return jsonError("user not found or could not be synced", 400);
   }
 
   let body: unknown;
@@ -72,6 +47,7 @@ export async function POST(req: NextRequest) {
   const tagsRaw = b.tags;
   const timeRaw = b.timeLimitMs ?? b.time_limit_ms ?? b.timeLimit ?? b.time;
   const memoryRaw = b.memoryLimitMb ?? b.memory_limit_mb ?? b.memoryLimit ?? b.memory;
+  const statusRaw = b.status;
 
   if (typeof title !== "string" || title.trim().length === 0) {
     return jsonError("title is required", 400);
@@ -144,23 +120,88 @@ export async function POST(req: NextRequest) {
     explanation = explanationRaw.trim().length === 0 ? null : explanationRaw;
   }
 
-  const inserted = await db
-    .insert(problems)
-    .values({
-      authorId: userId,
-      title: title.trim(),
-      statement: (statement as string).trim(),
-      inputFormat: (inputRaw as string).trim(),
-      outputFormat: (outputRaw as string).trim(),
-      constraints: (constraints as string).trim(),
-      explanation,
-      difficulty,
-      tags,
-      timeLimitMs,
-      memoryLimitMb,
-      status: "draft",
-    })
-    .returning({ id: problems.id });
+  const initialStatus: "draft" | "published" =
+    statusRaw === "published" ? "published" : "draft";
 
-  return NextResponse.json({ id: inserted[0].id }, { status: 201 });
+  // Validate optional testCases
+  type RawCase = { input: unknown; expectedOutput: unknown; isSample?: unknown; position?: unknown };
+  const testCasesRaw = b.testCases ?? b.test_cases;
+  const validatedCases: Array<{ input: string; expectedOutput: string; isSample: boolean; position: number }> = [];
+
+  if (testCasesRaw !== undefined && testCasesRaw !== null) {
+    if (!Array.isArray(testCasesRaw)) {
+      return jsonError("testCases must be an array", 400);
+    }
+    if (testCasesRaw.length > MAX_CASES) {
+      return jsonError(`at most ${MAX_CASES} test cases per problem`, 400);
+    }
+    for (let i = 0; i < testCasesRaw.length; i++) {
+      const tc = testCasesRaw[i] as RawCase;
+      if (!tc || typeof tc !== "object") {
+        return jsonError(`test case at index ${i} is invalid`, 400);
+      }
+      if (typeof tc.input !== "string" || tc.input.length === 0) {
+        return jsonError(`test case ${i + 1} input must be non-empty`, 400);
+      }
+      if (Buffer.byteLength(tc.input, "utf8") > MAX_FILE_BYTES) {
+        return jsonError(`test case ${i + 1} input exceeds 10MB`, 400);
+      }
+      if (typeof tc.expectedOutput !== "string" || tc.expectedOutput.length === 0) {
+        return jsonError(`test case ${i + 1} expectedOutput must be non-empty`, 400);
+      }
+      if (Buffer.byteLength(tc.expectedOutput, "utf8") > MAX_FILE_BYTES) {
+        return jsonError(`test case ${i + 1} expectedOutput exceeds 10MB`, 400);
+      }
+      const isSample = typeof tc.isSample === "boolean" ? tc.isSample : false;
+      const position = typeof tc.position === "number" && Number.isInteger(tc.position) && tc.position >= 0
+        ? tc.position
+        : i;
+
+      validatedCases.push({
+        input: tc.input,
+        expectedOutput: tc.expectedOutput,
+        isSample,
+        position,
+      });
+    }
+  }
+
+  // Insert problem and test cases in a single transaction
+  const result = await db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(problems)
+      .values({
+        authorId: userId,
+        title: title.trim(),
+        statement: (statement as string).trim(),
+        inputFormat: (inputRaw as string).trim(),
+        outputFormat: (outputRaw as string).trim(),
+        constraints: (constraints as string).trim(),
+        explanation,
+        difficulty,
+        tags,
+        timeLimitMs,
+        memoryLimitMb,
+        status: initialStatus,
+      })
+      .returning({ id: problems.id });
+
+    const problemId = inserted[0].id;
+
+    if (validatedCases.length > 0) {
+      await tx.insert(problemTestCases).values(
+        validatedCases.map((c) => ({
+          problemId,
+          input: c.input,
+          expectedOutput: c.expectedOutput,
+          isSample: c.isSample,
+          position: c.position,
+        }))
+      );
+    }
+
+    return { id: problemId, testCaseCount: validatedCases.length };
+  });
+
+  return NextResponse.json(result, { status: 201 });
 }

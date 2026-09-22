@@ -65,6 +65,9 @@ export default function ProblemManagerSection({
   });
   const [savingTc, setSavingTc] = useState(false);
   const [deletingTc, setDeletingTc] = useState<number | null>(null);
+  const [tcMode, setTcMode] = useState<"single" | "bulk">("single");
+  const [bulkTcText, setBulkTcText] = useState("");
+  const [savingBulkTc, setSavingBulkTc] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -188,6 +191,29 @@ export default function ProblemManagerSection({
       setError(e instanceof Error ? e.message : "failed to add test case");
     } finally {
       setSavingTc(false);
+    }
+  };
+
+  const handleBulkAddTestCases = async () => {
+    if (!bulkTcText.trim()) return;
+    setSavingBulkTc(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/admin/problems/${problemId}/test-cases/bulk`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rawText: bulkTcText }),
+      });
+      const j = (await res.json().catch(() => null)) as { error?: string; addedCount?: number } | null;
+      if (!res.ok) throw new Error(j?.error ?? `bulk add failed (${res.status})`);
+      setNotice(`Added ${j?.addedCount ?? 0} test cases in bulk`);
+      setBulkTcText("");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "bulk add failed");
+    } finally {
+      setSavingBulkTc(false);
     }
   };
 
@@ -597,77 +623,126 @@ export default function ProblemManagerSection({
         </div>
 
         <div className="border border-kjborder bg-kjsurface rounded-lg p-5 mt-6 space-y-4">
-          <h4 className="text-sm font-bold text-kjtext uppercase tracking-wide border-b border-kjborder pb-2">
-            Add New Test Case
-          </h4>
-          <div className="flex flex-wrap items-center gap-6">
-            <label className="flex items-center gap-2 text-xs text-kjtext">
-              <input
-                type="checkbox"
-                checked={newTcData.isSample}
-                onChange={(e) =>
-                  setNewTcData((p) => ({ ...p, isSample: e.target.checked }))
-                }
-              />
-              Is Sample
-            </label>
-            <div className="flex items-center gap-2 text-xs text-kjtext">
-              <span>Position:</span>
-              <input
-                type="number"
-                className="bg-kjbg border border-kjborder rounded px-2 py-1 w-20 text-kjtext"
-                value={newTcData.position}
-                onChange={(e) =>
-                  setNewTcData((p) => ({
-                    ...p,
-                    position: parseInt(e.target.value, 10),
-                  }))
-                }
-              />
+          <div className="flex items-center justify-between border-b border-kjborder pb-2">
+            <h4 className="text-sm font-bold text-kjtext uppercase tracking-wide">
+              {tcMode === "single" ? "Add Single Test Case" : "Bulk Import Test Cases (CSV)"}
+            </h4>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setTcMode("single")}
+                className={`px-3 py-1 text-xs font-mono rounded ${
+                  tcMode === "single" ? "bg-kjprimary/20 text-kjprimary border border-kjprimary/40" : "text-kjtext-muted hover:text-kjtext"
+                }`}
+              >
+                Single
+              </button>
+              <button
+                type="button"
+                onClick={() => setTcMode("bulk")}
+                className={`px-3 py-1 text-xs font-mono rounded ${
+                  tcMode === "bulk" ? "bg-kjprimary/20 text-kjprimary border border-kjprimary/40" : "text-kjtext-muted hover:text-kjtext"
+                }`}
+              >
+                Bulk (CSV)
+              </button>
             </div>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs text-kjtext-muted mb-1">
-                Input
-              </label>
+
+          {tcMode === "single" ? (
+            <>
+              <div className="flex flex-wrap items-center gap-6">
+                <label className="flex items-center gap-2 text-xs text-kjtext">
+                  <input
+                    type="checkbox"
+                    checked={newTcData.isSample}
+                    onChange={(e) =>
+                      setNewTcData((p) => ({ ...p, isSample: e.target.checked }))
+                    }
+                  />
+                  Is Sample
+                </label>
+                <div className="flex items-center gap-2 text-xs text-kjtext">
+                  <span>Position:</span>
+                  <input
+                    type="number"
+                    className="bg-kjbg border border-kjborder rounded px-2 py-1 w-20 text-kjtext"
+                    value={newTcData.position}
+                    onChange={(e) =>
+                      setNewTcData((p) => ({
+                        ...p,
+                        position: parseInt(e.target.value, 10),
+                      }))
+                    }
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-kjtext-muted mb-1">
+                    Input
+                  </label>
+                  <textarea
+                    className={inputCls}
+                    rows={4}
+                    value={newTcData.input}
+                    onChange={(e) =>
+                      setNewTcData((p) => ({ ...p, input: e.target.value }))
+                    }
+                    placeholder="Test case input..."
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-kjtext-muted mb-1">
+                    Expected Output
+                  </label>
+                  <textarea
+                    className={inputCls}
+                    rows={4}
+                    value={newTcData.expectedOutput}
+                    onChange={(e) =>
+                      setNewTcData((p) => ({
+                        ...p,
+                        expectedOutput: e.target.value,
+                      }))
+                    }
+                    placeholder="Expected output..."
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end pt-3">
+                <button
+                  onClick={handleAddTestCase}
+                  disabled={savingTc || !newTcData.input || !newTcData.expectedOutput}
+                  className={btnPrimary}
+                >
+                  {savingTc ? "ADDING..." : "ADD TEST CASE"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-xs text-kjtext-muted">
+                Format: <code className="text-kjprimary">input,expectedOutput,isSample</code> (one per line). Comma or tab-separated.
+              </p>
               <textarea
+                value={bulkTcText}
+                onChange={(e) => setBulkTcText(e.target.value)}
+                placeholder={"1 2,3,true\n4 5,9,false\n10 20,30,false"}
+                rows={5}
                 className={inputCls}
-                rows={4}
-                value={newTcData.input}
-                onChange={(e) =>
-                  setNewTcData((p) => ({ ...p, input: e.target.value }))
-                }
-                placeholder="Test case input..."
               />
+              <div className="flex justify-end pt-2">
+                <button
+                  onClick={handleBulkAddTestCases}
+                  disabled={savingBulkTc || !bulkTcText.trim()}
+                  className={btnPrimary}
+                >
+                  {savingBulkTc ? "IMPORTING..." : "BATCH IMPORT TEST CASES"}
+                </button>
+              </div>
             </div>
-            <div>
-              <label className="block text-xs text-kjtext-muted mb-1">
-                Expected Output
-              </label>
-              <textarea
-                className={inputCls}
-                rows={4}
-                value={newTcData.expectedOutput}
-                onChange={(e) =>
-                  setNewTcData((p) => ({
-                    ...p,
-                    expectedOutput: e.target.value,
-                  }))
-                }
-                placeholder="Expected output..."
-              />
-            </div>
-          </div>
-          <div className="flex justify-end pt-3">
-            <button
-              onClick={handleAddTestCase}
-              disabled={savingTc || !newTcData.input || !newTcData.expectedOutput}
-              className={btnPrimary}
-            >
-              {savingTc ? "ADDING..." : "ADD TEST CASE"}
-            </button>
-          </div>
+          )}
         </div>
       </div>
     </div>

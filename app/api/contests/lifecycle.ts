@@ -1,4 +1,4 @@
-import { and, eq, inArray, lte } from "drizzle-orm";
+import { and, eq, inArray, lte, not } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contests, problems } from "@/db/schema";
 
@@ -36,7 +36,8 @@ export async function lockLinkedProblems(contestId: number, now: Date): Promise<
     .where(and(inArray(problems.id, ids), eq(problems.status, "draft")));
 }
 
-/** Linked `contest_active` problems become `published` (practice archive) when a contest ends. */
+/** Linked `contest_active` problems become `published` (practice archive) when a contest ends.
+ *  Skips any problem still linked to another `live` contest. */
 export async function releaseLinkedProblems(
   contestIds: number[],
   now: Date,
@@ -48,10 +49,27 @@ export async function releaseLinkedProblems(
     .where(inArray(contestProblems.contestId, contestIds));
   const ids = [...new Set(links.map((l) => l.problemId))];
   if (ids.length === 0) return;
+
+  // Find problems still linked to another live contest (exclude the ending contest ids)
+  const stillContested = await db
+    .select({ problemId: contestProblems.problemId })
+    .from(contestProblems)
+    .innerJoin(contests, eq(contestProblems.contestId, contests.id))
+    .where(
+      and(
+        inArray(contestProblems.problemId, ids),
+        eq(contests.status, "live"),
+        not(inArray(contestProblems.contestId, contestIds)),
+      ),
+    );
+  const stillContestedIds = new Set(stillContested.map((r) => r.problemId));
+  const releasable = ids.filter((id) => !stillContestedIds.has(id));
+  if (releasable.length === 0) return;
+
   await db
     .update(problems)
     .set({ status: "published", updatedAt: now })
-    .where(and(inArray(problems.id, ids), eq(problems.status, "contest_active")));
+    .where(and(inArray(problems.id, releasable), eq(problems.status, "contest_active")));
 }
 
 /** Reverse of publish: linked `contest_active` problems return to `draft` on unpublish. */

@@ -20,6 +20,7 @@ COPY app ./app
 
 ENV FASTAPI_HOST=0.0.0.0
 
-# Single worker: judging is CPU-bound and synchronous per request; scale by
-# raising Cloud Run --concurrency (10 matches SRS REQ-JUDGE-13) and instances.
-CMD exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1
+# Concurrency: 4 workers × 1 judge task per worker = 4 concurrent tasks per
+# instance. Cloud Run auto-scales instances to meet REQ-JUDGE-13 (10 concurrent).
+# Set --concurrency=4 on Cloud Run to match (1 request per worker).
+CMD exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 4
