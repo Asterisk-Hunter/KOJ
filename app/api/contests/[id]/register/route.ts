@@ -3,7 +3,8 @@ import { auth, clerkClient } from "@clerk/nextjs/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { contestRegistrations, contests, users } from "@/db/schema";
-import { settleExpiredContests } from "@/app/api/contests/lifecycle";
+import { settleExpiredContests, isRegistrationOpen, contestRequiresInvite } from "@/app/api/contests/lifecycle";
+import { verifyInviteCode } from "@/app/api/contests/invite-code";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,7 +41,9 @@ export async function POST(
 
   // Invite-based registration (REQ-CONT-02/06): contests with an invite
   // code require the matching code; others are open enrollment.
-  if (contest.inviteCode !== null) {
+  // Hashed codes are verified via scrypt; legacy plaintext rows verify by
+  // exact match (read-only migration path — never written as plaintext).
+  if (contestRequiresInvite(contest)) {
     let inviteCode: unknown = null;
     try {
       const body = (await req.json()) as Record<string, unknown>;
@@ -48,18 +51,25 @@ export async function POST(
     } catch {
       inviteCode = null;
     }
-    if (typeof inviteCode !== "string" || inviteCode !== contest.inviteCode) {
+    if (
+      !verifyInviteCode(inviteCode, {
+        hash: contest.inviteCodeHash ?? null,
+        legacy: contest.inviteCode,
+      })
+    ) {
       return jsonError("invalid invite code", 403);
     }
   }
 
   const now = new Date();
 
-  // BR-06: A user can only register for a contest before it starts.
-  if (now >= contest.startsAt) {
-    return jsonError("registration closed: contest has already started", 403);
+  // Registration is allowed only strictly before `startsAt`, for both
+  // `draft` and `live` (published-early) contests — live-future keeps the
+  // "Registration Open" semantics from deriveContestUiStatus.
+  if (contest.status !== "draft" && contest.status !== "live") {
+    return jsonError("registration closed", 403);
   }
-  if (contest.status === "ended" || contest.status === "archived") {
+  if (!isRegistrationOpen(contest.startsAt, now)) {
     return jsonError("registration closed", 403);
   }
 

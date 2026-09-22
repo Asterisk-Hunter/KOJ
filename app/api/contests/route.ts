@@ -3,35 +3,10 @@ import { auth } from "@clerk/nextjs/server";
 import { asc, eq, not, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contestRegistrations, contests } from "@/db/schema";
-import { settleExpiredContests } from "@/app/api/contests/lifecycle";
+import { settleExpiredContests, deriveContestUiStatus } from "@/app/api/contests/lifecycle";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-type UiStatus = "Active" | "Registration Open" | "Upcoming" | "Finished";
-
-function deriveUiStatus(
-  dbStatus: string,
-  startsAt: Date,
-  endsAt: Date,
-  now: Date = new Date(),
-): UiStatus {
-  if (dbStatus === "archived" || dbStatus === "ended") return "Finished";
-  if (dbStatus === "live") {
-    if (now >= startsAt && now <= endsAt) return "Active";
-    if (now < startsAt) return "Registration Open";
-    return "Finished";
-  }
-  // draft
-  if (now < startsAt) {
-    const diff = startsAt.getTime() - now.getTime();
-    const sevenDays = 7 * 24 * 60 * 60 * 1000;
-    if (diff <= sevenDays) return "Registration Open";
-    return "Upcoming";
-  }
-  if (now >= startsAt && now <= endsAt) return "Registration Open";
-  return "Finished";
-}
 
 export async function GET() {
   const { userId } = await auth();
@@ -78,7 +53,7 @@ export async function GET() {
 
   const now = new Date();
   const result = contestRows.map((c) => {
-    const status = deriveUiStatus(c.status, c.startsAt, c.endsAt, now);
+    const status = deriveContestUiStatus(c.status, c.startsAt, c.endsAt, now);
     return {
       id: c.slug,
       numericId: c.id,

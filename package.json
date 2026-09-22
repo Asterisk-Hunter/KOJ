@@ -14,18 +14,14 @@
     "db:seed": "node --experimental-strip-types scripts/seed.ts"
   },
   "dependencies": {
-    "@clerk/nextjs": "^7.7.6",
-    "@upstash/redis": "^1.39.0",
+    "@clerk/nextjs": "^7.7.8",
     "dotenv": "^16.4.5",
-    "drizzle-orm": "^0.36.4",
-    "katex": "^0.18.7",
-    "next": "16.3.0",
+    "drizzle-orm": "^0.45.3",
+    "next": "16.3.5",
     "pg": "^8.13.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "react-markdown": "^10.1.0",
-    "rehype-katex": "^7.0.1",
-    "remark-math": "^6.0.0"
+    "react-markdown": "^10.1.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -33,9 +29,9 @@
     "@types/pg": "^8.11.10",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "drizzle-kit": "^0.28.1",
+    "drizzle-kit": "^0.31.11",
     "eslint": "^9",
-    "eslint-config-next": "16.3.0",
+    "eslint-config-next": "16.3.5",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

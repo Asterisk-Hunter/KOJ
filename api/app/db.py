@@ -1,4 +1,4 @@
-"""Postgres connection helpers built on psycopg 3."""
+"""Postgres connection helpers built on psycopg 3 + shared pool."""
 
 from __future__ import annotations
 
@@ -7,22 +7,70 @@ from collections.abc import Generator
 from contextlib import contextmanager
 
 import psycopg
+from psycopg_pool import ConnectionPool
 
 from .config import settings
 
 logger = logging.getLogger(__name__)
 
+_pool: ConnectionPool | None = None
+
+
+def init_pool() -> None:
+    """Create the shared pool and verify readiness with `SELECT 1`.
+
+    Called once from the FastAPI lifespan. Raises if the DSN is bad or
+    the database is unreachable so deploy misconfiguration surfaces fast.
+    """
+    global _pool
+    if _pool is not None:
+        return
+    dsn: str = str(settings.DATABASE_URL)
+    pool = ConnectionPool(
+        conninfo=dsn,
+        min_size=1,
+        max_size=10,
+        kwargs={"autocommit": True},
+        timeout=5.0,
+        open=True,
+    )
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+    _pool = pool
+
+
+def close_pool() -> None:
+    """Close the shared pool. Called once from the FastAPI lifespan."""
+    global _pool
+    if _pool is not None:
+        try:
+            _pool.close()
+        except Exception:  # noqa: BLE001 — best-effort close on shutdown
+            logger.exception("Failed to close psycopg pool cleanly")
+        finally:
+            _pool = None
+
 
 @contextmanager
 def get_connection() -> Generator[psycopg.Connection, None, None]:
-    """Yield a short-lived psycopg connection and always close it.
+    """Yield a pooled connection (lazily initing the pool if needed).
 
-    The DSN comes from `settings.DATABASE_URL` and is handed to psycopg
-    as a plain string. We `autocommit` so callers don't need to remember
-    to commit short read-only queries, and we `close()` in `finally`
-    so a failed query still returns the connection to the pool/closes
-    the socket.
+    Lifespan normally inits the pool; the lazy path preserves old
+    behavior for scripts that import db without running the app.
+    Connections are autocommit; the pool reclaims them on exit.
     """
+    global _pool
+    if _pool is None:
+        try:
+            init_pool()
+        except Exception:
+            logger.exception("Pool init failed; falling back to short-lived connection")
+            _pool = None
+    if _pool is not None:
+        with _pool.connection() as conn:
+            yield conn
+        return
     dsn: str = str(settings.DATABASE_URL)
     conn = psycopg.connect(dsn, autocommit=True)
     try:

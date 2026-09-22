@@ -2,7 +2,6 @@ import {
   boolean,
   index,
   integer,
-  jsonb,
   pgEnum,
   pgTable,
   primaryKey,
@@ -50,19 +49,23 @@ export const userRole = pgEnum("user_role", [
   "admin",
 ]);
 
-export const users = pgTable("users", {
-  clerkId: text("clerk_id").primaryKey(),
-  username: text("username").notNull().unique(),
-  email: text("email").notNull().unique(),
-  role: userRole("role").notNull().default("contestant"),
-  suspended: boolean("suspended").notNull().default(false),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const users = pgTable(
+  "users",
+  {
+    clerkId: text("clerk_id").primaryKey(),
+    username: text("username").notNull().unique(),
+    email: text("email").notNull(),
+    role: userRole("role").notNull().default("contestant"),
+    suspended: boolean("suspended").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [index("users_role_idx").on(table.role)],
+);
 
 export const problems = pgTable("problems", {
   id: serial("id").primaryKey(),
@@ -80,7 +83,7 @@ export const problems = pgTable("problems", {
     .array()
     .notNull()
     .default(sql`'{}'::text[]`),
-  timeLimitMs: integer("time_limit_ms").notNull().default(2000),
+  timeLimitMs: integer("time_limit_ms").notNull().default(1000),
   memoryLimitMb: integer("memory_limit_mb").notNull().default(256),
   status: problemStatus("status").notNull().default("draft"),
   createdAt: timestamp("created_at", { withTimezone: true })
@@ -91,31 +94,28 @@ export const problems = pgTable("problems", {
     .defaultNow(),
 });
 
-export const contests = pgTable(
-  "contests",
-  {
-    id: serial("id").primaryKey(),
-    createdBy: text("created_by")
-      .notNull()
-      .references(() => users.clerkId),
-    slug: text("slug").notNull().unique(),
-    title: text("title").notNull(),
-    description: text("description").notNull().default(""),
-    startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
-    endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
-    status: contestStatus("status").notNull().default("draft"),
-    inviteCode: text("invite_code"),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-  },
-  (table) => [
-    index("contests_status_ends_at_idx").on(table.status, table.endsAt),
-  ],
-);
+export const contests = pgTable("contests", {
+  id: serial("id").primaryKey(),
+  createdBy: text("created_by")
+    .notNull()
+    .references(() => users.clerkId),
+  slug: text("slug").notNull().unique(),
+  title: text("title").notNull(),
+  description: text("description").notNull().default(""),
+  startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+  endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+  status: contestStatus("status").notNull().default("draft"),
+  inviteCode: text("invite_code"),
+  // Hashed invite code (scrypt, versioned `v1$salt$hash`). `invite_code`
+  // is legacy plaintext kept read-only until migrated; never write to it.
+  inviteCodeHash: text("invite_code_hash"),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
 
 export const problemTestCases = pgTable(
   "problem_test_cases",
@@ -130,7 +130,10 @@ export const problemTestCases = pgTable(
     position: integer("position").notNull().default(0),
   },
   (table) => [
-    index("problem_test_cases_problem_sample_idx").on(table.problemId, table.isSample),
+    index("problem_test_cases_problem_position_idx").on(
+      table.problemId,
+      table.position,
+    ),
   ],
 );
 
@@ -147,6 +150,10 @@ export const contestProblems = pgTable(
   },
   (table) => [
     primaryKey({ columns: [table.contestId, table.problemId] }),
+    index("contest_problems_contest_position_idx").on(
+      table.contestId,
+      table.position,
+    ),
   ],
 );
 
@@ -182,12 +189,15 @@ export const submissions = pgTable(
     language: text("language").notNull(),
     code: text("code").notNull(),
     status: submissionStatus("status").notNull().default("pending"),
+    // Internal infra flag: true means the row reflects judge
+    // infrastructure failure (retryable), NOT contestant code.
+    // Never a new contestant-facing enum value.
+    judgeInfraError: boolean("judge_infra_error").notNull().default(false),
     executionTimeMs: integer("execution_time_ms"),
     memoryUsedMb: integer("memory_used_mb"),
     passedTests: integer("passed_tests"),
     totalTests: integer("total_tests"),
     errorMessage: text("error_message"),
-    caseResults: jsonb("case_results"),
     submittedAt: timestamp("submitted_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -195,10 +205,20 @@ export const submissions = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }),
   },
   (table) => [
-    index("submissions_contest_id_idx").on(table.contestId),
-    index("submissions_user_problem_idx").on(table.userId, table.problemId),
-    index("submissions_user_contest_idx").on(table.userId, table.contestId),
-    index("submissions_status_submitted_at_idx").on(table.status, table.submittedAt),
+    index("submissions_user_problem_time_idx").on(
+      table.userId,
+      table.problemId,
+      table.submittedAt,
+    ),
+    index("submissions_contest_user_time_idx")
+      .on(table.contestId, table.userId, table.submittedAt)
+      .where(sql`contest_id IS NOT NULL`),
+    index("submissions_status_pending_running_idx")
+      .on(table.submittedAt)
+      .where(sql`status IN ('pending', 'running')`),
+    index("submissions_infra_error_idx")
+      .on(table.submittedAt)
+      .where(sql`judge_infra_error = true`),
   ],
 );
 

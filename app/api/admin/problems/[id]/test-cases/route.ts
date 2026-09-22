@@ -3,6 +3,7 @@ import { asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contests, problemTestCases, problems } from "@/db/schema";
 import { jsonError, requireSetter } from "@/app/api/admin/authz";
+import { readBoundedJson, MAX_TEST_CASE_BODY_BYTES } from "@/app/api/body-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -84,13 +85,11 @@ export async function POST(
     return jsonError("test cases are locked while the contest is live", 403);
   }
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return jsonError("invalid json", 400);
-  }
-  const b = body as Record<string, unknown>;
+  // Bounded body: 413 before parsing (fields cap at 10MB each; the cap
+  // leaves room for JSON overhead). Field validation below is unchanged.
+  const parsed = await readBoundedJson(req, MAX_TEST_CASE_BODY_BYTES);
+  if (!parsed.ok) return parsed.response;
+  const b = parsed.value as Record<string, unknown>;
 
   const input = checkFileSize(b.input, "input");
   if (input instanceof NextResponse) return input;

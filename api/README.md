@@ -73,6 +73,46 @@ Then open:
 
 - This service is **not** a Next.js route handler. It runs in its own
   Python process — start it in a second terminal alongside `next dev`.
-- CORS is pre-configured to allow `http://localhost:3000` (Next.js) and
-  the service's own origin defined by `FASTAPI_HOST` / `FASTAPI_PORT`.
+- CORS is tight: `http://localhost:3000` plus `FRONTEND_URL` only
+  (explicit methods/headers, no credentials, never `*`, no self-origin).
 - Never commit `api/.env`; only `.env.example` is tracked.
+
+## Judge sandbox (Docker-only, fail-closed)
+
+Compilation and execution both run in per-case `docker run` containers
+with fixed flags: `--network none`, `--read-only`, non-root
+`--user 65534:65534`, `--cap-drop ALL`, `no-new-privileges`,
+repo-managed seccomp profile
+(`--security-opt seccomp=/etc/koj/seccomp-koj.json`, provisioned from
+`api/seccomp-koj.json`; missing/invalid profile fails closed),
+`--pids-limit`, `--memory`/`--memory-swap`, `--cpus`, file-write ulimit,
+read-only source mount (`/sandbox:ro`) plus a writable exec tmpfs at
+`/scratch` for build artifacts (C/C++ binaries, Java classes) and a
+noexec `/tmp`, per-run timeout with forced `docker rm -f` cleanup on
+every timeout/exception path, `--rm`, `--pull never`, full-UUID
+container names, and bounded stdout/stderr. C/C++ add
+stack-protector/FORTIFY hardening; Java requires `class Solution`
+(comment/string aware) with classes separated to `/scratch`. Exit
+137/-9 maps to `memory_limit_exceeded`. No request field can set
+images, mounts, or flags — images come only from
+`JUDGE_DOCKER_IMAGE_*` env vars (see `api/.env.example`).
+
+Concurrency is bounded (`JUDGE_MAX_CONCURRENT`, default 4):
+saturated `/judge`/`/judge-async` callers get `503` + `Retry-After`
+instead of queueing. `/judge-async` accepts an optional
+`Idempotency-Key` header and dedupes by submission ID under a
+non-blocking advisory lock (duplicate after completion replays the
+stored status). Hidden test cases (`is_sample=false`, the default)
+get redacted stdout/stderr; infra failures persist as retryable
+`pending` + `judge_infra_error=true` (never a false contestant
+`runtime_error`; see `JudgeResponse.infra_error`). Full host,
+provisioning, and evidence matrix: `api/DEPLOYMENT_CONTRACT.md`.
+
+The Docker host must have the daemon running, the seccomp profile
+provisioned, and all three images pre-pulled (`docker pull
+python:3.11-slim gcc:13-bookworm eclipse-temurin:17-jdk-jammy`, or
+your configured overrides). Without Docker, every judgment returns an
+infra-flagged error ("judge sandbox unavailable") — including on
+Cloud Run, which cannot run a Docker daemon. Production judging needs
+a VM/GCE host with Docker (or an equivalent container-isolated
+runner), not Cloud Run.

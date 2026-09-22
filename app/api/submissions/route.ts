@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth, clerkClient } from "@clerk/nextjs/server";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   contestProblems,
@@ -12,6 +12,7 @@ import {
   users,
 } from "@/db/schema";
 import { settleExpiredContests } from "@/app/api/contests/lifecycle";
+import { readBoundedJson, MAX_SUBMISSION_BODY_BYTES } from "@/app/api/body-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,18 +31,22 @@ function jsonError(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
 }
 
+/** Thrown inside the submit transaction when the 30s cooldown is still active. */
+class RateLimited {
+  constructor(readonly retryAfter: number) {}
+}
+
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) {
     return jsonError("unauthorized", 401);
   }
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return jsonError("invalid json", 400);
-  }
+  // Bounded body: 413 before parsing when the payload exceeds the cap
+  // (code limit is 100KB; the cap leaves room for JSON overhead).
+  const parsed = await readBoundedJson(req, MAX_SUBMISSION_BODY_BYTES);
+  if (!parsed.ok) return parsed.response;
+  const body: unknown = parsed.value;
 
   const b = body as Partial<PostBody>;
 
@@ -145,32 +150,13 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Rate limit: max 1 submission per 30s per user+problem (REQ-RATE-01/02).
-  // Applies to both run and submit modes — both consume judge capacity.
-  const recentRows = await db
-    .select({ submittedAt: submissions.submittedAt })
-    .from(submissions)
-    .where(and(eq(submissions.userId, userId), eq(submissions.problemId, problemId)))
-    .orderBy(desc(submissions.submittedAt))
-    .limit(1);
-  if (recentRows.length > 0 && recentRows[0].submittedAt) {
-    const elapsedSec = (Date.now() - recentRows[0].submittedAt.getTime()) / 1000;
-    if (elapsedSec < 30) {
-      const retryAfter = Math.max(1, Math.ceil(30 - elapsedSec));
-      return NextResponse.json(
-        { error: "rate limited: 1 submission per 30 seconds per problem" },
-        { status: 429, headers: { "Retry-After": String(retryAfter) } },
-      );
-    }
-  }
-
-  // Ensure users row and check suspension in one query
-  const userRow = await db
+  // Ensure users row
+  const existingUser = await db
     .select()
     .from(users)
     .where(eq(users.clerkId, userId))
     .limit(1);
-  if (userRow.length === 0) {
+  if (existingUser.length === 0) {
     try {
       const client = await clerkClient();
       const clerkUser = await client.users.getUser(userId);
@@ -195,7 +181,15 @@ export async function POST(req: NextRequest) {
     } catch {
       return jsonError("failed to resolve user", 500);
     }
-  } else if (userRow[0].suspended) {
+  }
+
+  // Suspended users cannot submit (run or submit mode).
+  const suspensionRows = await db
+    .select({ suspended: users.suspended })
+    .from(users)
+    .where(eq(users.clerkId, userId))
+    .limit(1);
+  if (suspensionRows.length > 0 && suspensionRows[0].suspended) {
     return jsonError("account suspended", 403);
   }
 
@@ -221,29 +215,56 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Insert submission pending
-  const inserted = await db
-    .insert(submissions)
-    .values({
-      userId,
-      problemId,
-      contestId: effectiveContestId,
-      language,
-      code,
-      status: "pending",
-    })
-    .returning({ id: submissions.id });
-
-  const submissionId = inserted[0].id;
-
-  await db
-    .update(submissions)
-    .set({ status: "running", startedAt: new Date() })
-    .where(eq(submissions.id, submissionId));
+  // Rate limit (REQ-RATE-01/02) + pending insert, atomically: the cooldown
+  // check and the insert run in one transaction serialized by an advisory
+  // lock, so concurrent double-submits cannot both pass the check. This is
+  // the single insert path for this route. Applies to run and submit modes.
+  let submissionId: number;
+  try {
+    submissionId = await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${userId}), ${problemId})`);
+      const recentRows = await tx
+        .select({ submittedAt: submissions.submittedAt })
+        .from(submissions)
+        .where(and(eq(submissions.userId, userId), eq(submissions.problemId, problemId)))
+        .orderBy(desc(submissions.submittedAt))
+        .limit(1);
+      if (recentRows.length > 0 && recentRows[0].submittedAt) {
+        const elapsedSec = (Date.now() - recentRows[0].submittedAt.getTime()) / 1000;
+        if (elapsedSec < 30) {
+          throw new RateLimited(Math.max(1, Math.ceil(30 - elapsedSec)));
+        }
+      }
+      const inserted = await tx
+        .insert(submissions)
+        .values({
+          userId,
+          problemId,
+          contestId: effectiveContestId,
+          language,
+          code,
+          status: "pending",
+        })
+        .returning({ id: submissions.id });
+      const sid = inserted[0].id;
+      await tx
+        .update(submissions)
+        .set({ status: "running", startedAt: new Date() })
+        .where(eq(submissions.id, sid));
+      return sid;
+    });
+  } catch (e) {
+    if (e instanceof RateLimited) {
+      return NextResponse.json(
+        { error: "rate limited: 1 submission per 30 seconds per problem" },
+        { status: 429, headers: { "Retry-After": String(e.retryAfter) } },
+      );
+    }
+    throw e;
+  }
 
   // Fire-and-forget async judge via Cloud Run
-  const fastApiUrl =
-    process.env.FASTAPI_URL ?? process.env.JUDGE_API_URL ?? "http://127.0.0.1:8000";
+  const fastApiUrl = process.env.FASTAPI_URL ?? "http://127.0.0.1:8000";
   const judgeSecret = process.env.JUDGE_INTERNAL_SECRET ?? "";
 
   try {
@@ -253,11 +274,8 @@ export async function POST(req: NextRequest) {
         "Content-Type": "application/json",
         "X-Judge-Secret": judgeSecret,
       },
-      body: JSON.stringify({
-        submission_id: submissionId,
-        sample_only: mode === "run",
-      }),
-      signal: AbortSignal.timeout(60000),
+      body: JSON.stringify({ submission_id: submissionId }),
+      signal: AbortSignal.timeout(5000),
     });
   } catch {
     await db
@@ -287,13 +305,12 @@ export async function GET(req: NextRequest) {
   const problemIdRaw = url.searchParams.get("problemId");
   const contestIdRaw = url.searchParams.get("contestId");
 
-  let problemId: number | undefined;
-  if (problemIdRaw !== null) {
-    const pid = Number(problemIdRaw);
-    if (!Number.isInteger(pid) || pid <= 0) {
-      return jsonError("problemId must be a positive integer", 400);
-    }
-    problemId = pid;
+  if (!problemIdRaw) {
+    return jsonError("problemId is required", 400);
+  }
+  const problemId = Number(problemIdRaw);
+  if (!Number.isInteger(problemId) || problemId <= 0) {
+    return jsonError("problemId must be a positive integer", 400);
   }
 
   let contestId: number | undefined;
@@ -305,43 +322,33 @@ export async function GET(req: NextRequest) {
     contestId = cid;
   }
 
-  const conditions = [eq(submissions.userId, userId)];
-  if (problemId !== undefined) {
-    conditions.push(eq(submissions.problemId, problemId));
-  }
+  let rows: (typeof submissions.$inferSelect)[];
   if (contestId !== undefined) {
-    conditions.push(eq(submissions.contestId, contestId));
+    rows = await db
+      .select()
+      .from(submissions)
+      .where(
+        and(
+          eq(submissions.userId, userId),
+          eq(submissions.problemId, problemId),
+          eq(submissions.contestId, contestId as number),
+        ),
+      )
+      .orderBy(desc(submissions.submittedAt));
+  } else {
+    rows = await db
+      .select()
+      .from(submissions)
+      .where(and(eq(submissions.userId, userId), eq(submissions.problemId, problemId)))
+      .orderBy(desc(submissions.submittedAt));
   }
-
-  const rows = await db
-    .select({
-      id: submissions.id,
-      problemId: submissions.problemId,
-      problemTitle: problems.title,
-      language: submissions.language,
-      status: submissions.status,
-      passedTests: submissions.passedTests,
-      totalTests: submissions.totalTests,
-      executionTimeMs: submissions.executionTimeMs,
-      memoryUsedMb: submissions.memoryUsedMb,
-      submittedAt: submissions.submittedAt,
-    })
-    .from(submissions)
-    .leftJoin(problems, eq(submissions.problemId, problems.id))
-    .where(and(...conditions))
-    .orderBy(desc(submissions.submittedAt))
-    .limit(100);
 
   const result = rows.map((r) => ({
     id: r.id,
-    problemId: r.problemId,
-    problemTitle: r.problemTitle ?? `Problem #${r.problemId}`,
-    language: r.language,
     status: r.status,
     passedTests: r.passedTests,
     totalTests: r.totalTests,
     executionTimeMs: r.executionTimeMs,
-    memoryUsedMb: r.memoryUsedMb,
     submittedAt: r.submittedAt?.toISOString() ?? null,
   }));
 
