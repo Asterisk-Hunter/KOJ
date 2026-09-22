@@ -80,6 +80,7 @@ export default function Navigation() {
 
   const canAccessAdmin = Boolean(isSignedIn && authMe?.canAccessAdmin);
   const hasServerSession = Boolean(isSignedIn && authMe?.authenticated);
+  const staffPill = authMe?.role === "setter" ? "SETTER" : "ADMIN";
 
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 bg-kjsurface/80 backdrop-blur-md border-b border-kjborder">
@@ -138,7 +139,7 @@ export default function Navigation() {
                         : "border-kjborder text-kjtext-muted hover:text-kjprimary hover:border-kjprimary/40"
                     }`}
                   >
-                    ADMIN
+                    {staffPill}
                   </Link>
                 )}
                 <UserButton
@@ -222,7 +223,7 @@ export default function Navigation() {
                     onClick={() => setMobileOpen(false)}
                     className="text-xs font-mono text-kjprimary border border-kjprimary/40 px-3 py-1 rounded"
                   >
-                    ADMIN CONSOLE
+                    {staffPill} CONSOLE
                   </Link>
                 )}
               </div>
