@@ -125,11 +125,11 @@ export async function requireStaff(): Promise<StaffGrant> {
  */
 export async function ensureUserRow(userId: string): Promise<boolean> {
   const existing = await db
-    .select({ clerkId: users.clerkId })
+    .select({ clerkId: users.clerkId, username: users.username, email: users.email })
     .from(users)
     .where(eq(users.clerkId, userId))
     .limit(1);
-  if (existing.length > 0) return true;
+
   try {
     const client = await clerkClient();
     const clerkUser = await client.users.getUser(userId);
@@ -144,7 +144,18 @@ export async function ensureUserRow(userId: string): Promise<boolean> {
       (primaryEmail ? primaryEmail.split("@")[0] : userId);
     const email = primaryEmail || `${userId}@placeholder.local`;
     if (!username || !email) return false;
-    await db.insert(users).values({ clerkId: userId, username, email });
+
+    if (existing.length === 0) {
+      await db.insert(users).values({ clerkId: userId, username, email });
+      return true;
+    }
+
+    if (existing[0].username !== username || existing[0].email !== email) {
+      await db
+        .update(users)
+        .set({ username, email })
+        .where(eq(users.clerkId, userId));
+    }
     return true;
   } catch {
     return false;
