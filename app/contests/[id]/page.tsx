@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useAuth, SignInButton } from "@clerk/nextjs";
 import Navigation from "@/app/components/Navigation";
 
 type UiStatus = "Active" | "Registration Open" | "Upcoming" | "Finished";
@@ -77,6 +78,7 @@ export default function ContestDetailPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [inviteCode, setInviteCode] = useState("");
   const boundaryReloaded = useRef(false);
+  const { isLoaded, isSignedIn } = useAuth();
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -143,6 +145,10 @@ export default function ContestDetailPage() {
 
   async function handleRegister() {
     if (!contest || contest.registered) return;
+    if (!isSignedIn) {
+      setNotice("Sign in to register for contests.");
+      return;
+    }
     setRegistering(true);
     setNotice(null);
     try {
@@ -278,13 +284,21 @@ export default function ContestDetailPage() {
                       />
                     </div>
                   )}
-                  <button
-                    onClick={() => void handleRegister()}
-                    disabled={contest.registered || registering || (contest.inviteRequired && !inviteCode.trim())}
-                    className="w-full bg-kjprimary text-kjbg font-mono font-bold text-xs px-4 py-3 rounded disabled:opacity-60 disabled:cursor-not-allowed hover:glow-sm transition-all"
-                  >
-                    {contest.registered ? "✓ REGISTERED" : registering ? "REGISTERING…" : "REGISTER NOW"}
-                  </button>
+                  {isLoaded && !isSignedIn ? (
+                    <SignInButton mode="modal">
+                      <button className="w-full bg-kjprimary text-kjbg font-mono font-bold text-xs px-4 py-3 rounded hover:glow-sm transition-all">
+                        SIGN IN TO REGISTER
+                      </button>
+                    </SignInButton>
+                  ) : (
+                    <button
+                      onClick={() => void handleRegister()}
+                      disabled={contest.registered || registering || (contest.inviteRequired && !inviteCode.trim())}
+                      className="w-full bg-kjprimary text-kjbg font-mono font-bold text-xs px-4 py-3 rounded disabled:opacity-60 disabled:cursor-not-allowed hover:glow-sm transition-all"
+                    >
+                      {contest.registered ? "✓ REGISTERED" : registering ? "REGISTERING…" : "REGISTER NOW"}
+                    </button>
+                  )}
                 </>
               ) : null}
               {canEnterArena ? (

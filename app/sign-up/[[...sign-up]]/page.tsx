@@ -46,14 +46,6 @@ export default function SignUpPage() {
           </Link>
         </div>
       </div>
-
-      <style>{`
-        .terminal-crt-glow {
-          box-shadow:
-            0 0 30px rgba(0, 255, 157, 0.1),
-            inset 0 0 30px rgba(0, 255, 157, 0.05);
-        }
-      `}</style>
     </div>
   );
 }
