@@ -2,6 +2,7 @@
 
 Total 20 min: 15 presentation + demo, 5 viva. Speakers rotate per section; handoffs in bold.
 Rehearse with a timer. URLs are production: https://koj-peach.vercel.app.
+Have admin + contestant windows signed in before starting.
 
 ## 0:00–0:30 — Title (Speaker 1)
 "Kottayam Online Judge — a self-hosted contest platform for IIIT Kottayam: practice,
@@ -14,10 +15,10 @@ institution its own problems, users, rules, and reusable practice material."
 **Handoff: "To the requirements this forced on us —" Speaker 2.**
 
 ## 2:00–3:30 — Requirements (Speaker 2)
-"Four users: contestants, problem setters, contest setters, admins. Must-haves: auth with
-roles, problem lifecycle draft→contest_active→published, timed contests with registration,
-isolated multi-language judging with seven verdicts, live ICPC leaderboards, rate limiting.
-Medium and Low items — custom checkers, more languages, teams — explicitly deferred."
+"Three roles: contestants, staff setters, admins — enforced server-side, never just hidden.
+Must-haves: auth with roles, problem lifecycle draft→contest_active→published, timed contests
+with registration, isolated multi-language judging with seven verdicts, live ICPC leaderboards,
+rate limiting. Medium and Low items — custom checkers, more languages, teams — deferred."
 
 ## 3:30–5:00 — Architecture (Speaker 2)
 Walk the diagram top to bottom: "Browser never touches untrusted code. Next.js validates
@@ -25,18 +26,28 @@ and persists; the FastAPI judge executes under kernel resource limits on Cloud R
 stores truth, SSE pushes updates. Layered, pipe-and-filter judge, event-driven UI."
 **Handoff: "Enough boxes — watch it run. Speaker 3, demo."**
 
-## 5:00–12:00 — LIVE DEMO (Speaker 3, contestant + admin windows ready)
-1. Problems: filter, open Two Sum, point out samples/limits/editor. (1 min)
-2. Submit correct Python → verdict streams Accepted, open per-test table. (2 min)
-3. Submit buggy version → Wrong Answer showing the failed test. Mention 30s cooldown if hit. (2 min)
-4. Contest: admin publishes; contestant registers; arena; standings row appears with penalty math. (2 min)
-5. Admin close: users/roles, observability metrics. (1 min)
+## 5:00–12:00 — LIVE DEMO (Speaker 3, both windows ready)
+Pre-seeded: "Demo Sprint" contest is live with "Demo: Two Sum" + "Demo: Watermelon";
+your standings row already shows 2 solved, 52 penalty.
+1. Problems (1 min): open `/problems` — note "Demo: Add Two Numbers" is ABSENT: it is
+   locked inside the live "Demo Flash" contest and invisible by design. Open Demo Two Sum:
+   samples, limits, editor.
+2. Submit correct Python → verdict streams Accepted → per-test table 3/3. (2 min)
+3. Submit buggy version → Wrong Answer naming the failed test → fix → resubmit → AC.
+   Mention the 30s cooldown if it triggers. (2 min)
+4. Standings (1 min): `/rankings?contestId=demo-sprint` → pre-seeded row plus the new live
+   verdict landing on top. Penalty math live: 12 + 20×1 and 20 + 20×0.
+5. LIFECYCLE MOMENT (2 min, the integrity story): switch to admin window → open Demo Flash
+   → end the contest live → refresh `/problems` → "Demo: Add Two Numbers" appears.
+   Say: "Contest problems are invisible until the contest ends — then they join the
+   practice archive automatically. Draft, contest-locked, published: enforced, not promised."
+6. Admin close (1 min): users/roles, observability metrics.
 - If anything stalls: "The UI/API layer is up; the judge host is unreachable — here is the recorded run," and show the backup screenshot. Never invent a verdict.
 
 ## 12:00–13:30 — Testing (Speaker 4)
-"45-check E2E sweep, zero critical issues; typecheck, lint, and build gate every change;
-each phase passed independent review. Honest gaps: no load test yet, no committed test
-runner — next step is CI with unit, integration, E2E, and load suites."
+"107 committed unit tests (83 judge pipeline, 24 scoring and auth crypto) plus a 45-check
+E2E sweep with zero critical issues; typecheck, lint, and build gate every change; each
+phase passed independent review. Honest gaps: no load test yet; CI next."
 
 ## 13:30–15:00 — Conclusion (Speaker 4)
 "Working college-scale judge, live in production today: owned problems and contests,
