@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { contestRegistrations, contests, problems, submissions, users } from "@/db/schema";
+import { uniqueUsername } from "@/app/api/admin/authz";
 import { verifyWebhookSignature } from "@/app/api/webhooks/clerk/verify";
 
 export const runtime = "nodejs";
@@ -36,9 +37,10 @@ function displayName(u: UserPayload): string {
 
 async function handleUserCreated(u: UserPayload): Promise<void> {
   const email = primaryEmail(u) || `${u.id}@placeholder.local`;
+  const username = await uniqueUsername(displayName(u), u.id);
   await db
     .insert(users)
-    .values({ clerkId: u.id, username: displayName(u), email })
+    .values({ clerkId: u.id, username, email })
     .onConflictDoNothing();
 }
 

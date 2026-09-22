@@ -3,7 +3,7 @@ import { desc, eq, ilike, inArray, or } from "drizzle-orm";
 import { clerkClient } from "@clerk/nextjs/server";
 import { db } from "@/db";
 import { users } from "@/db/schema";
-import { jsonError, requireAdmin } from "@/app/api/admin/authz";
+import { jsonError, requireAdmin, uniqueUsername } from "@/app/api/admin/authz";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -187,35 +187,30 @@ export async function PATCH(req: NextRequest) {
   }
 
   // Backfill from Clerk so admin actions work even before first user activity.
-  const existing = await db
-    .select({ clerkId: users.clerkId })
-    .from(users)
-    .where(eq(users.clerkId, clerkId))
-    .limit(1);
-  if (existing.length === 0) {
-    let cu: ClerkDirUser | null = null;
-    try {
-      cu = (await (await clerkClient()).users.getUser(clerkId)) as ClerkDirUser;
-    } catch {
-      return jsonError("user no longer exists in Clerk — run Sync to reconcile", 404);
-    }
-    const email = dirEmail(cu);
-    await db
-      .insert(users)
-      .values({
-        clerkId,
-        username: dirName(cu),
-        email: email || `${clerkId}@placeholder.local`,
-        role: "contestant",
-        suspended: false,
-      })
-      .onConflictDoNothing();
+  // Usernames are unique: disambiguate when another row holds the base name.
+  // Single-statement upsert: race-safe against a concurrent first-activity sync.
+  let cu: ClerkDirUser | null = null;
+  try {
+    cu = (await (await clerkClient()).users.getUser(clerkId)) as ClerkDirUser;
+  } catch {
+    return jsonError("user no longer exists in Clerk — run Sync to reconcile", 404);
   }
+  const email = dirEmail(cu) || `${clerkId}@placeholder.local`;
+  const username = await uniqueUsername(dirName(cu) || clerkId, clerkId);
 
   const updated = await db
-    .update(users)
-    .set(patch)
-    .where(eq(users.clerkId, clerkId))
+    .insert(users)
+    .values({
+      clerkId,
+      username,
+      email,
+      role: patch.role ?? "contestant",
+      suspended: patch.suspended ?? false,
+    })
+    .onConflictDoUpdate({
+      target: users.clerkId,
+      set: { ...patch },
+    })
     .returning({
       clerkId: users.clerkId,
       username: users.username,

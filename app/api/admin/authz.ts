@@ -104,6 +104,29 @@ export async function requireStaff(): Promise<StaffGrant> {
 }
 
 /**
+ * Neon `users.username` is unique, but Clerk display names are not (two
+ * "Prajwal"s via Google OAuth). Resolve a collision by suffixing a short id
+ * fragment. A user's own row never triggers a rename.
+ */
+export async function uniqueUsername(base: string, clerkId: string): Promise<string> {
+  const clean = base.trim() || clerkId;
+  const taken = await db
+    .select({ clerkId: users.clerkId })
+    .from(users)
+    .where(eq(users.username, clean))
+    .limit(1);
+  if (taken.length === 0 || taken[0].clerkId === clerkId) return clean;
+  const suffixed = `${clean}_${clerkId.slice(-6)}`;
+  const taken2 = await db
+    .select({ clerkId: users.clerkId })
+    .from(users)
+    .where(eq(users.username, suffixed))
+    .limit(1);
+  if (taken2.length === 0 || taken2[0].clerkId === clerkId) return suffixed;
+  return `${clean}_${clerkId.slice(-12)}`;
+}
+
+/**
  * Ensure a `users` row exists for a Clerk user id (lazy-create from Clerk,
  * same shape as the submissions/register routes). Needed because admin
  * mutations write FK references (`created_by`) to `users.clerk_id`.
@@ -123,10 +146,11 @@ export async function ensureUserRow(userId: string): Promise<boolean> {
         ?.emailAddress ??
       clerkUser.emailAddresses[0]?.emailAddress ??
       "";
-    const username =
+    const rawUsername =
       clerkUser.username ??
       clerkUser.firstName ??
       (primaryEmail ? primaryEmail.split("@")[0] : userId);
+    const username = await uniqueUsername(rawUsername, userId);
     const email = primaryEmail || `${userId}@placeholder.local`;
     if (!username || !email) return false;
 
