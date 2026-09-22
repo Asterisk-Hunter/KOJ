@@ -15,6 +15,13 @@
   },
   "dependencies": {
     "@clerk/nextjs": "^7.7.8",
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/lang-cpp": "^6.0.3",
+    "@codemirror/lang-java": "^6.0.2",
+    "@codemirror/lang-python": "^6.2.1",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.13",
     "@upstash/redis": "^1.39.0",
     "dotenv": "^16.4.5",
     "drizzle-orm": "^0.45.3",

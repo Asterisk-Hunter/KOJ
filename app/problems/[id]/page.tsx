@@ -9,6 +9,7 @@ import Markdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import Navigation from "@/app/components/Navigation";
+import CodeMirrorEditor, { type EditorLanguage } from "@/app/components/CodeMirrorEditor";
 
 const STARTERS: Record<string, string> = {
   python: `# Codeforces / ICPC Python 3 Template
@@ -141,8 +142,6 @@ export default function ProblemDetailPage() {
 
   // Left panel mode: "statement" | "editorial" | "submissions"
   const [leftTab, setLeftTab] = useState<"statement" | "editorial" | "submissions">("statement");
-  const gutterRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Workspace tab: "samples" | "custom" | "submissions"
   const [activeTab, setActiveTab] = useState<"samples" | "custom" | "submissions">("samples");
@@ -154,13 +153,6 @@ export default function ProblemDetailPage() {
 
   const currentCode = codeByLang[language] ?? STARTERS[language] ?? "";
   const lineCount = Math.max(1, currentCode.split("\n").length);
-  const lineNumbers = useMemo(() => Array.from({ length: lineCount }, (_, i) => i + 1), [lineCount]);
-
-  function handleEditorScroll(e: React.UIEvent<HTMLTextAreaElement>) {
-    if (gutterRef.current) {
-      gutterRef.current.scrollTop = e.currentTarget.scrollTop;
-    }
-  }
 
   const activeEsRef = useRef<EventSource | null>(null);
 
@@ -820,57 +812,22 @@ export default function ProblemDetailPage() {
               </select>
             </div>
 
-            {/* Monaco-style Textarea Editor with Line Numbers */}
-            <div className="relative flex rounded border border-kjborder bg-kjbg overflow-hidden focus-within:border-kjprimary">
-              {/* Line numbers gutter */}
-              <div
-                ref={gutterRef}
-                className="select-none py-4 px-2 text-right font-mono text-xs text-kjtext-muted/40 bg-kjsurface/50 border-r border-kjborder/60 overflow-hidden"
-                style={{ minWidth: "2.75rem" }}
-                aria-hidden="true"
-              >
-                {lineNumbers.map((n) => (
-                  <div key={n} className="leading-6">{n}</div>
-                ))}
-              </div>
-
-              {/* Textarea */}
-              <textarea
-                ref={textareaRef}
-                onScroll={handleEditorScroll}
+            {/* CodeMirror Editor */}
+            <div className="relative rounded border border-kjborder bg-kjbg overflow-hidden focus-within:border-kjprimary">
+              <CodeMirrorEditor
                 value={codeByLang[language] ?? STARTERS[language] ?? ""}
-                onChange={(event) => {
-                  const val = event.target.value;
-                  setCodeByLang((prev) => ({ ...prev, [language]: val }));
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Tab") {
-                    event.preventDefault();
-                    const ta = event.currentTarget;
-                    const start = ta.selectionStart;
-                    const end = ta.selectionEnd;
-                    const val = ta.value;
-                    const newVal = val.substring(0, start) + "    " + val.substring(end);
-                    setCodeByLang((prev) => ({ ...prev, [language]: newVal }));
-                    requestAnimationFrame(() => {
-                      ta.selectionStart = ta.selectionEnd = start + 4;
-                    });
-                  }
-                  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-                    event.preventDefault();
-                    if (!submitting && cooldown === 0) {
-                      void handleSubmit();
-                    }
-                  }
-                  if ((event.metaKey || event.ctrlKey) && event.key === "'") {
-                    event.preventDefault();
-                    if (!runningSamples && !submitting) {
-                      void handleRunSamples();
-                    }
+                onChange={(val) => setCodeByLang((prev) => ({ ...prev, [language]: val }))}
+                language={language as EditorLanguage}
+                onSubmit={() => {
+                  if (!submitting && cooldown === 0) {
+                    void handleSubmit();
                   }
                 }}
-                spellCheck={false}
-                className="flex-1 min-h-[340px] lg:min-h-[55vh] resize-y bg-transparent p-4 text-sm leading-6 font-mono text-kjtext focus:outline-none selection:bg-kjprimary/20"
+                onRun={() => {
+                  if (!runningSamples && !submitting) {
+                    void handleRunSamples();
+                  }
+                }}
               />
               <span className="absolute bottom-2 right-3 text-[10px] font-mono text-kjtext-muted/50 select-none pointer-events-none">
                 {lineCount} lines · Ctrl+Enter submit · Ctrl+&apos; run
