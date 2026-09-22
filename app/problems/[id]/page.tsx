@@ -483,7 +483,7 @@ export default function ProblemDetailPage() {
   return (
     <>
       <Navigation />
-      <main className="pt-20 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="pt-20 max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-10 py-8">
         {/* Contest Mode Banner */}
         {contestId && (
           <div className="mb-4 p-3 rounded-lg border border-kjprimary/30 bg-kjprimary/5 flex flex-wrap items-center justify-between gap-3 font-mono text-xs text-kjtext">
@@ -522,9 +522,9 @@ export default function ProblemDetailPage() {
           </div>
         </div>
 
-        <div className="grid lg:grid-cols-[1.05fr_0.95fr] gap-8 items-start">
+        <div className="grid lg:grid-cols-[minmax(0,72ch)_minmax(0,1fr)] gap-8 items-start">
           {/* Problem Statement Section */}
-          <article className="space-y-5">
+          <article className="space-y-5 max-w-[72ch]">
             {/* Left Panel Tabs Bar */}
             <div className="flex items-center gap-1 bg-kjsurface/60 p-1 rounded-lg border border-kjborder font-mono text-xs">
               <button
@@ -587,7 +587,7 @@ export default function ProblemDetailPage() {
                 </div>
 
                 {/* Statement — reading prose */}
-                <div className="prose prose-invert max-w-none text-[13px] leading-[1.7] text-kjtext/90 font-sans">
+                <div className="prose prose-invert max-w-none text-sm leading-[1.75] text-kjtext/90 font-sans">
                   <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
                     {problem.statement}
                   </Markdown>
@@ -870,7 +870,7 @@ export default function ProblemDetailPage() {
                   }
                 }}
                 spellCheck={false}
-                className="flex-1 min-h-[340px] resize-y bg-transparent p-4 text-xs sm:text-sm leading-6 font-mono text-kjtext focus:outline-none selection:bg-kjprimary/20"
+                className="flex-1 min-h-[340px] lg:min-h-[55vh] resize-y bg-transparent p-4 text-sm leading-6 font-mono text-kjtext focus:outline-none selection:bg-kjprimary/20"
               />
               <span className="absolute bottom-2 right-3 text-[10px] font-mono text-kjtext-muted/50 select-none pointer-events-none">
                 {lineCount} lines · Ctrl+Enter submit · Ctrl+&apos; run
