@@ -129,6 +129,9 @@ export async function POST(req: NextRequest) {
     if (contest.status !== "live") {
       return jsonError("contest is not live", 403);
     }
+    if (Date.now() < new Date(contest.startsAt).getTime()) {
+      return jsonError("contest has not started", 403);
+    }
     const regRows = await db
       .select()
       .from(contestRegistrations)

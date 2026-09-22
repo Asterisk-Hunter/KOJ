@@ -108,6 +108,9 @@ export async function GET(
       if (contestRows.length === 0 || contestRows[0].status !== "live") {
         return jsonError("contest not live or not found", 403);
       }
+      if (Date.now() < new Date(contestRows[0].startsAt).getTime()) {
+        return jsonError("contest has not started", 403);
+      }
       const reg = await db
         .select()
         .from(contestRegistrations)
@@ -146,6 +149,7 @@ export async function GET(
       for (const { contestId: cid } of liveContests) {
         const contestRows = await db.select().from(contests).where(eq(contests.id, cid)).limit(1);
         if (contestRows.length === 0 || contestRows[0].status !== "live") continue;
+        if (Date.now() < new Date(contestRows[0].startsAt).getTime()) continue;
         const reg = await db
           .select()
           .from(contestRegistrations)

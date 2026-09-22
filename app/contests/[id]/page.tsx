@@ -198,7 +198,7 @@ export default function ContestDetailPage() {
   }
 
   const canEnterArena = contest.status === "Active" && contest.registered;
-  const showRegister = contest.status === "Registration Open" || contest.status === "Upcoming";
+  const showRegister = contest.status === "Registration Open" || contest.status === "Upcoming" || contest.status === "Active";
 
   return (
     <>
@@ -308,9 +308,9 @@ export default function ContestDetailPage() {
                 >
                   ENTER ARENA
                 </Link>
-              ) : contest.status === "Active" && !contest.registered ? (
+              ) : contest.status === "Finished" ? (
                 <p className="mt-3 text-xs font-mono text-kjtext-muted border border-kjborder rounded p-3">
-                  Registration closed (contest already in progress).
+                  Registration closed.
                 </p>
               ) : null}
               <Link

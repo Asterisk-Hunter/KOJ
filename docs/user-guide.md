@@ -97,14 +97,14 @@ Contests are organized at `/contests`.
 
 ### Contest Stages
 1. **Upcoming**: Announced contest.
-2. **Registration Open**: Registration is active; participants can register before contest start.
+2. **Registration Open**: Registration is active; participants can register before contest start or join late while the contest is live.
 3. **Active**: The contest is live. Registered contestants can enter the arena and submit code.
 4. **Finished**: The contest has concluded. Problems transition to the public archive and final standings are archived.
 
 ### Registration
 - **Open Contests**: Click **REGISTER** to sign up.
 - **Invite-Only Contests**: Enter the secret **Invite Code** distributed by organizers, then click **REGISTER NOW**.
-- **Deadline**: Registration must be completed **before the contest starts** (`BR-06`). Once the clock begins, registration is closed.
+- **Deadline**: For pre-contest registration, sign up before the contest starts. Late registration is also available while the contest is live (before it ends).
 
 ### Countdown Timer
 - Displays **starts in `HH:MM:SS`** prior to start.

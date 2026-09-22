@@ -71,7 +71,7 @@ export async function GET(
     .where(eq(contestProblems.contestId, contest.id))
     .orderBy(asc(contestProblems.position));
 
-  const isPublic = contest.status === "live" || contest.status === "ended" || contest.status === "archived";
+  const isPublic = (contest.status === "live" && now >= contest.startsAt) || contest.status === "ended" || contest.status === "archived";
 
   type ProblemOut = {
     id: number;
@@ -114,11 +114,11 @@ export async function GET(
     } else {
       problemList.push({
         id: p.id,
-        title: p.title,
+        title: `Problem ${String.fromCharCode(64 + cp.position)}`,
         difficulty: p.difficulty,
         tags: p.tags,
         position: cp.position,
-        // statements withheld
+        // statements and titles withheld pre-start
         status: p.status,
       });
     }

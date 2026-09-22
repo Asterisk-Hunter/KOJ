@@ -63,13 +63,16 @@ export async function POST(
 
   const now = new Date();
 
-  // Registration is allowed only strictly before `startsAt`, for both
-  // `draft` and `live` (published-early) contests — live-future keeps the
-  // "Registration Open" semantics from deriveContestUiStatus.
+  // Ended/archived: no registration.
   if (contest.status !== "draft" && contest.status !== "live") {
     return jsonError("registration closed", 403);
   }
-  if (!isRegistrationOpen(contest.startsAt, now)) {
+  // Late registration: allow joining a live contest until endsAt (supersedes BR-06 pre-start-only window).
+  if (contest.status === "live") {
+    if (now >= contest.endsAt) {
+      return jsonError("registration closed", 403);
+    }
+  } else if (!isRegistrationOpen(contest.startsAt, now)) {
     return jsonError("registration closed", 403);
   }
 
