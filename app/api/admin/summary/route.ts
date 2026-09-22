@@ -34,21 +34,6 @@ export async function GET() {
     .orderBy(desc(problems.createdAt))
     .limit(10);
 
-  const recentUsers =
-    grant.role === "admin"
-      ? await db
-          .select({
-            clerkId: users.clerkId,
-            username: users.username,
-            email: users.email,
-            role: users.role,
-            createdAt: users.createdAt,
-          })
-          .from(users)
-          .orderBy(desc(users.createdAt))
-          .limit(5)
-      : [];
-
   return NextResponse.json({
     role: grant.role,
     counts: {
@@ -63,13 +48,6 @@ export async function GET() {
       difficulty: p.difficulty,
       status: p.status,
       createdAt: p.createdAt.toISOString(),
-    })),
-    recentUsers: recentUsers.map((u) => ({
-      clerkId: u.clerkId,
-      username: u.username,
-      email: u.email,
-      role: u.role,
-      createdAt: u.createdAt.toISOString(),
     })),
   });
 }

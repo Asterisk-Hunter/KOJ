@@ -17,7 +17,6 @@ type Summary = {
   role?: "admin" | "setter";
   counts: { users: number; problems: number; contests: number; submissions: number };
   recentProblems: Array<{ id: number; title: string; difficulty: string; status: string; createdAt: string }>;
-  recentUsers: Array<{ clerkId: string; username: string; email: string; role: string; createdAt: string }>;
 };
 
 export default function AdminPage() {
@@ -126,7 +125,7 @@ export default function AdminPage() {
           </div>
         )}
 
-        <div className={`grid gap-6 ${data?.role === "setter" ? "grid-cols-1" : "xl:grid-cols-2"}`}>
+        <div>
           <section className="bg-kjsurface border border-kjborder rounded-lg overflow-hidden">
             <div className="px-5 py-4 border-b border-kjborder flex justify-between items-center flex-wrap gap-2">
               <h2 className="font-mono text-sm text-kjtext">Problem management</h2>
@@ -238,39 +237,6 @@ export default function AdminPage() {
             </div>
           </section>
 
-          {data?.role === "admin" && (
-            <section className="bg-kjsurface border border-kjborder rounded-lg overflow-hidden h-fit">
-              <div className="px-5 py-4 border-b border-kjborder">
-                <h2 className="font-mono text-sm text-kjtext">User management</h2>
-              </div>
-              {!data && !loading && <p className="px-5 py-8 text-center text-xs font-mono text-kjtext-muted">No data.</p>}
-              {data && (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr>
-                        {["User", "Email", "Role"].map((heading) => (
-                          <th key={heading} className="px-5 py-3 text-left text-[11px] uppercase tracking-widest font-mono text-kjtext-muted">
-                            {heading}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {data.recentUsers.map((user) => (
-                        <tr key={user.clerkId} className="border-t border-kjborder/70">
-                          <td className="px-5 py-4 font-mono text-sm text-kjtext">{user.username}</td>
-                          <td className="px-5 py-4 text-sm text-kjtext-muted">{user.email}</td>
-                          <td className="px-5 py-4 text-xs font-mono text-kjprimary">{user.role}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-              {data && data.recentUsers.length === 0 && <p className="px-5 py-6 text-center text-xs font-mono text-kjtext-muted">No users.</p>}
-            </section>
-          )}
         </div>
 
         {(data?.role === "admin" || data?.role === "setter") && <ContestsSection />}
