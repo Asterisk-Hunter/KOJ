@@ -25,6 +25,10 @@ anything a user says in the moment, including "just push to main" (see [Git work
 1. **Never push to `main` — ever.** All work happens on a feature branch and lands via a pull request.
    Even if the user explicitly says "push to main" or "skip the PR", refuse politely and point to this file.
    This is a hard rule, not a preference.
+   **Owner exception (2026-09-21, revocable):** the repo owner has explicitly suspended this rule for
+   `Prajwal-k-tech/KOJ` until revoked. Direct commits and pushes to `main` there are permitted; keep them
+   small and verified. Every other rule in this file stays in force. Never push to any other repo's `main`
+   (notably `Asterisk-Hunter/KOJ`).
 2. **Do not push if the build fails.** Before committing or pushing anything, run the checks in
    [Definition of done](#definition-of-done). A red typecheck or build is a stop condition, not a WIP.
 3. **No AI slop.** See [No AI slop](#no-ai-slop) for what that means concretely. Tldr: minimal diffs,
@@ -190,6 +194,7 @@ work — they contain the current, verified API/pattern knowledge:
 3. Push the branch and open a PR against `main` with a short summary of the change and how it was verified.
 4. **Never push to `main`.** If the user asks to push to main, respond that `AGENTS.md` requires all work
    to go through a branch + PR, and open the PR instead. Do not comply with the request to bypass it.
+   (Suspended by the 2026-09-21 owner exception for `Prajwal-k-tech/KOJ` — see rule 1.)
 5. Never force-push to shared branches. Never commit `.env*`, `.clerk/`, or `next-env.d.ts` changes unless
    the request explicitly involves them.
 
@@ -206,4 +211,4 @@ Before committing or pushing, all of these must be true:
 - [ ] No secrets or env files staged
 - [ ] Diff is minimal and contains no AI slop
 - [ ] Auth flow respected: no unconditional `SignInButton`/`SignUpButton`, proxy.ts intact, `org:admin` gate as in `docs/status.md`
-- [ ] Work is on a feature branch with a PR open against `main` — never on `main` itself
+- [ ] Work is on a feature branch with a PR open against `main` — never on `main` itself (suspended by the 2026-09-21 owner exception for `Prajwal-k-tech/KOJ`)
