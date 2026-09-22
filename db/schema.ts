@@ -107,7 +107,7 @@ export const contests = pgTable("contests", {
   endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
   status: contestStatus("status").notNull().default("draft"),
   inviteCode: text("invite_code"),
-  // Hashed invite code (scrypt, versioned `v1$salt$hash`). `invite_code`
+  // Hashed invite code (scrypt, `scrypt$salt$key`). `invite_code`
   // is legacy plaintext kept read-only until migrated; never write to it.
   inviteCodeHash: text("invite_code_hash"),
   createdAt: timestamp("created_at", { withTimezone: true })
