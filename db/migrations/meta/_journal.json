@@ -19,22 +19,15 @@
     {
       "idx": 2,
       "version": "7",
-      "when": 1789969916227,
-      "tag": "0002_confused_boomerang",
-      "breakpoints": true
+      "when": 1789600000000,
+      "tag": "0002_invite_code_hash",
+      "breakpoints": false
     },
     {
       "idx": 3,
       "version": "7",
-      "when": 1789988856130,
-      "tag": "0003_vengeful_sumo",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1790053970832,
-      "tag": "0004_steady_talisman",
+      "when": 1789700000000,
+      "tag": "0003_judge_hardening",
       "breakpoints": true
     }
   ]

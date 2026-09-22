@@ -3,6 +3,7 @@ import { asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contestRegistrations, contests, problems } from "@/db/schema";
 import { ensureUserRow, jsonError, requireContestManager } from "@/app/api/admin/authz";
+import { hashInviteCode } from "@/app/api/contests/invite-code";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -177,7 +178,9 @@ export async function POST(req: NextRequest) {
       startsAt,
       endsAt,
       status: "draft",
-      inviteCode,
+      // Invite codes are stored hashed only — never plaintext.
+      inviteCode: null,
+      inviteCodeHash: inviteCode === null ? null : hashInviteCode(inviteCode),
     })
     .returning({ id: contests.id });
 

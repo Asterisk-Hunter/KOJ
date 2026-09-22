@@ -58,11 +58,5 @@ next-env.d.ts
 # Playwright MCP artifacts
 .playwright-mcp/
 
-# deepwork local state (git-local, OpenCode-readable)
+# Local deepwork progress
 .slim/deepwork/
-
-# Clerk/agent skills install (local tooling, not project code)
-.agents/
-.claude/
-agent/
-skills-lock.json

@@ -2,35 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { contestProblems, contestRegistrations, contests, problems, users } from "@/db/schema";
-import { settleExpiredContests } from "@/app/api/contests/lifecycle";
+import { contestProblems, contestRegistrations, contests, problems } from "@/db/schema";
+import { settleExpiredContests, deriveContestUiStatus, contestRequiresInvite } from "@/app/api/contests/lifecycle";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-type UiStatus = "Active" | "Registration Open" | "Upcoming" | "Finished";
-
-function deriveUiStatus(
-  dbStatus: string,
-  startsAt: Date,
-  endsAt: Date,
-  now: Date = new Date(),
-): UiStatus {
-  if (dbStatus === "archived" || dbStatus === "ended") return "Finished";
-  if (dbStatus === "live") {
-    if (now >= startsAt && now <= endsAt) return "Active";
-    if (now < startsAt) return "Registration Open";
-    return "Finished";
-  }
-  if (now < startsAt) {
-    const diff = startsAt.getTime() - now.getTime();
-    const sevenDays = 7 * 24 * 60 * 60 * 1000;
-    if (diff <= sevenDays) return "Registration Open";
-    return "Upcoming";
-  }
-  if (now >= startsAt && now <= endsAt) return "Registration Open";
-  return "Finished";
-}
 
 function jsonError(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
@@ -62,22 +38,8 @@ export async function GET(
 
   const { userId } = await auth();
 
-  // Draft contests are only visible to staff (admin/contest_setter/problem_setter)
-  if (contest.status === "draft") {
-    if (!userId) return jsonError("contest not found", 404);
-    const userRows = await db
-      .select({ role: users.role })
-      .from(users)
-      .where(eq(users.clerkId, userId))
-      .limit(1);
-    const role = userRows[0]?.role;
-    if (role !== "admin" && role !== "contest_setter" && role !== "problem_setter") {
-      return jsonError("contest not found", 404);
-    }
-  }
-
   const now = new Date();
-  const status = deriveUiStatus(contest.status, contest.startsAt, contest.endsAt, now);
+  const status = deriveContestUiStatus(contest.status, contest.startsAt, contest.endsAt, now);
 
   // participants count
   const partRows = await db
@@ -179,7 +141,7 @@ export async function GET(
     problemsCount: problemList.length,
     participants,
     registered,
-    inviteRequired: contest.inviteCode !== null,
+    inviteRequired: contestRequiresInvite(contest),
     currentUserId: userId ?? null,
   });
 }

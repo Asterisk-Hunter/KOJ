@@ -13,8 +13,10 @@ import {
   nextStatuses,
   releaseLinkedProblems,
   revertLinkedProblems,
+  contestRequiresInvite,
   type ContestStatus,
 } from "@/app/api/contests/lifecycle";
+import { hashInviteCode } from "@/app/api/contests/invite-code";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -64,7 +66,10 @@ export async function GET(
     startsAt: contest.startsAt.toISOString(),
     endsAt: contest.endsAt.toISOString(),
     status: contest.status,
+    // Legacy plaintext only (migration visibility for unmigrated rows);
+    // hashed codes are never revealed. Prefer `hasInviteCode`.
     inviteCode: contest.inviteCode,
+    hasInviteCode: contestRequiresInvite(contest),
     problems: links,
     registrations: regs.length,
   });
@@ -178,6 +183,7 @@ export async function PATCH(
   if (b.inviteCode !== undefined) {
     if (b.inviteCode === null) {
       patch.inviteCode = null;
+      patch.inviteCodeHash = null;
     } else if (
       typeof b.inviteCode !== "string" ||
       b.inviteCode.trim().length === 0 ||
@@ -185,7 +191,9 @@ export async function PATCH(
     ) {
       return jsonError("inviteCode must be a string 1..64 chars or null", 400);
     } else {
-      patch.inviteCode = b.inviteCode.trim();
+      // Store hashed only; clear any legacy plaintext (rotation).
+      patch.inviteCode = null;
+      patch.inviteCodeHash = hashInviteCode(b.inviteCode.trim());
     }
   }
 
