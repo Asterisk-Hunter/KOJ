@@ -11,31 +11,23 @@ export function jsonError(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
 }
 
-async function clerkHasOrgRole(role: string): Promise<boolean> {
-  try {
-    const authObj = await auth();
-    const hasFn = (
-      authObj as unknown as { has?: (arg: unknown) => Promise<boolean> | boolean }
-    ).has;
-    if (typeof hasFn !== "function") return false;
-    const res = hasFn.call(authObj, { role });
-    return res instanceof Promise ? await res : Boolean(res);
-  } catch {
-    return false;
-  }
-}
-
-async function clerkIsOrgAdmin(): Promise<boolean> {
-  return clerkHasOrgRole("org:admin");
-}
-
 export type AdminGrant = { ok: true; userId: string } | { ok: false; response: NextResponse };
 
-/** Admin-only gate: Clerk `org:admin` OR `users.role == "admin"` in Neon. */
+/** Admin-only gate: `ADMIN_CLERK_IDS` env allowlist OR `users.role == "admin"` in Neon. */
 export async function requireAdmin(): Promise<AdminGrant> {
   const { userId } = await auth();
   if (!userId) return { ok: false, response: jsonError("unauthorized", 401) };
-  if (await clerkIsOrgAdmin()) return { ok: true, userId };
+
+  // Fast-path: env-based allowlist (comma-separated Clerk user IDs).
+  const raw = process.env.ADMIN_CLERK_IDS;
+  if (raw) {
+    const allowed = raw
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean);
+    if (allowed.includes(userId)) return { ok: true, userId };
+  }
+
   const rows = await db
     .select({ role: users.role })
     .from(users)
@@ -50,17 +42,13 @@ export type SetterGrant =
   | { ok: false; response: NextResponse };
 
 /**
- * Contest-manager gate: Clerk `org:admin` (or a custom `org:contest_setter`
- * org role once created in the Clerk dashboard) OR Neon `users.role` of
- * `admin` / `contest_setter`. Problem management stays on requireSetter;
- * user/role management stays on requireAdmin (BR-03).
+ * Contest-manager gate: Neon `users.role` of `admin` or `contest_setter`.
+ * Problem management stays on requireSetter; user/role management stays on
+ * requireAdmin (BR-03).
  */
 export async function requireContestManager(): Promise<AdminGrant> {
   const { userId } = await auth();
   if (!userId) return { ok: false, response: jsonError("unauthorized", 401) };
-  if (await clerkIsOrgAdmin()) return { ok: true, userId };
-  // Best-effort: false until the custom org role exists in the dashboard.
-  if (await clerkHasOrgRole("org:contest_setter")) return { ok: true, userId };
   const rows = await db
     .select({ role: users.role })
     .from(users)
@@ -73,13 +61,11 @@ export async function requireContestManager(): Promise<AdminGrant> {
 }
 
 /**
- * Problem-setter gate: `org:admin` counts as admin; otherwise the Neon
- * `users` row must hold `admin` or `problem_setter`.
+ * Problem-setter gate: Neon `users.role` must hold `admin` or `problem_setter`.
  */
 export async function requireSetter(): Promise<SetterGrant> {
   const { userId } = await auth();
   if (!userId) return { ok: false, response: jsonError("unauthorized", 401) };
-  if (await clerkIsOrgAdmin()) return { ok: true, userId, dbRole: "admin" };
   const rows = await db
     .select({ role: users.role })
     .from(users)
@@ -99,13 +85,11 @@ export type StaffGrant =
   | { ok: false; response: NextResponse };
 
 /**
- * Staff gate: admin, problem_setter, or contest_setter.
+ * Staff gate: admin, problem_setter, or contest_setter (DB role only).
  */
 export async function requireStaff(): Promise<StaffGrant> {
   const { userId } = await auth();
   if (!userId) return { ok: false, response: jsonError("unauthorized", 401) };
-  if (await clerkIsOrgAdmin()) return { ok: true, userId, role: "admin" };
-  if (await clerkHasOrgRole("org:contest_setter")) return { ok: true, userId, role: "contest_setter" };
   const rows = await db
     .select({ role: users.role })
     .from(users)
