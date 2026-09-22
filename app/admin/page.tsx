@@ -14,7 +14,7 @@ import SubmissionsSection from "@/app/admin/SubmissionsSection";
 import ObservabilitySection from "@/app/admin/ObservabilitySection";
 
 type Summary = {
-  role?: "admin" | "problem_setter" | "contest_setter";
+  role?: "admin" | "setter";
   counts: { users: number; problems: number; contests: number; submissions: number };
   recentProblems: Array<{ id: number; title: string; difficulty: string; status: string; createdAt: string }>;
   recentUsers: Array<{ clerkId: string; username: string; email: string; role: string; createdAt: string }>;
@@ -86,18 +86,12 @@ export default function AdminPage() {
       <PageHeader
         eyebrow="Management / DB"
         title={
-          data?.role === "problem_setter"
-            ? "Problem Setter Dashboard"
-            : data?.role === "contest_setter"
-              ? "Contest Setter Dashboard"
-              : "Admin Dashboard"
+          data?.role === "setter" ? "Setter Dashboard" : "Admin Dashboard"
         }
         description={
-          data?.role === "problem_setter"
-            ? "Create and manage your competitive programming problems and test cases."
-            : data?.role === "contest_setter"
-              ? "Create and schedule contests, manage problems and registrations."
-              : "Manage the KOJ catalogue, users, contests, and submissions. Data is live from Neon."
+          data?.role === "setter"
+            ? "Create problems and test cases, run contests, manage registrations."
+            : "Manage the KOJ catalogue, users, contests, and submissions. Data is live from Neon."
         }
         action={{ label: "VIEW PROBLEMS", href: "/problems" }}
       />
@@ -132,7 +126,7 @@ export default function AdminPage() {
           </div>
         )}
 
-        <div className={`grid gap-6 ${data?.role === "problem_setter" ? "grid-cols-1" : "xl:grid-cols-2"}`}>
+        <div className={`grid gap-6 ${data?.role === "setter" ? "grid-cols-1" : "xl:grid-cols-2"}`}>
           <section className="bg-kjsurface border border-kjborder rounded-lg overflow-hidden">
             <div className="px-5 py-4 border-b border-kjborder flex justify-between items-center flex-wrap gap-2">
               <h2 className="font-mono text-sm text-kjtext">Problem management</h2>
@@ -279,7 +273,7 @@ export default function AdminPage() {
           )}
         </div>
 
-        {(data?.role === "admin" || data?.role === "contest_setter") && <ContestsSection />}
+        {(data?.role === "admin" || data?.role === "setter") && <ContestsSection />}
         {data?.role === "admin" && <UsersSection />}
         {data?.role === "admin" && <SubmissionsSection />}
         {data?.role === "admin" && <ObservabilitySection />}

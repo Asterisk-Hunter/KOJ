@@ -10,12 +10,12 @@ Problem management is handled through the KOJ management portal at `/admin`.
 
 ### Permissions and Roles
 To access the management portal, your account must have one of the following roles:
-- **`problem_setter`**: Can create new problems, edit and manage authored problems, and configure test cases.
+- **`setter`**: Can create new problems, edit and manage authored problems, configure test cases, and create/manage contests (single merged staff role).
 - **`admin`**: Full administrative access across problems, contests, user roles, and all submissions.
 
-Role assignment is managed either via Clerk organization roles (`org:admin`) or in the Neon database (`users.role = 'problem_setter'` or `'admin'`). If you do not have permission, navigating to `/admin` will display a `403 · not authorized` notice.
+Role assignment is managed in the Neon database (`users.role = 'setter'` or `'admin'`). If you do not have permission, navigating to `/admin` will display a `403 · not authorized` notice.
 
-When logged in as a `problem_setter`, the header displays **Problem Setter Dashboard** and shows the problem creation and management workspace.
+When logged in as a `setter`, the header displays **Setter Dashboard** and shows the problem creation workspace plus contest management.
 
 ---
 

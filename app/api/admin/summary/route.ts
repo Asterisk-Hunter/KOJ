@@ -27,7 +27,7 @@ export async function GET() {
     .from(problems);
 
   const recentProblems = await (
-    grant.role === "problem_setter"
+    grant.role === "setter"
       ? problemQuery.where(eq(problems.authorId, grant.userId))
       : problemQuery
   )

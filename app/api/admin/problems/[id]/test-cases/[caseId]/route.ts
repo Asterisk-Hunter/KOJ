@@ -42,7 +42,7 @@ async function guard(
     return { error: jsonError("problem not found", 404), problem: null, testCase: null };
   }
   const problem = problemRows[0];
-  if (dbRole === "problem_setter" && problem.authorId !== userId) {
+  if (dbRole !== "admin" && problem.authorId !== userId) {
     return { error: jsonError("forbidden", 403), problem: null, testCase: null };
   }
   const testCase = await findCase(problem.id, caseIdRaw);

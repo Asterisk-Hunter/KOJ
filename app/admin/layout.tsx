@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { users } from "@/db/schema";
 
-const STAFF_ROLES = new Set(["admin", "problem_setter", "contest_setter"]);
+const STAFF_ROLES = new Set(["admin", "setter"]);
 
 export const runtime = "nodejs";
 

@@ -45,8 +45,7 @@ export const submissionStatus = pgEnum("submission_status", [
 
 export const userRole = pgEnum("user_role", [
   "contestant",
-  "problem_setter",
-  "contest_setter",
+  "setter",
   "admin",
 ]);
 

@@ -109,8 +109,7 @@ export default function UsersSection() {
           >
             <option value="">all roles</option>
             <option value="contestant">contestant</option>
-            <option value="problem_setter">problem_setter</option>
-            <option value="contest_setter">contest_setter</option>
+            <option value="setter">setter</option>
             <option value="admin">admin</option>
           </select>
         </div>
@@ -174,8 +173,7 @@ export default function UsersSection() {
                       aria-label={`Change role for ${user.username}`}
                     >
                       <option value="contestant">contestant</option>
-                      <option value="problem_setter">problem_setter</option>
-                      <option value="contest_setter">contest_setter</option>
+                      <option value="setter">setter</option>
                       <option value="admin">admin</option>
                     </select>
                   </td>

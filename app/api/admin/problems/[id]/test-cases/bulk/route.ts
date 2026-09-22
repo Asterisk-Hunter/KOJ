@@ -37,7 +37,7 @@ export async function POST(
   const { id: idRaw } = await ctx.params;
   const problem = await findProblem(idRaw);
   if (!problem) return jsonError("problem not found", 404);
-  if (grant.dbRole === "problem_setter" && problem.authorId !== grant.userId) {
+  if (grant.dbRole !== "admin" && problem.authorId !== grant.userId) {
     return jsonError("forbidden", 403);
   }
   if (await isLockedByLiveContest(problem.id)) {

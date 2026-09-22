@@ -15,8 +15,7 @@
 | **Sandbox** | Execution environment with `RLIMIT_AS` + wall timeout + `py_compile` check (POSIX; skipped on Windows dev) |
 | **Subprocess** | Isolated `subprocess.run([sys.executable, tmp.py])` per test case |
 | **Verdict** | Judge result: `status` + `passed_tests/total_tests` + `execution_time_ms` + `error_message` + per-case results |
-| **Problem Setter** | `user_role=problem_setter` — can author problems (today via admin gate) |
-| **Contest Setter** | Proposed role for contest creation — **not implemented** (no `contest_setter` enum value yet; see `docs/status.md`) |
+| **Setter** | `user_role=setter` — can author problems and run contests (merged staff role) |
 | **Contestant** | `user_role=contestant` — registers, submits, views rankings |
 | **Admin** | `user_role=admin` or Clerk `org:admin` — manages catalogue via `/api/admin/*` |
 | **Archive** | Public `published` problems available 24/7 for practice (`GET /api/problems`) |

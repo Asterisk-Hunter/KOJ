@@ -6,9 +6,9 @@
 
 ### Authentication & Authorization — [Implemented]
 - Clerk Organizations enabled; `proxy.ts` gates `/dashboard` + `/admin` (public: `/`, `/sign-in(.*)`, `/sign-up(.*)`, `/problems(.*)`, `/contests(.*)`, `/rankings(.*)`, `/submissions(.*)`, `/api(.*)`)
-- DB roles: `contestant` | `problem_setter` | `admin` (`user_role` enum). `org:admin` (Clerk) accepted for admin APIs (`/api/admin/*`); DB `admin` also accepted. 403 for unauthorized.
+- DB roles: `contestant` | `setter` | `admin` (`user_role` enum). `org:admin` (Clerk) accepted for admin APIs (`/api/admin/*`); DB `admin` also accepted. 403 for unauthorized.
 - Dashboard does not auto-redirect admins — `/admin` is a separate page.
-- **Gap:** no `contest_setter` role; contest creation is admin-only and not yet exposed as an API/UI. See `docs/status.md` for the recommended next decision (add `contest_setter` or keep admin-only).
+- **Setters** (problems + contests): `requireSetter` for problem CRUD/test cases/import, `requireContestManager` for contest CRUD; own problems only (admins exempt). User/role management, metrics, and problem hard-delete stay admin-only.
 
 ### Problem Authoring System — [Implemented]
 - **Problem creation:** `POST /api/admin/problems` (admin only) — title, statement (Markdown), input/output formats, constraints, difficulty `easy|medium|hard`, tags, time/memory limits. UI form in `/admin`.

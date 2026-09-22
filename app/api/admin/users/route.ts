@@ -7,11 +7,10 @@ import { jsonError, requireAdmin } from "@/app/api/admin/authz";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type Role = "contestant" | "problem_setter" | "contest_setter" | "admin";
+type Role = "contestant" | "setter" | "admin";
 
 function parseRole(v: unknown): Role | null {
-  if (v === "contestant" || v === "problem_setter" || v === "contest_setter" || v === "admin")
-    return v;
+  if (v === "contestant" || v === "setter" || v === "admin") return v;
   return null;
 }
 
@@ -36,7 +35,7 @@ export async function GET(req: NextRequest) {
   let role: Role | null = null;
   if (roleRaw !== null) {
     role = parseRole(roleRaw);
-    if (!role) return jsonError("role must be contestant, problem_setter, contest_setter, or admin", 400);
+    if (!role) return jsonError("role must be contestant, setter, or admin", 400);
   }
 
   const conditions = [];
@@ -96,7 +95,7 @@ export async function PATCH(req: NextRequest) {
   if (b.role !== undefined) {
     const role = parseRole(b.role);
     if (!role) {
-      return jsonError("role must be contestant, problem_setter, contest_setter, or admin", 400);
+      return jsonError("role must be contestant, setter, or admin", 400);
     }
     patch.role = role;
   }

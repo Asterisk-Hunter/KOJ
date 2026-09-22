@@ -18,8 +18,7 @@ KOJ is a self-hosted online programming contest platform for IIIT Kottayam: staf
 | Role | Default? | Can do | Cannot do |
 |---|---|---|---|
 | `contestant` | **yes, every new signup** | browse, register, submit, own history, public rankings | everything staff |
-| `problem_setter` | by admin grant | create problems, edit **own** problems, manage their test cases, import, publish own | delete problems, touch contests, manage users, see metrics |
-| `contest_setter` | by admin grant | create/manage contests, attach/remove problems, publish/unpublish/archive, invite codes | create problems, manage users, see metrics |
+| `setter` | by admin grant | create problems, edit **own** problems, manage their test cases, import, publish own, create/manage contests, attach/remove problems, publish/unpublish/archive, invite codes | delete problems, manage users, see metrics |
 | `admin` | by admin grant (or `ADMIN_CLERK_IDS` bootstrap) | everything: users/roles/suspend, delete, metrics, submissions browser | — (cannot demote self) |
 
 Enforcement is triple-layered: server gates on every route (`requireAdmin`/`requireContestManager`/`requireSetter`/`requireStaff`), a layout gate that redirects non-staff away from `/admin`, and UI that hides unauthorized controls entirely. Verified by full isolation audit: zero leaks. Suspended users get 403 on submit.

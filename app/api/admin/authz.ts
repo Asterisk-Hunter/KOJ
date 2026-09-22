@@ -42,7 +42,8 @@ export type SetterGrant =
   | { ok: false; response: NextResponse };
 
 /**
- * Contest-manager gate: Neon `users.role` of `admin` or `contest_setter`.
+ * Contest-manager gate: Neon `users.role` of `admin` or `setter`.
+ * Merged role (was: separate problem_setter/contest_setter).
  * Problem management stays on requireSetter; user/role management stays on
  * requireAdmin (BR-03).
  */
@@ -54,14 +55,14 @@ export async function requireContestManager(): Promise<AdminGrant> {
     .from(users)
     .where(eq(users.clerkId, userId))
     .limit(1);
-  if (rows.length > 0 && (rows[0].role === "admin" || rows[0].role === "contest_setter")) {
+  if (rows.length > 0 && (rows[0].role === "admin" || rows[0].role === "setter")) {
     return { ok: true, userId };
   }
   return { ok: false, response: jsonError("forbidden", 403) };
 }
 
 /**
- * Problem-setter gate: Neon `users.role` must hold `admin` or `problem_setter`.
+ * Problem-setter gate: Neon `users.role` must hold `admin` or `setter`.
  */
 export async function requireSetter(): Promise<SetterGrant> {
   const { userId } = await auth();
@@ -72,20 +73,20 @@ export async function requireSetter(): Promise<SetterGrant> {
     .where(eq(users.clerkId, userId))
     .limit(1);
   const dbRole = rows.length > 0 ? rows[0].role : null;
-  if (dbRole === "admin" || dbRole === "problem_setter") {
+  if (dbRole === "admin" || dbRole === "setter") {
     return { ok: true, userId, dbRole };
   }
   return { ok: false, response: jsonError("forbidden", 403) };
 }
 
-export type StaffRole = "admin" | "problem_setter" | "contest_setter";
+export type StaffRole = "admin" | "setter";
 
 export type StaffGrant =
   | { ok: true; userId: string; role: StaffRole }
   | { ok: false; response: NextResponse };
 
 /**
- * Staff gate: admin, problem_setter, or contest_setter (DB role only).
+ * Staff gate: admin or setter (DB role only).
  */
 export async function requireStaff(): Promise<StaffGrant> {
   const { userId } = await auth();
@@ -96,7 +97,7 @@ export async function requireStaff(): Promise<StaffGrant> {
     .where(eq(users.clerkId, userId))
     .limit(1);
   const r = rows.length > 0 ? rows[0].role : null;
-  if (r === "admin" || r === "contest_setter" || r === "problem_setter") {
+  if (r === "admin" || r === "setter") {
     return { ok: true, userId, role: r as StaffRole };
   }
   return { ok: false, response: jsonError("forbidden", 403) };

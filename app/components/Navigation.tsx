@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useAuth, SignInButton, SignUpButton, UserButton } from "@clerk/nextjs";
 
-type DbRole = "admin" | "problem_setter" | "contest_setter" | "contestant";
+type DbRole = "admin" | "setter" | "contestant";
 
 type AuthMeResponse = {
   authenticated?: boolean;

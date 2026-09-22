@@ -7,7 +7,7 @@ import { users } from "@/db/schema";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type DbRole = "admin" | "problem_setter" | "contest_setter" | "contestant";
+type DbRole = "admin" | "setter" | "contestant";
 
 export async function GET() {
   const { userId } = await auth();
@@ -28,8 +28,8 @@ export async function GET() {
     .limit(1);
 
   const role: DbRole = rows.length > 0 ? rows[0].role : "contestant";
-  const canAuthor = role === "admin" || role === "problem_setter";
-  const canManageContests = role === "admin" || role === "contest_setter";
+  const canAuthor = role === "admin" || role === "setter";
+  const canManageContests = role === "admin" || role === "setter";
 
   return NextResponse.json({
     authenticated: true,

@@ -874,8 +874,7 @@
       "schema": "public",
       "values": [
         "contestant",
-        "problem_setter",
-        "contest_setter",
+        "setter",
         "admin"
       ]
     }

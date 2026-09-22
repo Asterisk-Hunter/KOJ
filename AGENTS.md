@@ -115,7 +115,7 @@ NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/dashboard
   `proxy.ts` as-is, but add **resource-based auth checks** (`auth()` from `@clerk/nextjs/server`) inside
   server components, Server Actions, and Route Handlers as defense-in-depth. Server Actions and API routes
   bypass proxy matchers.
-- **Clerk Organizations are ENABLED** on this instance. DB roles are `contestant | problem_setter | admin` (`user_role` enum); admin APIs accept Clerk `org:admin` **or** DB `admin` (see `docs/status.md`). Dashboard does not auto-redirect admins — `/admin` is separate and returns 403 for unauthorized users. There is **no** `contest_setter` role yet — contest creation is admin-only and not yet exposed; see `docs/status.md` for the recommended next decision before adding org flows.
+- **Clerk Organizations are ENABLED** on this instance. DB roles are `contestant | setter | admin` (`user_role` enum); admin APIs accept Clerk `org:admin` **or** DB `admin` (see `docs/status.md`). Dashboard does not auto-redirect admins — `/admin` is separate and returns 403 for unauthorized users. Contest creation is setter+admin via `/api/admin/contests` and the `/admin` contests section; user/role management stays admin-only.
 - **Never render `<SignInButton>` / `<SignUpButton>` unconditionally.** In single-session mode, rendering
   them while a user is signed in throws `cannot_render_single_session_enabled`. Gate them on auth state:
 

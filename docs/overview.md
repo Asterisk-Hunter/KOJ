@@ -55,9 +55,8 @@ Codeforces is excellent but not self-hostable. We need institutional control, gu
 | Role | What they do | Status on `feat/sprint1-backend` |
 |---|---|---|
 | **Contestant** | Registers for contests, submits code, views leaderboard, practices archived problems | Implemented (`user_role=contestant`) |
-| **Problem Setter** | Creates problems, uploads test cases, sets time/memory limits | Implemented (`problem_setter` in DB; creates via `POST /api/admin/problems` gated to `org:admin`/`admin`) |
-| **Contest Setter** | Creates/edits/publishes contests | **Not implemented** — no `contest_setter` role or contest creation API/UI; see `docs/status.md` Role gap |
-| **Admin** | Creates contests, manages users, controls visibility and publishing | Implemented (`admin` in DB + `org:admin` in Clerk); admin-only summary/problem creation today |
+| **Setter** | Creates problems, uploads test cases, sets time/memory limits, creates/edits/publishes contests | Implemented (`setter` in DB; problems via `requireSetter`, contests via `requireContestManager`) |
+| **Admin** | Manages users, controls visibility and publishing, deletes problems, observability | Implemented (`admin` in DB + `org:admin` in Clerk) |
 
 ---
 
