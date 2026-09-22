@@ -60,3 +60,9 @@ next-env.d.ts
 
 # deepwork local state (git-local, OpenCode-readable)
 .slim/deepwork/
+
+# Clerk/agent skills install (local tooling, not project code)
+.agents/
+.claude/
+agent/
+skills-lock.json

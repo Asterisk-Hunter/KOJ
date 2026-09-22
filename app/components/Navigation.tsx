@@ -2,8 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth, SignInButton, SignUpButton, UserButton } from "@clerk/nextjs";
+
+type DbRole = "admin" | "problem_setter" | "contest_setter" | "contestant";
 
 const navLinks = [
   {
@@ -56,8 +58,22 @@ const navLinks = [
 
 export default function Navigation() {
   const pathname = usePathname();
-  const { isSignedIn, has } = useAuth();
+  const { isSignedIn } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [dbRole, setDbRole] = useState<DbRole | null>(null);
+
+  useEffect(() => {
+    if (!isSignedIn) return;
+    fetch("/api/auth/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { role?: DbRole } | null) => {
+        if (d?.role) setDbRole(d.role);
+      })
+      .catch(() => {});
+  }, [isSignedIn]);
+
+  const isStaff =
+    dbRole === "admin" || dbRole === "problem_setter" || dbRole === "contest_setter";
 
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 bg-kjsurface/80 backdrop-blur-md border-b border-kjborder">
@@ -107,7 +123,7 @@ export default function Navigation() {
               </>
             ) : (
               <div className="flex items-center gap-3">
-                {Boolean(has?.({ role: "org:admin" }) || has?.({ role: "org:contest_setter" })) && (
+                {isStaff && (
                   <Link
                     href="/admin"
                     className={`text-[10px] font-mono px-2 py-0.5 rounded border transition-colors ${
@@ -194,7 +210,7 @@ export default function Navigation() {
                     },
                   }}
                 />
-                {Boolean(has?.({ role: "org:admin" }) || has?.({ role: "org:contest_setter" })) && (
+                {isStaff && (
                   <Link
                     href="/admin"
                     onClick={() => setMobileOpen(false)}
