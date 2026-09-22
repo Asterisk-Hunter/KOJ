@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { eq, inArray } from "drizzle-orm";
+import { desc, eq, ilike, inArray, or } from "drizzle-orm";
 import { clerkClient } from "@clerk/nextjs/server";
 import { db } from "@/db";
 import { users } from "@/db/schema";
@@ -67,7 +67,10 @@ export async function GET(req: NextRequest) {
     if (!role) return jsonError("role must be contestant, setter, or admin", 400);
   }
 
-  let list: { data: ClerkDirUser[]; totalCount: number };
+  // Clerk is the source of truth for signups; Neon holds roles/suspension.
+  // If Clerk is unreachable the page falls back to synced Neon rows only,
+  // flagged via `source`, so the list never goes blank.
+  let dir: { data: ClerkDirUser[]; totalCount: number } | null = null;
   try {
     const client = await clerkClient();
     const res = await client.users.getUserList({
@@ -75,10 +78,43 @@ export async function GET(req: NextRequest) {
       ...(q ? { query: q } : {}),
       orderBy: "-created_at",
     });
-    list = { data: res.data as ClerkDirUser[], totalCount: res.totalCount };
+    dir = { data: res.data as ClerkDirUser[], totalCount: res.totalCount };
   } catch {
-    return jsonError("could not reach Clerk directory", 502);
+    dir = null;
   }
+
+  if (!dir) {
+    const conditions = [];
+    if (q) {
+      const pattern = `%${q.replace(/[%_]/g, "")}%`;
+      conditions.push(or(ilike(users.username, pattern), ilike(users.email, pattern)));
+    }
+    if (role) conditions.push(eq(users.role, role));
+    const rows =
+      conditions.length > 0
+        ? await db
+            .select()
+            .from(users)
+            .where(conditions.length === 1 ? conditions[0] : or(...conditions))
+            .orderBy(desc(users.createdAt))
+            .limit(limit)
+        : await db.select().from(users).orderBy(desc(users.createdAt)).limit(limit);
+    return NextResponse.json({
+      users: rows.map((u) => ({
+        clerkId: u.clerkId,
+        username: u.username,
+        email: u.email,
+        role: u.role,
+        suspended: u.suspended,
+        synced: true,
+        createdAt: u.createdAt.toISOString(),
+      })),
+      total: rows.length,
+      source: "neon",
+    });
+  }
+
+  const list = dir;
 
   const clerkIds = list.data.map((u) => u.id);
   const neonRows =
@@ -105,7 +141,7 @@ export async function GET(req: NextRequest) {
   });
   if (role) merged = merged.filter((m) => m.role === role);
 
-  return NextResponse.json({ users: merged, total: list.totalCount });
+  return NextResponse.json({ users: merged, total: list.totalCount, source: "clerk" });
 }
 
 /**

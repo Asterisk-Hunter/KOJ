@@ -1,7 +1,6 @@
 "use client";
 
-/* eslint-disable react-hooks/set-state-in-effect */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type AdminUser = {
   clerkId: string;
@@ -9,6 +8,7 @@ type AdminUser = {
   email: string;
   role: string;
   suspended: boolean;
+  synced?: boolean;
   createdAt: string;
 };
 
@@ -23,8 +23,14 @@ export default function UsersSection() {
   const [query, setQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  const [total, setTotal] = useState<number | null>(null);
+  const [degraded, setDegraded] = useState(false);
+  const reqId = useRef(0);
 
+  // Immediate fetch (used after mutations). Typing goes through the
+  // debounced effect below so each keystroke doesn't hit the Clerk API.
   const load = useCallback(async () => {
+    const id = ++reqId.current;
     setLoading(true);
     setError(null);
     try {
@@ -34,19 +40,28 @@ export default function UsersSection() {
       const res = await fetch(`/api/admin/users?${params.toString()}`, { cache: "no-store" });
       const j = (await res.json().catch(() => null)) as {
         users?: AdminUser[];
+        total?: number;
+        source?: string;
         error?: string;
       } | null;
+      if (reqId.current !== id) return;
       if (!res.ok) throw new Error(j?.error ?? `failed (${res.status})`);
       setUsers(j?.users ?? []);
+      setTotal(typeof j?.total === "number" ? j.total : null);
+      setDegraded(j?.source === "neon");
     } catch (e) {
+      if (reqId.current !== id) return;
       setError(e instanceof Error ? e.message : "failed to load");
     } finally {
-      setLoading(false);
+      if (reqId.current === id) setLoading(false);
     }
   }, [query, roleFilter]);
 
   useEffect(() => {
-    void load();
+    const t = setTimeout(() => {
+      void load();
+    }, 350);
+    return () => clearTimeout(t);
   }, [load]);
 
   async function handleSuspend(clerkId: string, suspended: boolean) {
@@ -93,7 +108,9 @@ export default function UsersSection() {
   return (
     <section className="bg-kjsurface border border-kjborder rounded-lg overflow-hidden mt-6">
       <div className="px-5 py-4 border-b border-kjborder flex justify-between items-center flex-wrap gap-3">
-        <h2 className="font-mono text-sm text-kjtext">Role management</h2>
+        <h2 className="font-mono text-sm text-kjtext">
+          Role management{total !== null ? <span className="text-kjtext-muted"> · {total}</span> : ""}
+        </h2>
         <div className="flex gap-2">
           <input
             value={query}
@@ -126,6 +143,11 @@ export default function UsersSection() {
         </p>
       )}
 
+      {degraded && !loading && (
+        <p className="mx-5 mt-4 border border-yellow-500/20 bg-yellow-500/10 text-yellow-400 rounded p-3 text-xs font-mono">
+          Clerk directory unreachable — showing synced users only.
+        </p>
+      )}
       {loading ? (
         <p className="px-5 py-8 text-center text-xs font-mono text-kjtext-muted">Loading users…</p>
       ) : users.length === 0 ? (
@@ -150,7 +172,17 @@ export default function UsersSection() {
                 <tr key={user.clerkId} className="border-t border-kjborder/70">
                   <td className="px-5 py-3 font-mono text-sm text-kjtext">{user.username}</td>
                   <td className="px-5 py-3 text-sm text-kjtext-muted">{user.email}</td>
-                  <td className="px-5 py-3 text-xs font-mono text-kjprimary">{user.role}</td>
+                  <td className="px-5 py-3 text-xs font-mono text-kjprimary">
+                    {user.role}
+                    {user.synced === false && (
+                      <span
+                        title="Signed up but never synced to the DB — promoting will sync automatically"
+                        className="ml-2 text-[10px] text-yellow-400 border border-yellow-500/30 rounded px-1.5 py-0.5"
+                      >
+                        unsynced
+                      </span>
+                    )}
+                  </td>
                   <td className="px-5 py-3">
                     <button
                       onClick={() => void handleSuspend(user.clerkId, !user.suspended)}
