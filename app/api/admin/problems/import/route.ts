@@ -195,7 +195,7 @@ export async function POST(req: NextRequest) {
 
       parsed = {
         title,
-        statement: `### ${found.index}. ${found.name}\n\n` +
+        statement: `> **Auto-import stub — replace with the real statement before publishing.**\n\n### ${found.index}. ${found.name}\n\n` +
           `**Contest:** Codeforces Round #${found.contestId}\n` +
           `**Rating:** ${found.rating ? `${found.rating} (${difficulty.toUpperCase()})` : "Unrated"}\n` +
           `**Original Problem:** [Codeforces ${found.contestId}${found.index}](${url})\n\n` +
