@@ -5,6 +5,7 @@ export const MAX_SUBMISSION_BODY_BYTES = 256 * 1024;
 
 /** Test-case bodies carry input + expected output (10MB each per REQ-PROB-03). */
 export const MAX_TEST_CASE_BODY_BYTES = 22 * 1024 * 1024;
+export const MAX_RECOVER_BODY_BYTES = 4 * 1024;
 
 export type BoundedJsonResult =
   | { ok: true; value: unknown }

@@ -7,6 +7,12 @@ import { useAuth, SignInButton, SignUpButton, UserButton } from "@clerk/nextjs";
 
 type DbRole = "admin" | "problem_setter" | "contest_setter" | "contestant";
 
+type AuthMeResponse = {
+  authenticated?: boolean;
+  role?: DbRole;
+  canAccessAdmin?: boolean;
+};
+
 const navLinks = [
   {
     href: "/dashboard",
@@ -60,20 +66,20 @@ export default function Navigation() {
   const pathname = usePathname();
   const { isSignedIn } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [dbRole, setDbRole] = useState<DbRole | null>(null);
+  const [authMe, setAuthMe] = useState<AuthMeResponse | null>(null);
 
   useEffect(() => {
     if (!isSignedIn) return;
     fetch("/api/auth/me")
       .then((r) => (r.ok ? r.json() : null))
-      .then((d: { role?: DbRole } | null) => {
-        if (d?.role) setDbRole(d.role);
+      .then((d: AuthMeResponse | null) => {
+        setAuthMe(d);
       })
-      .catch(() => {});
+      .catch(() => setAuthMe({ canAccessAdmin: false }));
   }, [isSignedIn]);
 
-  const isStaff =
-    dbRole === "admin" || dbRole === "problem_setter" || dbRole === "contest_setter";
+  const canAccessAdmin = Boolean(isSignedIn && authMe?.canAccessAdmin);
+  const hasServerSession = Boolean(isSignedIn && authMe?.authenticated);
 
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 bg-kjsurface/80 backdrop-blur-md border-b border-kjborder">
@@ -87,7 +93,7 @@ export default function Navigation() {
           {/* Desktop links */}
           <div className="hidden md:flex items-center gap-6">
             {navLinks.map((link) => {
-              const href = isSignedIn ? link.href : link.signedOutHref;
+              const href = hasServerSession ? link.href : link.signedOutHref;
               const isActive = pathname === href || (link.href !== "/dashboard" && pathname.startsWith(`${link.href}/`));
               return (
                 <Link
@@ -123,7 +129,7 @@ export default function Navigation() {
               </>
             ) : (
               <div className="flex items-center gap-3">
-                {isStaff && (
+                {canAccessAdmin && (
                   <Link
                     href="/admin"
                     className={`text-[10px] font-mono px-2 py-0.5 rounded border transition-colors ${
@@ -163,7 +169,7 @@ export default function Navigation() {
       {mobileOpen && (
         <div className="md:hidden bg-kjsurface border-b border-kjborder px-4 pb-4 pt-2">
           {navLinks.map((link) => {
-            const href = isSignedIn ? link.href : link.signedOutHref;
+            const href = hasServerSession ? link.href : link.signedOutHref;
             const isActive = pathname === href || (link.href !== "/dashboard" && pathname.startsWith(`${link.href}/`));
             return (
               <Link
@@ -210,7 +216,7 @@ export default function Navigation() {
                     },
                   }}
                 />
-                {isStaff && (
+                {canAccessAdmin && (
                   <Link
                     href="/admin"
                     onClick={() => setMobileOpen(false)}

@@ -497,13 +497,13 @@ export default function ProblemDetailPage() {
                 href={`/rankings?contestId=${contestId}`}
                 className="text-kjprimary hover:underline font-bold"
               >
-                📊 Scoreboard →
+                Scoreboard →
               </Link>
               <Link
                 href={`/contests/${contestId}/arena`}
                 className="text-kjtext-muted hover:text-kjtext"
               >
-                🎪 Contest Arena →
+                Contest Arena →
               </Link>
             </div>
           </div>
@@ -536,7 +536,7 @@ export default function ProblemDetailPage() {
                     : "text-kjtext-muted hover:text-kjtext"
                 }`}
               >
-                📄 Statement
+                Statement
               </button>
               <button
                 type="button"
@@ -547,7 +547,7 @@ export default function ProblemDetailPage() {
                     : "text-kjtext-muted hover:text-kjtext"
                 }`}
               >
-                💡 Editorial {problem.explanation ? "✓" : ""}
+                Editorial {problem.explanation ? "✓" : ""}
               </button>
               <button
                 type="button"
@@ -558,7 +558,7 @@ export default function ProblemDetailPage() {
                     : "text-kjtext-muted hover:text-kjtext"
                 }`}
               >
-                🕒 Submissions {verdicts.length > 0 ? `(${verdicts.length})` : ""}
+                Submissions {verdicts.length > 0 ? `(${verdicts.length})` : ""}
               </button>
             </div>
 

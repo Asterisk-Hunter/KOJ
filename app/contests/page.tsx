@@ -45,6 +45,22 @@ function formatDate(iso: string): string {
   }
 }
 
+async function readJsonResponse(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (!text.trim()) return null;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function errorFromResponse(data: unknown): string | undefined {
+  if (typeof data !== "object" || data === null || !("error" in data)) return undefined;
+  const error = data.error;
+  return typeof error === "string" ? error : undefined;
+}
+
 export default function ContestsPage() {
   const [filter, setFilter] = useState<"All" | UiStatus>("All");
   const [contests, setContests] = useState<ContestListItem[]>([]);
@@ -58,11 +74,12 @@ export default function ContestsPage() {
     setError(null);
     try {
       const res = await fetch("/api/contests", { cache: "no-store" });
-      const data = (await res.json()) as unknown;
+      const data = await readJsonResponse(res);
       if (!res.ok) {
-        const msg = (data as { error?: string }).error ?? `Failed to load contests (${res.status})`;
+        const msg = errorFromResponse(data) ?? `Failed to load contests (${res.status})`;
         throw new Error(msg);
       }
+      if (data === null) throw new Error("Contest service returned an empty response");
       const list = Array.isArray(data)
         ? (data as ContestListItem[])
         : ((data as { contests?: ContestListItem[] }).contests ?? []);
@@ -87,8 +104,8 @@ export default function ContestsPage() {
       const res = await fetch(`/api/contests/${encodeURIComponent(item.id)}/register`, {
         method: "POST",
       });
-      const data = (await res.json()) as { error?: string; registered?: boolean };
-      if (!res.ok) throw new Error(data.error ?? `Failed (${res.status})`);
+      const data = await readJsonResponse(res);
+      if (!res.ok) throw new Error(errorFromResponse(data) ?? `Failed (${res.status})`);
       setContests((prev) =>
         prev.map((c) =>
           c.id === item.id ? { ...c, registered: true, participants: c.participants + 1 } : c,

@@ -164,7 +164,6 @@ export default function ProblemsPage() {
         eyebrow="Archive / indexed"
         title="Problem Archive"
         description="Practice from the public KOJ catalogue. Search by title or topic, then open a problem to read the statement and submit code."
-        action={{ label: "+ NEW / IMPORT PROBLEM", href: "/problems/create" }}
       />
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="flex flex-col lg:flex-row gap-3 mb-4">
@@ -192,7 +191,18 @@ export default function ProblemsPage() {
               className="px-4 py-2 rounded border border-kjprimary/60 bg-kjprimary/10 text-kjprimary hover:bg-kjprimary/20 text-xs font-mono font-bold transition-all cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
               title="Pick a random problem to solve"
             >
-              <span>🎲</span>
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                className="h-4 w-4"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+              >
+                <circle cx="12" cy="12" r="3.5" />
+                <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1" />
+              </svg>
               <span>PICK RANDOM</span>
             </button>
           </div>

@@ -113,8 +113,8 @@ export default function AdminPage() {
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
             <StatCard label="TOTAL USERS" value={String(data.counts.users)} icon="@" accent />
             <StatCard label="TOTAL PROBLEMS" value={String(data.counts.problems)} icon="{}" accent />
-            <StatCard label="TOTAL CONTESTS" value={String(data.counts.contests)} icon="★" accent />
-            <StatCard label="SUBMISSIONS" value={String(data.counts.submissions)} icon="→" />
+            <StatCard label="TOTAL CONTESTS" value={String(data.counts.contests)} icon="C" accent />
+            <StatCard label="SUBMISSIONS" value={String(data.counts.submissions)} icon="#" />
           </div>
         )}
 
@@ -142,7 +142,7 @@ export default function AdminPage() {
                   onClick={() => setShowStudio((prev) => !prev)}
                   className="bg-kjprimary text-kjbg hover:glow-sm px-3 py-1 rounded text-xs font-bold uppercase transition-all cursor-pointer"
                 >
-                  {showStudio ? "✕ Close Studio" : "+ New Problem / ⚡ Import"}
+                  {showStudio ? "Close Studio" : "+ New Problem / Import"}
                 </button>
                 <span className="text-[11px] font-mono text-kjtext-muted">{data ? `${data.counts.problems} total` : ""}</span>
               </div>
@@ -239,7 +239,7 @@ export default function AdminPage() {
                 onClick={() => setShowStudio(true)}
                 className="border border-kjprimary text-kjprimary hover:bg-kjprimary/10 px-4 py-2 rounded text-xs font-bold transition-all cursor-pointer"
               >
-                ⚡ Open Problem Authoring Studio & 1-Click Importer
+                Open Problem Authoring Studio & 1-Click Importer
               </button>
             </div>
           </section>

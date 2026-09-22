@@ -1,9 +1,11 @@
 "use client";
 
-import { SignIn } from "@clerk/nextjs";
+import { SignIn, UserButton, useAuth } from "@clerk/nextjs";
 import Link from "next/link";
 
 export default function SignInPage() {
+  const { isLoaded, isSignedIn } = useAuth();
+
   return (
     <div className="flex min-h-screen items-center justify-center px-4">
       <div className="w-full max-w-md">
@@ -24,15 +26,37 @@ export default function SignInPage() {
 
           {/* Terminal Body */}
           <div className="p-6">
-            <SignIn
-              fallbackRedirectUrl="/dashboard"
-              appearance={{
-                elements: {
-                  rootBox: "w-full",
-                  card: "bg-transparent border-0 shadow-none",
-                },
-              }}
-            />
+            {!isLoaded ? (
+              <p className="font-mono text-sm text-kjtext-muted">Checking secure session...</p>
+            ) : isSignedIn ? (
+              <div className="space-y-4">
+                <div>
+                  <h1 className="font-mono text-lg font-semibold text-kjtext">Session synchronization required</h1>
+                  <p className="mt-2 text-sm text-kjtext-muted">
+                    Your browser has a Clerk session, but it is not providing the localhost token KOJ needs
+                    for server-side access. Use a standard browser window for local development, or test on
+                    the deployed site.
+                  </p>
+                </div>
+                <UserButton
+                  appearance={{
+                    elements: {
+                      avatarBox: "w-8 h-8",
+                    },
+                  }}
+                />
+              </div>
+            ) : (
+              <SignIn
+                fallbackRedirectUrl="/dashboard"
+                appearance={{
+                  elements: {
+                    rootBox: "w-full",
+                    card: "bg-transparent border-0 shadow-none",
+                  },
+                }}
+              />
+            )}
           </div>
         </div>
 

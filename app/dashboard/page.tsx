@@ -177,9 +177,9 @@ export default async function DashboardPage() {
         {/* Stats Grid */}
         <section className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-16">
           <StatCard label="TOTAL PROBLEMS" value={publishedProblemsCount} icon="{" accent />
-          <StatCard label="ACTIVE CONTESTS" value={liveContestsCount} icon="★" accent />
+          <StatCard label="ACTIVE CONTESTS" value={liveContestsCount} icon="C" accent />
           <StatCard label="REGISTERED USERS" value={usersCount} icon="@" accent />
-          <StatCard label="SUBMISSIONS TODAY" value={submissionsTodayCount} icon="→" />
+          <StatCard label="SUBMISSIONS TODAY" value={submissionsTodayCount} icon="#" />
         </section>
 
         {/* Personal Progress Section (LeetCode/CF style) */}

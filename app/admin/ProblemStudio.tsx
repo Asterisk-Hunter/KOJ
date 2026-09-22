@@ -333,7 +333,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
           count: data.problem?.testCases?.length,
         };
         setCreatedSuccess(created);
-        setStatusNotice(`🚀 Successfully imported and published problem #${data.problemId}: "${created.title}"!`);
+        setStatusNotice(`Successfully imported and published problem #${data.problemId}: "${created.title}"!`);
         if (onProblemCreated) onProblemCreated(created);
         return;
       }
@@ -547,7 +547,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                 : "text-kjtext-muted hover:text-kjtext"
             }`}
           >
-            ⚡ 1-Click Importer
+            1-Click Importer
           </button>
           <button
             type="button"
@@ -558,7 +558,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                 : "text-kjtext-muted hover:text-kjtext"
             }`}
           >
-            ✍️ Studio Editor {form.title && `(${form.title.slice(0, 16)}…)`}
+            Studio Editor {form.title && `(${form.title.slice(0, 16)}…)`}
           </button>
           <button
             type="button"
@@ -569,7 +569,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                 : "text-kjtext-muted hover:text-kjtext"
             }`}
           >
-            📦 Polygon & Bulk Tests {form.testCases.length > 0 && `(${form.testCases.length})`}
+            Polygon & Bulk Tests {form.testCases.length > 0 && `(${form.testCases.length})`}
           </button>
         </div>
 
@@ -579,7 +579,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
             onClick={onCancel}
             className="text-xs text-kjtext-muted hover:text-kjtext border border-kjborder px-3 py-1.5 rounded transition-colors"
           >
-            ✕ Close
+            Close
           </button>
         )}
       </div>
@@ -588,13 +588,13 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
       {statusNotice && (
         <div className="px-5 py-3 bg-kjprimary/10 border-b border-kjprimary/20 text-kjprimary text-xs flex justify-between items-center">
           <span>{statusNotice}</span>
-          <button onClick={() => setStatusNotice(null)} className="text-kjprimary/70 hover:text-kjprimary">✕</button>
+          <button type="button" onClick={() => setStatusNotice(null)} className="text-kjprimary/70 hover:text-kjprimary" aria-label="Dismiss notice">Close</button>
         </div>
       )}
       {statusError && (
         <div className="px-5 py-3 bg-red-500/10 border-b border-red-500/20 text-red-400 text-xs flex justify-between items-center">
           <span>{statusError}</span>
-          <button onClick={() => setStatusError(null)} className="text-red-400/70 hover:text-red-400">✕</button>
+          <button type="button" onClick={() => setStatusError(null)} className="text-red-400/70 hover:text-red-400" aria-label="Dismiss error">Close</button>
         </div>
       )}
 
@@ -627,7 +627,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
               href={`/problems/${createdSuccess.id}`}
               className="bg-kjprimary text-kjbg hover:glow-sm font-bold text-xs px-4 py-2 rounded-lg flex items-center gap-1.5 transition-all shadow-md"
             >
-              <span>🚀 OPEN IN SOLVING ARENA</span>
+              <span>OPEN IN SOLVING ARENA</span>
               <span>→</span>
             </Link>
             <button
@@ -641,7 +641,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
               }}
               className="border border-kjborder bg-kjsurface hover:border-kjprimary/60 text-xs px-3.5 py-2 rounded-lg font-mono transition-colors text-kjtext cursor-pointer"
             >
-              {copiedLink ? "✓ LINK COPIED!" : "📋 COPY PROBLEM LINK"}
+              {copiedLink ? "✓ LINK COPIED!" : "COPY PROBLEM LINK"}
             </button>
             <button
               type="button"
@@ -664,7 +664,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
               }}
               className="border border-kjborder bg-kjsurface hover:text-kjprimary text-xs px-3.5 py-2 rounded-lg font-mono transition-colors text-kjtext-muted cursor-pointer"
             >
-              ➕ CREATE ANOTHER
+              CREATE ANOTHER
             </button>
             <Link
               href="/problems"
@@ -691,11 +691,11 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
 
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
               {[
-                { id: "leetcode", label: "LeetCode", icon: "🟡", desc: "URL or slug" },
-                { id: "codeforces", label: "Codeforces", icon: "🔵", desc: "4A, 158B, or URL" },
-                { id: "atcoder", label: "AtCoder", icon: "🔴", desc: "abc340_a or URL" },
-                { id: "competitive-companion", label: "Competitive Companion", icon: "🟢", desc: "Browser JSON format" },
-                { id: "csv", label: "Polygon / CSV", icon: "📄", desc: "Test cases batch" },
+                { id: "leetcode", label: "LeetCode", marker: "bg-yellow-300", desc: "URL or slug" },
+                { id: "codeforces", label: "Codeforces", marker: "bg-blue-400", desc: "4A, 158B, or URL" },
+                { id: "atcoder", label: "AtCoder", marker: "bg-rose-400", desc: "abc340_a or URL" },
+                { id: "competitive-companion", label: "Competitive Companion", marker: "bg-emerald-300", desc: "Browser JSON format" },
+                { id: "csv", label: "Polygon / CSV", marker: "bg-kjtext-muted", desc: "Test cases batch" },
               ].map((src) => (
                 <button
                   key={src.id}
@@ -717,7 +717,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                   }`}
                 >
                   <div className="flex items-center gap-2 text-xs font-bold text-kjtext">
-                    <span>{src.icon}</span>
+                    <span aria-hidden="true" className={`h-2.5 w-2.5 rounded-full ${src.marker}`} />
                     <span>{src.label}</span>
                   </div>
                   <p className="text-[10px] text-kjtext-muted mt-1">{src.desc}</p>
@@ -728,12 +728,11 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
 
           {/* Contest Adaptation Workflow Callout */}
           <div className="border border-kjprimary/30 bg-kjprimary/5 rounded-lg p-3.5 text-xs font-mono flex items-start gap-2.5">
-            <span className="text-base leading-none">💡</span>
             <div className="space-y-1">
               <strong className="text-kjprimary">Contest Adaptation & Statement Customization:</strong>
               <p className="text-[11px] text-kjtext-muted leading-relaxed">
                 Want to adapt problems from Codeforces, LeetCode, or AtCoder for your college contest? Click{" "}
-                <strong className="text-kjtext">⚡ FETCH & PREVIEW IN STUDIO</strong>. It pulls the problem along with all verified test cases into the Studio Editor. You can then freely rewrite the problem statement, add college lore, and customize LaTeX formulas while keeping all original test cases intact!
+                <strong className="text-kjtext">FETCH & PREVIEW IN STUDIO</strong>. It pulls the problem along with all verified test cases into the Studio Editor. You can then freely rewrite the problem statement, add college lore, and customize LaTeX formulas while keeping all original test cases intact!
               </p>
             </div>
           </div>
@@ -822,7 +821,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
 
             {importError && (
               <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 text-xs rounded-lg">
-                ✕ {importError}
+                Error: {importError}
               </div>
             )}
 
@@ -834,7 +833,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                 disabled={importing || !importInput.trim()}
                 className="border border-kjprimary text-kjprimary bg-kjprimary/5 hover:bg-kjprimary/15 font-bold text-xs px-5 py-2.5 rounded-lg transition-all cursor-pointer disabled:opacity-50"
               >
-                {importing ? "FETCHING & PARSING…" : "⚡ FETCH & PREVIEW IN STUDIO"}
+                {importing ? "FETCHING & PARSING…" : "FETCH & PREVIEW IN STUDIO"}
               </button>
               <button
                 type="button"
@@ -842,7 +841,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                 disabled={importing || !importInput.trim()}
                 className="bg-kjprimary text-kjbg hover:glow-sm font-bold text-xs px-6 py-2.5 rounded-lg transition-all cursor-pointer disabled:opacity-50"
               >
-                {importing ? "IMPORTING…" : "🚀 1-CLICK IMPORT & PUBLISH"}
+                {importing ? "IMPORTING…" : "1-CLICK IMPORT & PUBLISH"}
               </button>
             </div>
           </div>
@@ -856,35 +855,35 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
           <div className="border border-kjborder/70 rounded-lg p-3 bg-kjbg/40 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-[11px] uppercase tracking-wider text-kjprimary font-bold">
-                ⚡ Starter Templates:
+                Starter Templates:
               </span>
               <button
                 type="button"
                 onClick={() => handleApplyTemplate("icpc")}
                 className="text-xs border border-kjborder hover:border-kjprimary/70 bg-kjsurface px-2.5 py-1 rounded text-kjtext-muted hover:text-kjtext transition-colors cursor-pointer"
               >
-                🏆 Standard ICPC / CF
+                Standard ICPC / CF
               </button>
               <button
                 type="button"
                 onClick={() => handleApplyTemplate("leetcode")}
                 className="text-xs border border-kjborder hover:border-kjprimary/70 bg-kjsurface px-2.5 py-1 rounded text-kjtext-muted hover:text-kjtext transition-colors cursor-pointer"
               >
-                🟡 LeetCode Style
+                LeetCode Style
               </button>
               <button
                 type="button"
                 onClick={() => handleApplyTemplate("graph")}
                 className="text-xs border border-kjborder hover:border-kjprimary/70 bg-kjsurface px-2.5 py-1 rounded text-kjtext-muted hover:text-kjtext transition-colors cursor-pointer"
               >
-                🌲 Graph & Shortest Path
+                Graph & Shortest Path
               </button>
               <button
                 type="button"
                 onClick={() => handleApplyTemplate("math")}
                 className="text-xs border border-kjborder hover:border-kjprimary/70 bg-kjsurface px-2.5 py-1 rounded text-kjtext-muted hover:text-kjtext transition-colors cursor-pointer"
               >
-                📐 Math & Exponentiation
+                Math & Exponentiation
               </button>
             </div>
 
@@ -1216,7 +1215,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                         <div className="flex justify-between items-center mb-1">
                           <span className="text-[10px] uppercase text-kjtext-muted font-bold">Input (stdin)</span>
                           <label className="text-[10px] text-kjprimary hover:underline cursor-pointer flex items-center gap-1">
-                            <span>📂 Upload .txt</span>
+                            <span>Upload .txt</span>
                             <input
                               type="file"
                               accept=".txt,.in,.stdin"
@@ -1240,7 +1239,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                         <div className="flex justify-between items-center mb-1">
                           <span className="text-[10px] uppercase text-kjtext-muted font-bold">Expected Output (stdout)</span>
                           <label className="text-[10px] text-kjprimary hover:underline cursor-pointer flex items-center gap-1">
-                            <span>📂 Upload .txt</span>
+                            <span>Upload .txt</span>
                             <input
                               type="file"
                               accept=".txt,.out,.ans,.stdout"
@@ -1413,7 +1412,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                     : "text-kjtext-muted hover:text-kjtext border border-transparent"
                 }`}
               >
-                📁 Polygon / ICPC Multi-File Upload
+                Polygon / ICPC Multi-File Upload
               </button>
               <button
                 type="button"
@@ -1424,7 +1423,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                     : "text-kjtext-muted hover:text-kjtext border border-transparent"
                 }`}
               >
-                📝 CSV / Tab Delimited Text
+                CSV / Tab Delimited Text
               </button>
             </div>
             <span className="text-[11px] text-kjtext-muted hidden sm:inline">
@@ -1464,7 +1463,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                   className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
                 />
                 <div className="space-y-2 pointer-events-none">
-                  <div className="text-3xl">📥</div>
+                  <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-lg border border-kjprimary/50 text-2xl font-mono text-kjprimary">+</div>
                   <div className="text-xs font-bold text-kjtext uppercase tracking-wider">
                     Drag & Drop Polygon, ICPC, CSV, or JSON Test Files Here
                   </div>
@@ -1481,7 +1480,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
 
               {unmatchedFiles.length > 0 && (
                 <div className="border border-yellow-400/30 bg-yellow-400/10 rounded p-3 text-xs text-yellow-300 space-y-1">
-                  <div className="font-bold">⚠️ Unmatched Files ({unmatchedFiles.length})</div>
+                  <div className="font-bold">Unmatched Files ({unmatchedFiles.length})</div>
                   <div className="text-[11px] text-yellow-300/80">
                     The following files could not be paired with an input or output counterpart:{" "}
                     <code className="text-yellow-200">{unmatchedFiles.slice(0, 8).join(", ")}{unmatchedFiles.length > 8 ? "…" : ""}</code>

@@ -13,8 +13,8 @@ const features = [
         <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0021 18V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v12a2.25 2.25 0 002.25 2.25z" />
       </svg>
     ),
-    title: "Real-Time Judging",
-    description: "Sub-100ms evaluation with isolated sandboxes",
+    title: "Reliable Judging",
+    description: "Sandboxed evaluation with clear, persisted verdicts",
   },
   {
     icon: (
@@ -22,8 +22,8 @@ const features = [
         <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 18.75h-9m9 0a3 3 0 013 3h-15a3 3 0 013-3m9 0v-3.375c0-.621-.503-1.125-1.125-1.125h-.871M7.5 18.75v-3.375c0-.621.504-1.125 1.125-1.125h.872m5.007 0H9.497m5.007 0a7.454 7.454 0 01-.982-3.172M9.497 14.25a7.454 7.454 0 00.981-3.172M5.25 4.236c-.982.143-1.954.317-2.916.52A6.003 6.003 0 007.73 9.728M5.25 4.236V4.5c0 2.108.966 3.99 2.48 5.228M5.25 4.236V2.721C7.456 2.41 9.71 2.25 12 2.25c2.291 0 4.545.16 6.75.47v1.516M18.75 4.236c.982.143 1.954.317 2.916.52A6.003 6.003 0 0016.27 9.728M18.75 4.236V4.5c0 2.108-.966 3.99-2.48 5.228m0 0a6.003 6.003 0 01-5.54 0" />
       </svg>
     ),
-    title: "Contest Engine",
-    description: "Schedule, host, and manage programming contests",
+    title: "Contest Workspaces",
+    description: "Register, compete, and review standings in one place",
   },
   {
     icon: (
@@ -31,8 +31,8 @@ const features = [
         <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
       </svg>
     ),
-    title: "Live Rankings",
-    description: "Global and contest-specific leaderboards",
+    title: "ICPC Standings",
+    description: "Contest rankings with transparent penalty rules",
   },
 ];
 
@@ -53,13 +53,15 @@ type ContestSummary = {
   participants: number;
 };
 
+type AuthMeResponse = {
+  authenticated?: boolean;
+};
+
 export default function LandingPage() {
-  // Keep in sync with Python JUDGE_LANGUAGES in api/app/main.py
-  const JUDGE_LANGUAGES = ["C", "C++", "Python", "Java"];
   const { isLoaded, isSignedIn } = useAuth();
   const [recentProblems, setRecentProblems] = useState<ProblemSummary[]>([]);
   const [activeContests, setActiveContests] = useState<ContestSummary[]>([]);
-  const [stats, setStats] = useState({ problems: 0, contests: 0 });
+  const [hasServerSession, setHasServerSession] = useState<boolean | null>(null);
 
   useEffect(() => {
     fetch("/api/problems")
@@ -70,7 +72,6 @@ export default function LandingPage() {
           : (data as { problems?: ProblemSummary[] })?.problems;
         if (problems && Array.isArray(problems)) {
           setRecentProblems(problems.slice(0, 4));
-          setStats((prev) => ({ ...prev, problems: problems.length }));
         }
       })
       .catch(() => {});
@@ -86,11 +87,28 @@ export default function LandingPage() {
             (c) => c.status === "Active" || c.status === "Registration Open" || c.status === "Upcoming",
           );
           setActiveContests(visible.slice(0, 3));
-          setStats((prev) => ({ ...prev, contests: contests.length }));
         }
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!isSignedIn) return;
+
+    let cancelled = false;
+    fetch("/api/auth/me")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data: AuthMeResponse | null) => {
+        if (!cancelled) setHasServerSession(Boolean(data?.authenticated));
+      })
+      .catch(() => {
+        if (!cancelled) setHasServerSession(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isSignedIn]);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -124,7 +142,7 @@ export default function LandingPage() {
                     </button>
                   </SignInButton>
                 </>
-              ) : (
+              ) : hasServerSession === true ? (
                 <>
                   <Link
                     href="/dashboard"
@@ -134,6 +152,18 @@ export default function LandingPage() {
                   </Link>
                   <UserButton />
                 </>
+              ) : hasServerSession === false ? (
+                <div className="flex items-center gap-3 text-left">
+                  <div>
+                    <p className="font-mono text-xs text-kjtext">Session synchronization required</p>
+                    <p className="font-mono text-[11px] text-kjtext-muted mt-1">
+                      This browser cannot provide KOJ&apos;s localhost session token.
+                    </p>
+                  </div>
+                  <UserButton />
+                </div>
+              ) : (
+                <p className="font-mono text-xs text-kjtext-muted">Checking secure session...</p>
               )}
             </div>
             <div className="flex gap-3 justify-center lg:justify-start mt-5">
@@ -145,24 +175,6 @@ export default function LandingPage() {
           {/* Right - Terminal */}
           <div className="flex-1 w-full max-w-xl">
             <GlitchingTerminal />
-          </div>
-        </div>
-      </section>
-
-      {/* Platform Stats */}
-      <section className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 pb-8">
-        <div className="grid grid-cols-3 gap-4">
-          <div className="bg-kjsurface border border-kjborder rounded-lg p-5 text-center">
-            <p className="text-3xl font-mono font-bold text-kjprimary">{stats.problems}</p>
-            <p className="text-xs font-mono text-kjtext-muted mt-1">Problems</p>
-          </div>
-          <div className="bg-kjsurface border border-kjborder rounded-lg p-5 text-center">
-            <p className="text-3xl font-mono font-bold text-kjprimary">{stats.contests}</p>
-            <p className="text-xs font-mono text-kjtext-muted mt-1">Contests</p>
-          </div>
-          <div className="bg-kjsurface border border-kjborder rounded-lg p-5 text-center">
-            <p className="text-3xl font-mono font-bold text-kjprimary">{JUDGE_LANGUAGES.length}</p>
-            <p className="text-xs font-mono text-kjtext-muted mt-1">Languages</p>
           </div>
         </div>
       </section>

@@ -303,7 +303,7 @@ export default function RankingsPage() {
             {/* Freeze Badge */}
             {isFrozen && (
               <span className="flex items-center gap-1.5 border border-cyan-500/40 bg-cyan-500/10 text-cyan-300 rounded px-3 py-1.5 text-xs font-mono font-bold animate-pulse">
-                <span>🧊</span> FROZEN ({data?.contest.freezeMinutesRemaining ?? 0}m left)
+                <span aria-hidden="true" className="h-2.5 w-2.5 rounded-sm border border-cyan-300/80 bg-cyan-300/30" /> FROZEN ({data?.contest.freezeMinutesRemaining ?? 0}m left)
               </span>
             )}
 
@@ -326,7 +326,7 @@ export default function RankingsPage() {
         {isFrozen && (
           <div className="border border-cyan-500/30 bg-cyan-950/30 rounded-lg p-4 text-xs font-mono text-cyan-200 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <span className="text-xl">🧊</span>
+              <span aria-hidden="true" className="h-4 w-4 rounded-sm border border-cyan-300/80 bg-cyan-300/30" />
               <div>
                 <strong className="text-cyan-300">DOMjudge Scoreboard Freeze Active</strong>
                 <p className="text-cyan-200/70 mt-0.5">
@@ -464,7 +464,7 @@ export default function RankingsPage() {
                             title={`First to solve! ${entry.attempts} attempt(s) in ${entry.timeMinutes ?? 0} mins`}
                           >
                             <div className="font-bold flex items-center justify-center gap-px text-emerald-300 text-[10px]">
-                              <span>★</span>
+                              <span className="sr-only">First solve</span>
                               {entry.attempts > 1 && <span>+{entry.attempts - 1}</span>}
                             </div>
                             <div className="text-[9px] text-emerald-400/70 tabular-nums">
@@ -558,7 +558,7 @@ export default function RankingsPage() {
         {data && data.rows.length > 0 && (
           <div className="flex flex-wrap gap-x-5 gap-y-1.5 text-[10px] font-mono text-kjtext-muted border-t border-kjborder pt-3">
             <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 bg-emerald-950 border border-emerald-500 rounded-sm text-emerald-300 flex items-center justify-center font-bold leading-none text-[7px]">★</span>
+              <span className="w-2.5 h-2.5 bg-emerald-950 border border-emerald-500 rounded-sm" aria-hidden="true" />
               First to Solve
             </span>
             <span className="flex items-center gap-1.5">
