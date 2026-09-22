@@ -6,9 +6,10 @@
 |---|---|---|
 | Website | https://koj-peach.vercel.app | `/api/health` 200 |
 | Judge (FastAPI) | https://koj-judge-189400571693.asia-south1.run.app | `/health` `{"status":"ok","db":true}`, `/metrics` 200 |
-| Database | Neon Postgres, `KOJ` project, ap-southeast-1 (Asterisk-Hunter org — location only) | fully migrated: email-unique, `case_results`, 6 perf indexes |
-| Auth | Clerk, Asterisk-Hunter → KOJ app, dev/test instance (no prod instance exists yet) | GitHub + Google SSO on; org-creation prompt disabled via API |
-| Cache | Upstash Redis `koj-cache`, Mumbai | code live with safe DB fallback |
+| Database | Neon Postgres, `KOJ` project, ap-southeast-1 (Asterisk-Hunter org — location only) | fully migrated: email-unique, `case_results`, `judge_infra_error`, 12 indexes (6 app + 6 worker, non-overlapping) |
+| Auth | Clerk, Asterisk-Hunter → KOJ app, dev/test instance (no prod instance exists yet) | GitHub + Google SSO on; org-creation prompt disabled via API; `/api/auth/me` is DB-only; admin layout redirects non-staff |
+| Cache | Upstash Redis `koj-cache`, Mumbai | proven live (`standings:3` key observed after rankings hit) |
+| Webhooks | Clerk → `/api/webhooks/clerk`, secret in Vercel prod | unsigned probe returns 400 (signature path active) |
 | Repo | `Prajwal-k-tech/KOJ`, `main` is delivery branch, all PRs merged | tsc + lint + build green |
 
 ## Architecture in 30 seconds
@@ -25,6 +26,7 @@
 ## Decisions you should not revisit without asking
 
 - DB roles are auth truth; Clerk org path was deliberately removed (it once granted admin broadly).
+- Hide unauthorized UI, never rely on 403s (user complaint → fixed pattern in `/problems/create`).
 - Redis is optional acceleration; DB-only is always correct.
 - Test Clerk keys everywhere; no production Clerk instance yet (create before any real contest + custom OAuth creds).
 - No test runner in repo (verify-then-delete scratch files only).
@@ -34,7 +36,7 @@
 
 - Signed-in end-to-end smoke never executed by an agent (script: ask user for `/tmp/koj-smoke/SMOKE-SCRIPT.md` equivalent or re-derive from `docs/`).
 - No load test (10-concurrent-judge and ≤2s leaderboard are architecturally sound, unverified under load).
-- Webhook endpoint exists in code; end-to-end delivery after a secret rotation is unverified.
+- Duplicate migration filename pairs (`0002_*`, `0003_*`) exist from parallel workers — see AGENT.md.
 - Deferred per SRS: custom checkers, Go/Rust/JS, team mode, rating, scoreboard freeze, clarifications.
 
 ## Ask the user for (don't guess)

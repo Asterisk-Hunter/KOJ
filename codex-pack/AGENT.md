@@ -7,14 +7,18 @@ platform for IIIT Kottayam. Mission: make the website genuinely excellent — cl
 ## Mission
 
 1. **De-slop the UI.** Remove anything that looks AI-generated: pointless emojis, lorem ipsum,
-   decorative filler, dead buttons,endi placeholder text. If a control is visible, it must work.
+   decorative filler, dead buttons, placeholder text. If a control is visible, it must work.
    If a feature cannot work, remove its UI — never leave fake controls.
 2. **Codeforces-grade feel.** Dense data tables, clear verdicts, live standings, intuitive contest
    flows. Keep the existing dark neon-terminal theme (`app/globals.css` tokens:
    `--color-kjprimary: #00ff9d` etc.) — polish within it, don't rebrand.
 3. **Role separation is absolute.** Participants must NEVER see admin/staff UI: no ADMIN links,
    no setter buttons, no admin pages. Server gates (`app/api/admin/authz.ts`) are the source of
-   truth; the UI must mirror them. Test every change as signed-out, contestant, and admin.
+   truth; the UI must mirror them. Hiding is mandatory — a 403 after clicking is a bug, not a
+   solution; the control must not render. Use the DB-derived flags from `GET /api/auth/me`
+   (`canAuthor`, `canManageContests`) exactly like `app/problems/create/page.tsx` does
+   (signed-out notice → 403 panel → studio, per flag). Test every change as signed-out,
+   contestant, and admin.
 4. **Real, not fake.** Every button does what it says. No mocked data, no console errors,
    empty states always offer a next action. Verify in a real browser with screenshots.
 
@@ -31,8 +35,14 @@ platform for IIIT Kottayam. Mission: make the website genuinely excellent — cl
 - **Never commit secrets.** `.env*` and `share.env` are gitignored. No keys/tokens in code,
   commits, or chat beyond what's already in share.env.
 - **Git:** you are working from a ZIP copy with no remotes. DO NOT push anywhere, do not
-  create PRs, do not touch `Asterisk-Hunter/KOJ` in any way. Deliver your work as changed
-  files + a short summary of what changed and how it was verified.
+   create PRs, do not touch `Asterisk-Hunter/KOJ` in any way. Deliver your work as changed
+   files + a short summary of what changed and how it was verified.
+- **Deploy:** Vercel auto-deploy does NOT fire on push here — the human runs
+   `vercel --prod --yes` manually after merging, then curls `/api/health`. Never assume a
+   push is live; verify the deployment listing and health endpoint.
+- **Migrations:** duplicate filename pairs exist (`0002_*`, `0003_*`) from parallel workers.
+   Never create new migrations with colliding numbers — check `db/migrations/meta/` journal
+   first, use `IF NOT EXISTS`, and verify columns/indexes directly in Neon afterward.
 
 ## Framework gotchas (Next.js 16 breaks training data)
 
