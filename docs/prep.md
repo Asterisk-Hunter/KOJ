@@ -6,7 +6,7 @@
 - Stack: Next.js 16 + React 19 + TypeScript + Tailwind v4 · FastAPI judge · Neon Postgres + Drizzle · Clerk auth · Upstash Redis (optional cache).
 - Judge sandbox on production: **OS-isolated subprocess with kernel-enforced CPU, memory, process, and output caps** — prove it any time, `/health` returns `"sandbox":"rlimit"`.
 - Auth truth is **Neon `users.role`**, not Clerk. Clerk = identity only.
-- 7 languages live (Python/C/C++/Java/Go/Rust/JS — SRS asked 4 v1 + 3 v2; all verified AC+TLE), verdicts AC/WA/TLE/MLE/RE/CE/PE, ICPC scoring, SSE realtime push.
+- 4 languages (C, C++, Python, Java), 7 verdicts (AC/WA/TLE/MLE/RE/CE + PE for whitespace-only diffs), ICPC scoring, SSE realtime (poll-push, 2s ticker).
 - Repo: `Prajwal-k-tech/KOJ`, `main` branch.
 
 ## 1. Explain KOJ in 30 seconds
@@ -57,26 +57,16 @@ Problem flow: `draft → contest_active → published`. Contest flow: `draft →
 - *Why Neon + Drizzle + Clerk?* Managed Postgres with branching, type-safe queries (no SQL-injection class), auth never hand-rolled.
 - *Scale to 500 users?* Stateless front, capped judge concurrency + Cloud Run max-instances, Redis cache wired, DB indexes in place. Load test is the honest gap.
 - *Auth vs auth?* Clerk answers who-you-are; Neon roles answer what-you-may-do. Never mixed.
-- *Testing?* 107 committed unit tests, green (`npm test`: 83 judge pytest + 24 TS scoring/invite); tsc + lint + build gate every push; load test is the honest gap.
+- *Testing?* 45-check E2E sweep, 0 critical issues; tsc + lint + build gates on every change; independent review gates per phase.
 
 ## 7. Traps — do NOT say these
 
 - Never claim containers run on Cloud Run (health says rlimit).
 - Never claim Clerk roles control access (DB roles do).
 - Never claim load testing was done (architecturally ready, unexecuted).
-- Never claim a production-tier Clerk instance (shared Development instance `singular-longhorn-70`; same keys on Vercel and dashboard — say so if asked).
+- Never claim a production Clerk instance exists (all test keys; go-prod is future work).
 - Never read from the PPT — explain, don't recite.
 - Every member must whiteboard the submit→verdict flow. Never say "that was my teammate's part" for core questions.
-
-## 7b. Sanctioned deviations — own these confidently if asked
-
-- **REQ-JUDGE-12 WebSocket → SSE.** Verdicts flow server→client only; SSE gives the same push semantics on serverless with auto-reconnect and zero connection state. Call it "real-time push (SSE)".
-- **BR-01 contests.** SRS says admin-only; staff (`setter`) can also run contests. Rationale: college workflow; BR-03 (only admins touch users/roles) is fully intact.
-- **BR-06 registration.** SRS says pre-start only; live contests accept joins until `endsAt` (documented in-code supersede). Rationale: late joiners are standard in college contests.
-- **Roles.** SRS names Contestant/Problem Setter/Admin; ours is contestant/setter/admin — same three tiers, staff side merged.
-- **Deferred per SRS itself:** team mode (REQ-CONT-09, Low), custom checkers (REQ-JUDGE-15, Medium→v2), interactive problems. Say "v2, as the SRS schedules".
-- **Exceeded:** all 7 languages live (TBD-03 closed early), PE verdict, empty-problem free-AC guard, duplicate-username handling.
-- **Deployment:** GCP Cloud Run = the SRS fallback (Azure primary needed student credits); portability requirement explicitly allows it.
 
 ## 8. Team checklist (tonight)
 
@@ -85,11 +75,3 @@ Problem flow: `draft → contest_active → published`. Contest flow: `draft →
 - Screenshots/recording of the happy path as backup (labeled with date), attempt live first.
 - Each member: 30-second pitch, architecture sketch, scoring formula, one trade-off, one limitation — without notes.
 - Agree handoff order, but everyone answers core questions first.
-
-## 8b. Who studies what (swap names freely, cover everything)
-
-- **Everyone, no exceptions:** 30-second KOJ pitch · submit→verdict whiteboard flow · penalty formula · 3 roles and their gates · one trade-off + one limitation each.
-- **Speaker 1 (title/problem):** §1.4 product scope, external-platform pain points, user classes (§2.3).
-- **Speaker 2 (requirements/architecture):** REQ IDs by section, §7b deviations, four architecture styles + where each lives, rlimit sandbox story.
-- **Speaker 3 (demo):** full click path rehearsed twice, both C++ solutions from memory, fallback line, 429/403/BR-08 moments narrated as features.
-- **Speaker 4 (testing/close):** 107-test breakdown, gate pipeline (tsc/lint/build/test), honest gaps (load test, v2 items), deployment map (Vercel/Cloud Run/Neon/Clerk).
