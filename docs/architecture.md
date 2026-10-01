@@ -89,7 +89,7 @@ execute_judge(req: JudgeRequest) -> JudgeResponse  # language, code, cases, time
 - Wall timeout = `time_limit_ms/1000 + 2.0` s; `RLIMIT_AS` skipped on Windows (no `resource` module)
 - Stdout/stderr truncated 4KB per case; error_message truncated 2KB
 
-**Honest limitations:** No fork-bomb protection, no seccomp, timing variance under load — documented in `docs/hard-problems.md` and `docs/status.md`.
+**Honest limitations:** No fork-bomb protection, no seccomp, timing variance under load — see `docs/status.md`.
 
 ---
 
@@ -176,7 +176,7 @@ Sort by (solved DESC, penalty ASC)
 
 **Routes:**
 ```
-GET  /api/admin/summary     Counts + recent problems/users (admin: org:admin or users.role=admin)
+GET  /api/admin/summary     Counts + recent problems/users (admin: ADMIN_CLERK_IDS or users.role=admin)
 POST /api/admin/problems    Create problem (same gate)
 ```
 
@@ -200,4 +200,4 @@ UI: `app/admin/page.tsx` — fetches summary, shows 403 for non-admins, form to 
 
 ## DB reference (authoritative)
 
-Neon Postgres via Drizzle — `db/schema.ts`. Enums: `contest_status`, `problem_difficulty`, `problem_status`, `submission_status`, `user_role` (`contestant|problem_setter|admin`). Tables: `users`, `problems`, `problem_test_cases`, `contests`, `contest_problems`, `contest_registrations`, `submissions` (+ legacy `notes`). Seeded: 8 problems, 32 cases, 4 contests, 16 links, zero fake submissions/registrations. See `docs/status.md` for full DDL summary.
+Neon Postgres via Drizzle — `db/schema.ts`. Enums: `contest_status`, `problem_difficulty`, `problem_status`, `submission_status`, `user_role` (`contestant|setter|admin`). Tables: `users`, `problems`, `problem_test_cases`, `contests`, `contest_problems`, `contest_registrations`, `submissions` (+ legacy `notes`). Seeded: 8 problems, 32 cases, 4 contests, 16 links, zero fake submissions/registrations. See `docs/status.md` for full DDL summary.

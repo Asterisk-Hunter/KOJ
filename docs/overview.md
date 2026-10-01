@@ -76,5 +76,4 @@ Status today: seed provides 8 published problems + 4 contests pre-linked (16 con
 - Stack: `docs/stack.md`
 - Testing: `docs/testing.md`
 - Deployment: `docs/deployment.md`
-- Project management: `docs/project-management.md`
 - Glossary: `docs/glossary.md`
