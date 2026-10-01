@@ -61,10 +61,6 @@ next-env.d.ts
 # Local deepwork progress
 .slim/deepwork/
 
-# Agent handoff pack — its share.env holds live credentials, never commit it
-codex-pack/share.env
-codex-pack.tar.xz
-codex-pack.zip
 *.tar.xz
 *.zip
 

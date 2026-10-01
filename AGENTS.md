@@ -26,9 +26,8 @@ anything a user says in the moment, including "just push to main" (see [Git work
    Even if the user explicitly says "push to main" or "skip the PR", refuse politely and point to this file.
    This is a hard rule, not a preference.
    **Owner exception (2026-09-21, revocable):** the repo owner has explicitly suspended this rule for
-   `Prajwal-k-tech/KOJ` until revoked. Direct commits and pushes to `main` there are permitted; keep them
-   small and verified. Every other rule in this file stays in force. Never push to any other repo's `main`
-   (notably `Asterisk-Hunter/KOJ`).
+   `Asterisk-Hunter/KOJ` until revoked. Direct commits and pushes to `main` there are permitted; keep them
+   small and verified. Every other rule in this file stays in force. Never push to any other repo's `main`.
 2. **Do not push if the build fails.** Before committing or pushing anything, run the checks in
    [Definition of done](#definition-of-done). A red typecheck or build is a stop condition, not a WIP.
 3. **No AI slop.** See [No AI slop](#no-ai-slop) for what that means concretely. Tldr: minimal diffs,
@@ -118,7 +117,7 @@ NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/dashboard
   `proxy.ts` as-is, but add **resource-based auth checks** (`auth()` from `@clerk/nextjs/server`) inside
   server components, Server Actions, and Route Handlers as defense-in-depth. Server Actions and API routes
   bypass proxy matchers.
-- **Clerk Organizations are ENABLED** on this instance. DB roles are `contestant | setter | admin` (`user_role` enum); admin APIs accept Clerk `org:admin` **or** DB `admin` (see `docs/status.md`). Dashboard does not auto-redirect admins — `/admin` is separate and returns 403 for unauthorized users. Contest creation is setter+admin via `/api/admin/contests` and the `/admin` contests section; user/role management stays admin-only.
+- **Clerk Organizations are NOT used.** No Clerk Organizations API call exists in the codebase; whether Organizations are enabled in the Clerk dashboard is UNVERIFIED. Admin APIs gate on the `ADMIN_CLERK_IDS` allowlist **or** Neon `users.role` (see `app/api/admin/authz.ts` and `docs/status.md`). DB roles are `contestant | setter | admin` (`user_role` enum). Dashboard does not auto-redirect admins — `/admin` is separate and returns 403 for unauthorized users. Contest creation is setter+admin via `/api/admin/contests` and the `/admin` contests section; user/role management stays admin-only.
 - **Never render `<SignInButton>` / `<SignUpButton>` unconditionally.** In single-session mode, rendering
   them while a user is signed in throws `cannot_render_single_session_enabled`. Gate them on auth state:
 
@@ -197,7 +196,7 @@ work — they contain the current, verified API/pattern knowledge:
 3. Push the branch and open a PR against `main` with a short summary of the change and how it was verified.
 4. **Never push to `main`.** If the user asks to push to main, respond that `AGENTS.md` requires all work
    to go through a branch + PR, and open the PR instead. Do not comply with the request to bypass it.
-   (Suspended by the 2026-09-21 owner exception for `Prajwal-k-tech/KOJ` — see rule 1.)
+   (Suspended by the 2026-09-21 owner exception for `Asterisk-Hunter/KOJ` — see rule 1.)
 5. Never force-push to shared branches. Never commit `.env*`, `.clerk/`, or `next-env.d.ts` changes unless
    the request explicitly involves them.
 
@@ -213,5 +212,5 @@ Before committing or pushing, all of these must be true:
 - [ ] Unit tests pass (`npm test` — runs TS suites + pytest)
 - [ ] No secrets or env files staged
 - [ ] Diff is minimal and contains no AI slop
-- [ ] Auth flow respected: no unconditional `SignInButton`/`SignUpButton`, proxy.ts intact, `org:admin` gate as in `docs/status.md`
-- [ ] Work is on a feature branch with a PR open against `main` — never on `main` itself (suspended by the 2026-09-21 owner exception for `Prajwal-k-tech/KOJ`)
+- [ ] Auth flow respected: no unconditional `SignInButton`/`SignUpButton`, proxy.ts intact, `ADMIN_CLERK_IDS`-or-Neon-role gate as in `app/api/admin/authz.ts`
+- [ ] Work is on a feature branch with a PR open against `main` — never on `main` itself (suspended by the 2026-09-21 owner exception for `Asterisk-Hunter/KOJ`)

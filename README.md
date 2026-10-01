@@ -121,6 +121,4 @@ Then <http://127.0.0.1:8000/health> and <http://127.0.0.1:8000/docs>.
 
 ## Contributors
 
-- Prajwal-k-tech
-- CyberSynthh
-- Pannem Chandra Teja
+- Asterisk-Hunter

@@ -1,246 +1,187 @@
-# Implementation Status — `feat/sprint1-backend` (as of 2026-09-06)
+# Implementation Status — `main` at `0c46728`
 
-> Single source of truth for what is implemented vs planned on branch `feat/sprint1-backend`. Factual as of the current commit (`57d9425` "giga commit"). See also `docs/overview.md` for project context.
-
----
-
-## Summary
-
-Sprint 1 backend is implemented and verified locally. Next.js + Clerk + Neon (Drizzle) is authoritative. FastAPI judge is functional for Python. Redis/SSE realtime, contest CRUD, and role expansion are explicitly not implemented.
-
-- `npx tsc --noEmit` — pass
-- `npm run lint` — pass (no new errors)
-- `npm run build` — pass
-- FastAPI `POST /judge` — verified AC/WA/TLE/CE
-- API smoke — problem/contest/ranking counts returned correctly
-- `npm audit` — 1 high / 4 moderate unresolved; fixes require breaking Drizzle upgrades, deferred intentionally
+> This describes `main` at commit `0c46728`. It was derived from reading the code, not from other docs. Where a doc contradicts the code, the code wins and the contradiction is called out. Claims that could not be checked without live services are marked UNVERIFIED rather than guessed.
+>
+> **Last verified command results: none.** `node_modules` is not installed in this working copy, so no build, lint, or test has been run since the repo was acquired. The Definition of Done in `AGENTS.md` has NOT been satisfied for this snapshot.
 
 ---
 
-## Implemented routes / pages
+## Stack (as it actually is)
 
-All routes are functional against live Neon data (no mocks). Auth is via Clerk `proxy.ts`; public vs protected as documented in `AGENTS.md`.
-
-| Route | File | Access |
-|---|---|---|
-| `/` landing | `app/page.tsx` | Public |
-| `/dashboard` | `app/dashboard/page.tsx` | Protected (requires sign-in); does **not** auto-redirect admins to `/admin` |
-| `/problems` archive | `app/problems/page.tsx` | Public; lists only `published` problems with search/difficulty/category filters |
-| `/problems/[id]` detail | `app/problems/[id]/page.tsx` | Public; code editor + Run (samples) / Submit (all cases) flows |
-| `/contests` list | `app/contests/page.tsx` | Public; status derived from `contests.status` + time window |
-| `/contests/[id]` detail | `app/contests/[id]/page.tsx` | Public; register CTA, problem list for live contests |
-| `/contests/[id]/arena` | `app/contests/[id]/arena/page.tsx` | Protected + requires registration; contest-scoped problem view |
-| `/rankings` | `app/rankings/page.tsx` | Public; contest-scoped standings (requires `?contestId=`) |
-| `/submissions/[id]` detail | `app/submissions/[id]/page.tsx` | Protected; owner-only fetch via `GET /api/submissions/[id]` |
-| `/admin` | `app/admin/page.tsx` | Protected; calls `GET /api/admin/summary` + `POST /api/admin/problems`; returns 403 UI for non-admins |
-| `/sign-in/[[...sign-in]]` | `app/sign-in/[[...sign-in]]/page.tsx` | Clerk catch-all |
-| `/sign-up/[[...sign-up]]/page.tsx` | `app/sign-up/[[...sign-up]]/page.tsx` | Clerk catch-all |
-
-All pages reuse the neon-terminal theme (`app/globals.css`, `Navigation.tsx`, `StatCard.tsx`).
+| Layer | Reality |
+|---|---|
+| Frontend | Next.js 16.3.0 App Router, React 19.2.8, TypeScript, Tailwind v4 (no `tailwind.config.js`) |
+| DB / ORM | Drizzle ORM + Neon Postgres (`db/schema.ts`) |
+| Auth | Clerk (`proxy.ts` at root; `createRouteMatcher` still in use at `proxy.ts:1`, deprecated by Clerk but live; no `middleware.ts` — `proxy.ts` is the correct Next 16 filename) |
+| Judge | Separate FastAPI service in `api/` |
+| Cache (optional) | Upstash/Redis, read-side only, every call site falls back to Postgres |
 
 ---
 
-## Implemented APIs
+## HTTP surface — 29 route handlers under `app/api/**/route.ts`
 
-### Next.js Route Handlers (`app/api/*`)
+16 are admin/auth-gated. The rest:
 
-| Method | Path | Auth | Description |
+| Method | Path | Gate | Notes |
 |---|---|---|---|
-| `GET` | `/api/health` | Public | `select 1` DB check; returns `{status, db, latencyMs}` |
-| `GET` | `/api/problems` | Public (user-aware) | Lists `published` problems; `?q=&difficulty=&category=` filters; computes acceptance from non-pending submissions |
-| `GET` | `/api/problems/[id]` | Public | Single problem + sample cases + acceptance; includes `userStatus` if signed in |
-| `GET` | `/api/contests` | Public (user-aware) | All contests ordered by `startsAt`; maps `dbStatus` → UI status; includes `registered` flag per user |
-| `GET` | `/api/contests/[id]` | Public (user-aware) | Contest by slug or numeric id; returns contest + ordered problems + registration flag |
-| `POST` | `/api/contests/[id]/register` | `auth()` required | Registers signed-in user; validates contest exists and is not finished |
-| `GET` | `/api/rankings?contestId=` | Public | Computes standings for `live|ended|archived` contests; ICPC penalty: `minutes_to_first_AC + 20*wrong_before_AC` |
-| `GET` | `/api/admin/summary` | `auth()` + `org:admin` or `users.role=admin` | Counts for users/problems/contests/submissions + 5 recent rows each |
-| `POST` | `/api/admin/problems` | `auth()` + `org:admin` or `users.role=admin` | Creates problem (`draft` by default); validates title/statement/formats/tags/limits |
-| `POST` | `/api/submissions` | `auth()` required | Validates `problemId/language/code/mode`; enforces contest-vs-practice rules; inserts `pending→running`, calls FastAPI `/judge`, persists verdict |
-| `GET` | `/api/submissions?problemId=&contestId=` | `auth()` required | Lists caller's submissions for a problem (optionally contest-scoped) |
-| `GET` | `/api/submissions/[id]` | `auth()` required | Returns one submission if `userId` matches; 404 otherwise |
-
-All handlers: `runtime="nodejs"`, `dynamic="force-dynamic"`, validation returns 400/401/403/404 as appropriate. `POST /api/submissions` sets `maxDuration=60`.
-
-### FastAPI (`api/app/main.py` + `api/app/judge.py`)
-
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| `GET` | `/health` | None | Liveness + DB check; mirrors Next `/api/health` shape but for FastAPI |
-| `POST` | `/judge` | `X-Judge-Secret` | Internal only; validates `language` against the seven supported (422 otherwise); two sandbox backends chosen by `JUDGE_SANDBOX_MODE` (`docker` on a container host, `rlimit` on Cloud Run — production uses `rlimit`, reported by `/health` as `sandbox`); executes per case with resource limits and compares outputs |
-
-CORS: `allow_origins=[http://localhost:3000, FASTAPI_URL, FRONTEND_URL]` — never `*`. `JUDGE_INTERNAL_SECRET` must match on both sides.
+| `GET` | `/api/problems` | Public | Published list |
+| `GET` | `/api/problems/[id]` | Public | Samples only; drafts never leak; explanation hidden during a live contest |
+| `GET` | `/api/contests` | Public | Contest list |
+| `GET` | `/api/contests/[id]` | Public | Contest detail |
+| `POST` | `/api/contests/[id]/register` | Signed in | scrypt invite code, with legacy-plaintext fallback |
+| `GET` | `/api/rankings` | Public | ICPC/DOMjudge: penalty, first-to-solve, 60-min freeze, balloon colors |
+| `GET` | `/api/health` | Public | Always HTTP 200; reports db + latency |
+| `GET` | `/api/auth/me` | Signed in | Lazy-creates the Neon user row |
+| `POST` | `/api/submissions` | Own gate | 30s rate limit under `pg_advisory_xact_lock`; 202 + fire-and-forget `/judge-async` |
+| `GET` | `/api/submissions/[id]` | Own gate | Owner only |
+| `POST` | `/api/judge/run` | Own gate | Sync; in-memory 2.5s cooldown; 100KB cap |
+| `GET` | `/api/submissions/[id]/events` | Own gate | SSE stream (see Realtime) |
+| `GET` | `/api/contests/[id]/events` | Own gate | SSE stream (see Realtime) |
+| `POST` | `/api/webhooks/clerk` | svix HMAC | Handles `user.created` / `user.updated` / `user.deleted` |
+| * | `/api/admin/*` (16 handlers) | `requireAdmin` / `requireSetter` / `requireStaff` / `requireContestManager` | See Roles |
 
 ---
 
-## Database — actual schema (Neon authoritative)
+## Pages — 14 `page.tsx`
 
-**Provider:** Neon Postgres via `drizzle-orm@0.36.4` + `pg@8.13.1`. Schema source: `db/schema.ts`. Migrations in `db/migrations/`.
+Public per `proxy.ts`: `/`, `/sign-in/*`, `/sign-up/*`, `/problems*`, `/contests*`, `/rankings`, `/submissions*`.
 
-### Enums
+Protected: `/dashboard` (also re-checks `auth()` server-side) and `/admin` (additionally requires Neon role in `{admin, setter}`, else redirects to `/dashboard`).
 
-```ts
-contestStatus: "draft" | "live" | "ended" | "archived"
-problemDifficulty: "easy" | "medium" | "hard"
-problemStatus: "draft" | "contest_active" | "published"
-submissionStatus: "pending" | "running" | "accepted" | "wrong_answer" | "time_limit_exceeded" | "memory_limit_exceeded" | "runtime_error" | "compilation_error"
-userRole: "contestant" | "problem_setter" | "admin"
-```
+Two honest caveats:
 
-No `contest_setter` value exists yet — see Role gap below.
+- `/problems/create` and `/contests/[id]/arena` are **public at the proxy layer**. `/problems/create` is gated client-side via `/api/auth/me` `canAuthor` — that is not server-enforced on the route itself.
 
-### Tables
+---
 
-| Table | PK | Notable columns / constraints |
+## Roles
+
+Exactly three values: `contestant | setter | admin` (`db/schema.ts:46-50`). The legacy `problem_setter` / `contest_setter` values were dropped by `db/migrations/0005_setter_merge.sql`.
+
+Authorization is decided by `app/api/admin/authz.ts`: a comma-separated `ADMIN_CLERK_IDS` env allowlist checked first, then Neon `users.role`.
+
+**Clerk `org:admin` is NOT used anywhere** — there is no Clerk Organizations API call in the codebase. Whether Organizations are enabled in the Clerk dashboard is UNVERIFIED. Any doc claiming an `org:admin` gate describes intent, not code.
+
+---
+
+## Judge (`api/app/judge.py`, `api/app/main.py`)
+
+**7 languages, not 4:** python, c, c++, java, go, rust, javascript (`api/app/judge.py:60-68`, corroborated by the toolchain table, the compile branches, the Dockerfile packages, and the Next-side allow-list).
+
+**7 verdicts:** `accepted`, `wrong_answer`, `time_limit_exceeded`, `memory_limit_exceeded`, `runtime_error`, `compilation_error`, `presentation_error` (whitespace-only diff). Plus an orthogonal `infra_error` flag: sandbox failure is reported as `runtime_error` + `infra_error=true`, never blamed on the contestant. A problem with zero test cases can never produce a free AC.
+
+| Endpoint | Auth | Behaviour |
 |---|---|---|
-| `users` | `clerk_id` (text) | `username` unique, `email`, `role` default `contestant`, `created_at`, `updated_at` |
-| `problems` | `id` serial | `author_id→users.clerkId`, `title`, `statement`, `input_format`, `output_format`, `constraints`, `explanation`, `difficulty`, `tags text[]`, `time_limit_ms` default 1000, `memory_limit_mb` default 256, `status` default `draft` |
-| `problem_test_cases` | `id` serial | `problem_id→problems.id CASCADE`, `input`, `expected_output`, `is_sample` default false, `position` |
-| `contests` | `id` serial | `created_by→users.clerkId`, `slug` unique, `title`, `description`, `starts_at`, `ends_at`, `status` default `draft` |
-| `contest_problems` | `(contest_id, problem_id)` composite | `contest_id→contests.id CASCADE`, `problem_id→problems.id CASCADE`, `position` |
-| `contest_registrations` | `(contest_id, user_id)` composite | `contest_id→contests.id CASCADE`, `user_id→users.clerkId CASCADE`, `registered_at` |
-| `submissions` | `id` serial | `user_id→users.clerkId`, `problem_id→problems.id`, `contest_id→contests.id` nullable, `language` (`python\|c\|c++\|java\|go\|rust\|javascript`), `code`, `status` default `pending`, `execution_time_ms`, `memory_used_mb`, `passed_tests`, `total_tests`, `error_message`, `submitted_at`, `started_at`, `completed_at` |
-| `notes` | `id` serial | Legacy starter table; not used by KOJ features |
+| `POST /judge` | `X-Judge-Secret` via `hmac.compare_digest` | Synchronous judging |
+| `POST /judge-async` | Same | Loads from DB, `pg_try_advisory_lock` dedupe, writes verdict back, returns 202 |
+| `GET /health` | None | Reports db + `sandbox` mode |
 
-### Seeded data (via `scripts/seed.ts`)
+`BoundedSemaphore` limits concurrency (default 4); returns 503 + `Retry-After` when saturated.
 
-Idempotent upsert by title/slug. Requires `SEED_USER_CLERK_ID` + `SEED_USER_EMAIL` (real Clerk user); safe to re-run.
+Isolation is selected by `JUDGE_SANDBOX_MODE` ∈ `{auto, docker, rlimit}`:
 
-- **8 problems** — all `published`, 4 test cases each (2 sample + 2 hidden) = **32 test cases**
-- **4 contests** — linked via `contest_problems` = **16 links**
-- **Zero fake submissions / registrations** — those are created only by real user actions
+- `rlimit`: `resource.setrlimit` (`RLIMIT_CPU`/`AS`/`FSIZE`/`NPROC`/`CORE=0`) + wall timeout + `os.killpg(SIGKILL)`. `RLIMIT_AS` is skipped for java/go/javascript in favour of `-Xmx` / `GOMEMLIMIT` / `--max-old-space-size`.
+- `docker`: fixed non-user-controlled argv with `--network none --read-only --user 65534:65534 --cap-drop ALL --security-opt no-new-privileges --security-opt seccomp=/etc/koj/seccomp-koj.json --pids-limit --memory --cpus`. Fails closed if the daemon, seccomp profile, or toolchain is missing.
 
-Run: `SEED_USER_CLERK_ID=user_xxx SEED_USER_EMAIL=you@example.com npm run db:seed` (Node 22+, `dotenv` loads `.env.local`).
+There is deliberately **no filesystem or network namespace** in rlimit mode. The trust model is a trusted single-tenant college deployment, not the public internet.
 
 ---
 
-## Submission pipeline
+## Database
 
-```
-Browser (problem detail / arena)
-  → POST /api/submissions {problemId, contestId?, language, code, mode:"run"|"submit"}
-    → auth() + validation (ids, 100KB limit, python-only, mode)
-    → load problem + contest/registration checks
-      - contest mode: contest.status=="live" && registered && problem in contest
-      - practice mode: problem.status=="published"
-    → ensure users row (lazy create from Clerk)
-    → load test cases (run=sample only, submit=all) ordered by position
-    → INSERT submissions (pending) → UPDATE running + startedAt
-    → fetch(`${FASTAPI_URL}/judge`, {language, code, cases:[{stdin, expected_stdout}], time_limit_ms, memory_mb}, {X-Judge-Secret, AbortSignal 55s})
-      → FastAPI POST /judge
-        → verify X-Judge-Secret (401) / language check (422)
-        → py_compile.compile (compilation_error on PyCompileError/SyntaxError)
-        → per-case: subprocess.run([sys.executable, tmp.py], input=stdin, timeout=wall_timeout=(time_limit_ms/1000+2s), preexec_fn=setrlimit(RLIMIT_AS, memory_mb) on POSIX)
-          - stdout/stderr truncated 4KB per case
-          - heuristic: MemoryError in stderr → memory_limit_exceeded
-          - elapsed > time_limit_ms → time_limit_exceeded
-          - output compare: whitespace-normalized line-by-line (rstrip per line, drop trailing empty lines) → accepted / wrong_answer
-        → aggregate: first non-accepted verdict, max runtime, passed/total counts, error_message truncated 2KB
-      ← {status, passed_tests, total_tests, execution_time_ms, error_message, cases[]}
-    → UPDATE submissions {status, passedTests, totalTests, executionTimeMs, errorMessage, completedAt}
-  ← {id, status, passedTests, totalTests, executionTimeMs, errorMessage}  or  {error} 502 if judge unavailable
-```
+8 tables: `users`, `problems`, `contests`, `problem_test_cases`, `contest_problems`, `contest_registrations`, `submissions`, `notes`.
 
-Timeouts: judge wall `time_limit_ms + 2000ms`, Next abort 55s, Vercel `maxDuration=60`. Resource limits: `RLIMIT_AS` on POSIX (skipped on Windows dev). Only `python` is supported end-to-end (CoW).
+5 enums: `contest_status`, `problem_difficulty`, `problem_status`, `submission_status` (9 values), `user_role` (3 values).
+
+`submissions.case_results` is jsonb, with 4 partial/composite indexes.
 
 ---
 
-## Authorization
+## Migration bookkeeping is broken
 
-- **Clerk Organizations: enabled.** Previous docs stating "organizations DISABLED" were outdated.
-- **DB roles (`user_role`)**: `contestant` | `problem_setter` | `admin` — source `db/schema.ts`.
-- **Admin API gate** (`/api/admin/*`): `auth().has({role:"org:admin"})` OR `users.role=="admin"` in Neon. Returns 401 if not signed in, 403 if not admin. `proxy.ts` public routes allow `/api/*` through but handlers enforce authorization.
-- **Proxy** (`proxy.ts`): public = `/`, `/sign-in(.*)`, `/sign-up(.*)`, `/problems(.*)`, `/contests(.*)`, `/rankings(.*)`, `/submissions(.*)`, `/api(.*)`; everything else (e.g. `/dashboard`, `/admin`) requires auth.
-- **Dashboard**: does **not** auto-redirect admins to `/admin`. Both pages exist separately; admin navigates manually.
-- **`/admin` UI**: fetches `/api/admin/summary`; renders 403 message (`not authorized — admin role required`) if forbidden; otherwise shows live counts + create-problem form.
+8 `.sql` files exist in `db/migrations/`, but `meta/_journal.json` registers only 4: `0000_init`, `0001_young_kylun`, `0002_invite_code_hash`, `0003_judge_hardening`.
 
----
+Orphaned from Drizzle's bookkeeping: `0002_confused_boomerang`, `0003_vengeful_sumo`, `0004_steady_talisman`, `0005_setter_merge`. They are hand-written and idempotent (`IF NOT EXISTS`), and `0005` states it was "applied manually to Neon (no `__drizzle_migrations` bookkeeping)". Index prefixes are duplicated (`0002_*` ×2, `0003_*` ×2). **Which migrations are actually applied to the live DB is UNVERIFIED** (no DB access during the audit).
 
-## Explicit role gap — `contest_setter` does not exist
+### Known schema drift
 
-- **Current state**: there is **no** `contest_setter` role in the DB enum or Clerk custom roles, and **no** contest creation endpoint or UI. `POST /api/admin/problems` exists, but there is no `POST /api/contests` or `PATCH /contests/[id]` for creating/editing/publishing contests.
-- **Planned**: contest creation is admin-only for now.
-- **Recommended next decision** (requires explicit choice before implementation):
-  1. **Option A — admin-only contests**: let `org:admin` (Clerk) / `admin` (DB) create contests via a new `POST /api/admin/contests` (or `POST /api/contests` gated to admin). No schema change needed. Fastest path.
-  2. **Option B — dedicated setter role**: add `contest_setter` to Clerk custom roles **and** to `userRole` enum (`db/schema.ts` + migration), then gate contest create/edit/publish APIs/UI on `contest_setter` OR `admin`. Requires enum migration + Clerk dashboard role config + UI role checks.
-- Until a decision is made, contest lifecycle (`draft→live→ended→archived`) and seed data remain the only contest mutation path.
+- `time_limit_ms` default is 1000 in `db/schema.ts:86` but 2000 in `0002_confused_boomerang.sql`.
+- `users_email_unique` exists in that migration but `.unique()` is absent from `db/schema.ts:57`.
+- `0004_steady_talisman.sql` creates 6 indexes absent from `db/schema.ts`.
 
 ---
 
-## Realtime plan (not implemented)
+## Realtime
 
-- **Intended**: Redis cache + pub/sub → Next.js SSE (`/api/contests/[id]/events` or similar) for live leaderboard and submission status. Invalidation on new `accepted` verdict.
-- **Current**: no Redis client, no SSE route, no pub/sub, no cache. Leaderboard and submission status are fetched on demand (poll/refresh). Architecture docs and `hard-problems.md` that referenced Supabase Realtime describe the **planned** design, not current behavior.
-- **Why deferred**: college-scale polling is acceptable for Sprint 1; realtime is Sprint 2 work.
+SSE is genuinely implemented end-to-end in Next.js: `app/api/submissions/[id]/events/route.ts` (1s ticks, 55 max) and `app/api/contests/[id]/events/route.ts` (2s ticks, 150 max), both `text/event-stream`, consumed by `EventSource` in the submissions, rankings, and problem-detail pages.
+
+Redis is OPTIONAL and read-side only: `lib/redis.ts` returns `null` unless both `REDIS_URL` and `REDIS_TOKEN` are set, and every call site falls back to Postgres. Two uses only: an 8s standings cache in `app/api/rankings/route.ts` and a 3s version cache in the contests SSE route.
+
+**One link is dead:** the FastAPI→Redis verdict publish lives in `api/app/cache.py`, which is never imported by anything and whose `redis` dependency is not even in `api/requirements.txt`. The `verdict:{id}` key read by the submissions SSE route can never be written, so that branch always falls through to the DB poll. There is NO Redis queue and NO pub/sub fan-out anywhere.
 
 ---
 
-## Verification evidence
+## Tests — 107 cases, all hermetic
 
-Run on `feat/sprint1-backend` at `57d9425` (local dev, Node 22+, Python 3.11+):
+No network, DB, Docker, or filesystem side effects.
 
-| Check | Command | Result |
+| Suite | Count | Runner |
 |---|---|---|
-| Typecheck | `npx tsc --noEmit` | Pass |
-| Lint | `npm run lint` | Pass (no new errors) |
-| Build | `npm run build` | Pass |
-| FastAPI judge — AC | `POST /judge` with correct Python solution | `accepted`, `passed_tests==total_tests` |
-| FastAPI judge — WA | correct program, wrong expected output | `wrong_answer` |
-| FastAPI judge — TLE | `while True: pass` with `time_limit_ms=1000` | `time_limit_exceeded` (wall timeout) |
-| FastAPI judge — CE | syntax error (`def foo(`) | `compilation_error` with truncated `PyCompileError` |
-| Next APIs — smoke | `GET /api/problems`, `GET /api/contests`, `GET /api/rankings?contestId=` | Returned seeded counts: 8 problems, 4 contests, standings computed |
-| Auth — admin gate | `GET /api/admin/summary` as non-admin | 403 `forbidden` |
-| Auth — submissions | `POST /api/submissions` without session | 401 `unauthorized` |
-| Audit | `npm audit` | 1 high / 4 moderate unresolved |
+| `lib/scoring.test.ts` | 13 | node:test |
+| `app/api/contests/invite-code.test.ts` | 11 | node:test |
+| `api/tests/test_judge_units.py` | 83 | pytest — normalizer, PE detection, CE/sandbox-unavailable responses, redaction, memory clamps, OOM heuristics, SIGXCPU, Java `Solution` detection, language table |
 
-**`npm audit` note**: `npm audit fix` requires breaking upgrades of `drizzle-orm`/`drizzle-kit` major versions; deferred to avoid schema churn mid-sprint. Not ignored — tracked as remaining work.
+Run: `npm test` = `node --experimental-strip-types --test lib/*.test.ts 'app/api/**/*.test.ts' && cd api && python3 -m pytest -q`.
+
+Honest flags: the Python leg invokes `python3`, which does not exist on stock Windows, so on this host only the two TS suites run. And with `node_modules` absent, none of this has been run in this working copy.
 
 ---
 
-## Remaining work
+## Deployment
 
-Explicitly not implemented on this branch:
-
-1. **Redis + SSE realtime** — add Redis client, leaderboard cache, pub/sub, SSE route, client subscription; update `architecture.md` when done
-2. **Contest CRUD** — `POST/PATCH /api/contests` (or `/api/admin/contests`), publish/visibility transitions, UI forms; blocked on role decision above
-3. **Role decision** — choose Option A (admin-only) or Option B (add `contest_setter`); then migrate `userRole` + configure Clerk custom roles if B
-4. **Real submissions with auth session** — current pipeline works but production needs `FASTAPI_URL` + `JUDGE_INTERNAL_SECRET` set on both sides; wire through Vercel env
-5. **Production FastAPI deployment** — host FastAPI separately (Render/Railway/Fly); set `FRONTEND_URL` for CORS; replace localhost fallback
-6. **Webhook syncing** — Clerk webhooks to sync `users` and org memberships into Neon (lazy-create covers Sprint 1 but not org role changes)
-7. **Tests** — no test runner installed (`package.json` has no Jest/Vitest/Playwright); `docs/testing.md` describes intended strategy but no tests exist yet; add unit (judge), integration (submit→judge→DB), and E2E (Clerk) suites
-8. ~~**Language expansion** — additional languages in the judge~~ — **done**: python/c/c++/java/go/rust/javascript, validated at both layers and verified live (AC + TLE each).
-9. **Audit fixes** — resolve 1 high / 4 moderate via coordinated Drizzle upgrade
+- Frontend → Vercel (`npm run build`). `.vercelignore` excludes only the root `/api/` — the leading slash is deliberate so `app/api/` is NOT excluded, and Vercel gets the Next app alone.
+- Judge → Google Cloud Run or any container host built from `api/Dockerfile`.
+- DB → Neon Postgres.
+- Next reaches the judge server-side via `fetch(process.env.FASTAPI_URL)`.
+- `next.config.ts` only sets Clerk `remotePatterns` plus security headers (`X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy`) — no rewrites, no proxy.
+- No CI: no `.github/` directory, no workflow YAML, no `vercel.json`.
 
 ---
 
-## Sprint 2 — `feat/srs-high-priority` (Completed & Deployed)
+## Known gaps and contradictions
 
-Role decision finalized: **Option B — dedicated `contest_setter` role**. `user_role` enum on live Neon is `contestant | problem_setter | contest_setter | admin`. Contest APIs are gated on `requireContestManager()` (Clerk `org:admin`, `org:contest_setter`, or DB `admin`/`contest_setter`). Problem APIs are setter-gated; user/role management is admin-only (BR-03).
-
-**2026-09-23 update — roles merged:** `problem_setter` + `contest_setter` collapsed into a single `setter` (`contestant | setter | admin` on Neon, `db/migrations/0005_setter_merge.sql`). Both gates (`requireSetter`, `requireContestManager`) now admit `admin | setter`; setters see both problem and contest sections in `/admin`. Admin-only stays: users/roles, all-submissions moderation, metrics, problem hard-delete.
-
-### Key Features Completed:
-- **Contest Management**: Full CRUD (`/api/admin/contests`), legal transitions (`draft` → `live` → `ended` → `archived`), auto-settle expired contests, invite code support (`invite_code`), and `/admin` management interface.
-- **Problem Management**: Full CRUD (`/api/admin/problems/[id]`), test case management (10MB limit, 100 cases max, sample/hidden toggle), live contest locking (`BR-08`).
-- **Multi-Language Judge Service**: Python 3.11, C (GCC), C++ (G++), and Java (OpenJDK) in `api/app/judge.py`. Sandboxed with `setrlimit` CPU/memory limits and temp execution dirs.
-- **Production Cloud Run Judge**: Hosted on Google Cloud Run (`koj-prod` in `asia-south1`) with 4 Uvicorn workers and 0-min-instances free-tier protection.
-- **Async Execution & SSE Realtime**: Submissions run asynchronously via FastAPI `BackgroundTasks` (`POST /judge-async`). Live verdict streaming via Server-Sent Events (`GET /api/submissions/[id]/events`) and contest leaderboard updates (`GET /api/contests/[id]/events`).
-- **Optional Redis Realtime & Caching**: Upstash/Redis client in `lib/redis.ts` and `api/app/cache.py` with seamless in-memory fallback when unconfigured.
-- **Observability**: Admin dashboard metrics (`GET /api/admin/metrics`), judge `/health` & `/metrics` endpoints, and structured JSON logs.
-- **Database Migrations**: Idempotent migration `0002_confused_boomerang.sql` adding `invite_code`, unique `email`, and 2000ms default time limit.
-- **Contestant Experience**: Submissions archive page (`/submissions`), personal dashboard progress stats (`/dashboard`), Monaco code editor starters, copyable test cases, and ICPC scoring with penalty calculation.
-- **Codeforces Interactive Workspace**: `POST /api/judge/run` interactive test runner with arbitrary `stdin` execution (64KB input limit, 100KB code limit, 2.5s cooldown rate limiter, non-persisted), sample testcase diff runner with runtime/memory metrics, in-workspace submission history drawer with live SSE verdict streaming, and CP fast I/O starter templates with reset/copy controls.
-- **DOMjudge ICPC Scoreboard**: 12-color balloon palette attached to problems, first-to-solve (first blood) gold star `★` badges with dark green cell highlights, 60-minute scoreboard freeze window with pending `?` masking, problem summary metrics footer (solves, attempts, acceptance rate), and instant contestant search filter.
-- **Documentation**: Comprehensive guides for contestants (`docs/user-guide.md`), problem setters (`docs/problem-setter-guide.md`), and deployment (`docs/deployment.md`).
+- `api/app/main.py:56-57` comments "Single uvicorn worker is intentional" while `api/Dockerfile:28` runs `--workers 4` — directly contradictory. With `JUDGE_MAX_CONCURRENT=4` per worker that is 16 concurrent judging slots per instance, not the 4 the Dockerfile header claims.
+- `api/Dockerfile:1` says "python, c, c++, java"; the image installs all 7 toolchains.
+- `api/Dockerfile` never copies `api/seccomp-koj.json`, yet docker mode requires `JUDGE_SECCOMP_PROFILE=/etc/koj/seccomp-koj.json` and fails closed without it. Provisioning is a manual step nobody documented.
+- `api/app/cache.py` is fully dead code (see Realtime).
+- The `notes` table plus its `Note`/`NewNote` types are dead — created by `0000_init.sql`, referenced nowhere.
+- `ADMIN_CLERK_IDS` and `CRON_SECRET` are both consumed by code but absent from `.env.example`. `app/api/admin/submissions/recover/route.ts` exists to mark stale `pending`/`running` submissions terminal (admin auth OR `x-cron-secret`) but no scheduler invokes it.
+- `app/api/judge/run/route.ts` rate-limits with an in-memory Map, so it resets per serverless instance and is not durable across instances.
+- `app/api/admin/problems/import/route.ts` performs real outbound server-side requests to leetcode.com, codeforces.com, and atcoder.jp — real network egress from the Next server, which sits awkwardly against the hermetic-unit-test policy.
+- `JUDGE_DOCKER_IMAGE_GO/RUST/NODE` are implemented but missing from `api/.env.example`, so an operator cannot see them.
+- No TODO/FIXME/HACK markers anywhere in ts/tsx/py/sql. No commented-out code blocks of 4+ lines.
 
 ---
 
-## Links
+## Secrets — clean
 
-- Overview: `docs/overview.md`
-- Architecture: `docs/architecture.md`
-- Features (implemented vs planned): `docs/features.md`
-- Stack: `docs/stack.md`
-- Testing: `docs/testing.md`
-- Deployment (incl. Vercel + FastAPI): `docs/deployment.md`
-- Project management (sprint progress): `docs/project-management.md`
-- Glossary: `docs/glossary.md`
+Only `.env.example` and `api/.env.example` are tracked, both with empty values. No `.env*` on disk or in git. Credential-shape scan across all tracked files returns 3 hits, all documentation placeholders: `api/README.md:49`, `api/app/config.py:28`, `api/tests/conftest.py:15`.
+
+---
+
+## UNVERIFIED
+
+1. Whether Clerk Organizations are enabled in the Clerk dashboard.
+2. Which of the 8 migration files are actually applied to the live Neon DB.
+
+---
+
+## Suggested next work
+
+- Reconcile the Drizzle journal with the 4 orphaned migrations and resolve the schema drift.
+- Wire or delete `api/app/cache.py`.
+- Fix the Dockerfile worker/language-count comments and document seccomp provisioning.
+- Add a `pytest` invocation that works on Windows.
+- Document `ADMIN_CLERK_IDS` / `CRON_SECRET` in `.env.example`.
+- Add CI (there is none).
+- Delete or use the `notes` table.
