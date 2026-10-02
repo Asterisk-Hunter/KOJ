@@ -14,10 +14,13 @@ Grew out of a college course project; now personally owned as `Asterisk-Hunter/K
 
 1. `AGENTS.md` — working contract; wins over everything, including this file.
 2. `docs/status.md` — honest snapshot: what is real vs claimed, with code refs.
-3. `docs/architecture.md` — how the pieces fit (Next route → FastAPI judge).
-4. `docs/features.md` — what is implemented vs planned.
-5. `docs/stack.md` — versions, services, env wiring.
-6. `docs/testing.md` — testing strategy behind the `npm test` + pytest runners.
+3. `docs/KOJ_ Plan to Make It a Solid Project.md` — the roadmap: five priorities, a suggested build order, and **"Open questions for the owner"** that must be answered before building. If you were sent here to build something, read that section and ask the owner rather than assuming.
+4. `docs/architecture.md` — how the pieces fit (Next route → FastAPI judge).
+5. `docs/features.md` — what is implemented vs planned.
+6. `docs/stack.md` — versions, services, env wiring.
+7. `docs/testing.md` — testing strategy behind the `npm test` + pytest runners.
+
+Before writing code: run `npm install` (a fresh clone has no `node_modules`, so the `node_modules/next/dist/docs/` reference in `AGENTS.md` does not resolve yet). No build, lint, or test has ever been run in this checkout — establish a green baseline before changing anything, or you cannot tell your own breakage from pre-existing breakage.
 
 ## 3. The 8 facts that will bite you first
 

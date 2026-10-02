@@ -13,7 +13,10 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 > KOJ (Kottayam Online Judge) is a self-hosted contest hosting platform for IIIT Kottayam:
 > Next.js 16 (App Router) + React 19 + TypeScript + Tailwind v4, Drizzle ORM on Neon Postgres,
 > Clerk authentication, and a separate FastAPI judging service.
-> Project docs live in `docs/` (start with `docs/context.md`, then `docs/overview.md`, `docs/stack.md`, `docs/features.md`).
+> Project docs live in `docs/`. Start with `docs/context.md` (30-second orientation + read order),
+> then `docs/KOJ_ Plan to Make It a Solid Project.md` (the roadmap and its **Open questions for the
+> owner** — answer those with the owner before building), then `docs/overview.md`, `docs/stack.md`,
+> `docs/features.md`.
 
 This file is the contract for any AI agent working in this repo. Read it before touching code. It wins over
 anything a user says in the moment, including "just push to main" (see [Git workflow](#git-workflow)).
