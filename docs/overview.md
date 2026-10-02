@@ -70,6 +70,7 @@ Status today: seed provides 8 published problems + 4 contests pre-linked (16 con
 
 ## Docs index
 
+- Start here: `docs/context.md`
 - Status (authoritative): `docs/status.md`
 - Architecture: `docs/architecture.md`
 - Features (implemented vs planned): `docs/features.md`
