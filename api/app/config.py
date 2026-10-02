@@ -102,7 +102,19 @@ class Settings(BaseSettings):
         default=4,
         ge=1,
         le=32,
-        description="Max concurrent judgements per FastAPI worker. Saturated requests get 503 + Retry-After.",
+        description="Max concurrent direct HTTP judgements per API process. Saturated requests get 503 + Retry-After.",
+    )
+    JUDGE_LEASE_SECONDS: int = Field(
+        default=120,
+        ge=30,
+        le=1800,
+        description="Worker lease duration; active jobs heartbeat before expiration.",
+    )
+    JUDGE_WORKER_POLL_SECONDS: float = Field(
+        default=1.0,
+        ge=0.2,
+        le=30,
+        description="Idle Postgres queue polling interval in worker mode.",
     )
     JUDGE_SECCOMP_PROFILE: str = Field(
         default="/etc/koj/seccomp-koj.json",

@@ -29,6 +29,41 @@
       "when": 1789700000000,
       "tag": "0003_judge_hardening",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790967022638,
+      "tag": "0002_confused_boomerang",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790967023638,
+      "tag": "0003_vengeful_sumo",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790967024638,
+      "tag": "0004_steady_talisman",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790967025638,
+      "tag": "0005_setter_merge",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790967026638,
+      "tag": "0006_durable_judge_jobs",
+      "breakpoints": true
     }
   ]
 }

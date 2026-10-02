@@ -43,6 +43,15 @@ export const submissionStatus = pgEnum("submission_status", [
   "presentation_error",
 ]);
 
+export const submissionMode = pgEnum("submission_mode", ["run", "submit"]);
+
+export const judgeJobStatus = pgEnum("judge_job_status", [
+  "queued",
+  "leased",
+  "completed",
+  "dead",
+]);
+
 export const userRole = pgEnum("user_role", [
   "contestant",
   "setter",
@@ -188,6 +197,7 @@ export const submissions = pgTable(
     contestId: integer("contest_id").references(() => contests.id),
     language: text("language").notNull(),
     code: text("code").notNull(),
+    mode: submissionMode("mode").notNull().default("submit"),
     status: submissionStatus("status").notNull().default("pending"),
     // Internal infra flag: true means the row reflects judge
     // infrastructure failure (retryable), NOT contestant code.
@@ -222,6 +232,59 @@ export const submissions = pgTable(
       .where(sql`judge_infra_error = true`),
   ],
 );
+
+export const judgeJobs = pgTable(
+  "judge_jobs",
+  {
+    id: serial("id").primaryKey(),
+    submissionId: integer("submission_id")
+      .notNull()
+      .unique()
+      .references(() => submissions.id, { onDelete: "cascade" }),
+    status: judgeJobStatus("status").notNull().default("queued"),
+    attempts: integer("attempts").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(3),
+    availableAt: timestamp("available_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    leasedBy: text("leased_by"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("judge_jobs_claim_idx")
+      .on(table.availableAt, table.createdAt)
+      .where(sql`status = 'queued'`),
+    index("judge_jobs_expired_lease_idx")
+      .on(table.leaseExpiresAt)
+      .where(sql`status = 'leased'`),
+  ],
+);
+
+export const judgeWorkers = pgTable("judge_workers", {
+  id: text("id").primaryKey(),
+  hostname: text("hostname").notNull(),
+  status: text("status").notNull().default("idle"),
+  activeJobId: integer("active_job_id").references(() => judgeJobs.id, {
+    onDelete: "set null",
+  }),
+  lastJobId: integer("last_job_id"),
+  startedAt: timestamp("started_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  stoppedAt: timestamp("stopped_at", { withTimezone: true }),
+});
 
 export const notes = pgTable("notes", {
   id: serial("id").primaryKey(),

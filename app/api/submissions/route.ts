@@ -6,6 +6,7 @@ import {
   contestProblems,
   contestRegistrations,
   contests,
+  judgeJobs,
   problemTestCases,
   problems,
   submissions,
@@ -257,14 +258,12 @@ export async function POST(req: NextRequest) {
           contestId: effectiveContestId,
           language,
           code,
+          mode,
           status: "pending",
         })
         .returning({ id: submissions.id });
       const sid = inserted[0].id;
-      await tx
-        .update(submissions)
-        .set({ status: "running", startedAt: new Date() })
-        .where(eq(submissions.id, sid));
+      await tx.insert(judgeJobs).values({ submissionId: sid });
       return sid;
     });
   } catch (e) {
@@ -277,34 +276,8 @@ export async function POST(req: NextRequest) {
     throw e;
   }
 
-  // Fire-and-forget async judge via Cloud Run
-  const fastApiUrl = process.env.FASTAPI_URL ?? "http://127.0.0.1:8000";
-  const judgeSecret = process.env.JUDGE_INTERNAL_SECRET ?? "";
-
-  try {
-    await fetch(`${fastApiUrl.replace(/\/$/, "")}/judge-async`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Judge-Secret": judgeSecret,
-      },
-      body: JSON.stringify({ submission_id: submissionId }),
-      signal: AbortSignal.timeout(5000),
-    });
-  } catch {
-    await db
-      .update(submissions)
-      .set({
-        status: "runtime_error",
-        errorMessage: "judge unavailable",
-        completedAt: new Date(),
-      })
-      .where(eq(submissions.id, submissionId));
-    return jsonError("judge unavailable", 502);
-  }
-
   return NextResponse.json(
-    { id: submissionId, status: "running" },
+    { id: submissionId, status: "pending" },
     { status: 202 },
   );
 }
