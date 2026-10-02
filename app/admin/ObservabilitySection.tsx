@@ -9,7 +9,24 @@ type MetricsData = {
   last24hByStatus: Record<string, number>;
   judgedLast24h: number;
   avgExecutionMsLast24h: number | null;
+  p50ExecutionMsLast24h: number | null;
+  p95ExecutionMsLast24h: number | null;
   judgeUnavailableLast24h: number;
+  infraFailures24h: number;
+  infraFailureRate24h: number;
+  queue: {
+    byStatus: Record<string, number>;
+    oldestQueuedWaitMs: number | null;
+    activeWorkers: number;
+    workers: Array<{
+      id: string;
+      hostname: string;
+      status: string;
+      activeJobId: number | null;
+      lastJobId: number | null;
+      lastSeenAt: string;
+    }>;
+  };
   contestsByStatus: Record<string, number>;
   recentSubmissions: Array<{
     id: number;
@@ -108,7 +125,7 @@ export default function ObservabilitySection() {
       ) : data ? (
         <div className="p-5 space-y-6">
           {/* Top 3 KPI stats */}
-          <div className="grid sm:grid-cols-3 gap-4">
+          <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4">
             <div className="bg-kjbg/40 border border-kjborder rounded-lg p-4">
               <p className="text-[11px] font-mono uppercase tracking-widest text-kjtext-muted">24h Judged</p>
               <p className="text-2xl font-mono text-kjprimary mt-1">{data.judgedLast24h}</p>
@@ -119,7 +136,27 @@ export default function ObservabilitySection() {
               <p className="text-2xl font-mono text-kjtext mt-1">
                 {data.avgExecutionMsLast24h !== null ? `${data.avgExecutionMsLast24h} ms` : "—"}
               </p>
-              <p className="text-[11px] font-mono text-kjtext-muted mt-1">Average sandbox runtime</p>
+              <p className="text-[11px] font-mono text-kjtext-muted mt-1">
+                p50 {data.p50ExecutionMsLast24h ?? "—"} ms · p95 {data.p95ExecutionMsLast24h ?? "—"} ms
+              </p>
+            </div>
+            <div className="bg-kjbg/40 border border-kjborder rounded-lg p-4">
+              <p className="text-[11px] font-mono uppercase tracking-widest text-kjtext-muted">Queue</p>
+              <p className="text-2xl font-mono text-kjprimary mt-1">
+                {data.queue.byStatus.queued ?? 0} queued · {data.queue.byStatus.leased ?? 0} leased
+              </p>
+              <p className="text-[11px] font-mono text-kjtext-muted mt-1">
+                oldest {data.queue.oldestQueuedWaitMs === null ? "—" : `${(data.queue.oldestQueuedWaitMs / 1000).toFixed(1)}s`}
+              </p>
+            </div>
+            <div className="bg-kjbg/40 border border-kjborder rounded-lg p-4">
+              <p className="text-[11px] font-mono uppercase tracking-widest text-kjtext-muted">Workers / Infra</p>
+              <p className="text-2xl font-mono text-kjtext mt-1">
+                {data.queue.activeWorkers} workers · {(data.infraFailureRate24h * 100).toFixed(1)}%
+              </p>
+              <p className="text-[11px] font-mono text-kjtext-muted mt-1">
+                {data.infraFailures24h} infrastructure failures in 24h
+              </p>
             </div>
             <div className="bg-kjbg/40 border border-kjborder rounded-lg p-4">
               <p className="text-[11px] font-mono uppercase tracking-widest text-kjtext-muted">Judge Outages (24h)</p>
@@ -134,6 +171,40 @@ export default function ObservabilitySection() {
                 {data.judgeUnavailableLast24h === 0 ? "Normal operations" : "Service connection errors"}
               </p>
             </div>
+          </div>
+
+          <div>
+            <h3 className="font-mono text-xs text-kjprimary uppercase tracking-widest mb-3">Worker liveness</h3>
+            {data.queue.workers.length === 0 ? (
+              <p className="border border-kjborder/60 bg-kjbg/20 rounded p-4 text-xs font-mono text-kjtext-muted">
+                No worker heartbeats in the last two minutes.
+              </p>
+            ) : (
+              <div className="overflow-x-auto border border-kjborder rounded-lg">
+                <table className="w-full text-left font-mono text-xs">
+                  <thead className="bg-kjbg/60 border-b border-kjborder">
+                    <tr>
+                      {["Worker", "Status", "Active job", "Last job", "Last heartbeat"].map((heading) => (
+                        <th key={heading} className="px-4 py-2.5 text-kjtext-muted uppercase text-[10px] tracking-wider">
+                          {heading}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.queue.workers.map((worker) => (
+                      <tr key={worker.id} className="border-b border-kjborder/40">
+                        <td className="px-4 py-2.5 text-kjtext">{worker.hostname}</td>
+                        <td className="px-4 py-2.5 text-kjtext-muted">{worker.status}</td>
+                        <td className="px-4 py-2.5 text-kjtext-muted">{worker.activeJobId ?? "—"}</td>
+                        <td className="px-4 py-2.5 text-kjtext-muted">{worker.lastJobId ?? "—"}</td>
+                        <td className="px-4 py-2.5 text-kjtext-muted">{formatDate(worker.lastSeenAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
           {/* 24h Verdict Distribution */}

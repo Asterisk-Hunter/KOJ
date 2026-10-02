@@ -241,7 +241,7 @@ export default function AdminPage() {
 
         {(data?.role === "admin" || data?.role === "setter") && <ContestsSection />}
         {data?.role === "admin" && <UsersSection />}
-        {data?.role === "admin" && <SubmissionsSection />}
+        {data?.role === "admin" && <SubmissionsSection canRejudge />}
         {data?.role === "admin" && <ObservabilitySection />}
       </main>
     </>

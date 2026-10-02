@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { problems, submissions, users } from "@/db/schema";
+import { judgeJobs, problems, submissions, users } from "@/db/schema";
 import { requireAdmin } from "@/app/api/admin/authz";
 
 export const runtime = "nodejs";
@@ -52,12 +52,16 @@ export async function GET(req: NextRequest) {
       executionTimeMs: submissions.executionTimeMs,
       submittedAt: submissions.submittedAt,
       completedAt: submissions.completedAt,
+      jobStatus: judgeJobs.status,
+      attempts: judgeJobs.attempts,
+      maxAttempts: judgeJobs.maxAttempts,
       username: users.username,
       problemTitle: problems.title,
     })
     .from(submissions)
     .leftJoin(users, eq(submissions.userId, users.clerkId))
     .leftJoin(problems, eq(submissions.problemId, problems.id))
+    .leftJoin(judgeJobs, eq(judgeJobs.submissionId, submissions.id))
     .where(where)
     .orderBy(desc(submissions.submittedAt))
     .limit(limit)
@@ -83,6 +87,9 @@ export async function GET(req: NextRequest) {
       executionTimeMs: r.executionTimeMs,
       submittedAt: r.submittedAt.toISOString(),
       completedAt: r.completedAt?.toISOString() ?? null,
+      jobStatus: r.jobStatus,
+      attempts: r.attempts,
+      maxAttempts: r.maxAttempts,
     })),
     total: countRow?.count ?? 0,
     limit,
