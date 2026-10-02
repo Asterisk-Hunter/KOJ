@@ -3,26 +3,51 @@
 from __future__ import annotations
 
 import signal
+import sys
 
 import pytest
 
 from app.judge import (
     SUPPORTED_LANGUAGES,
+    _MAX_PROCESS_OUTPUT_BYTES,
     _ce_response,
     _clamp_memory_mb,
     _compile_memory_mb,
     _is_cpu_limit_kill,
     _is_oom,
     _java_has_solution_class,
+    _local_process_environment,
     _normalize_output,
     _outputs_equal,
     _run_memory_mb,
+    _run_bounded_process,
     _sandbox_unavailable_response,
     _strip_java_noise,
     _truncate,
     _visible_case,
     _whitespace_only_diff,
 )
+
+
+def test_process_output_is_capped_and_terminates_the_child():
+    result = _run_bounded_process(
+        [sys.executable, "-c", "import sys; sys.stdout.write('x' * 2097152)"],
+        timeout_s=10,
+    )
+
+    assert result.output_limit_exceeded is True
+    assert len(result.stdout.encode("utf-8")) == _MAX_PROCESS_OUTPUT_BYTES
+
+
+def test_local_child_environment_does_not_inherit_service_secrets(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://private")
+    monkeypatch.setenv("CLERK_SECRET_KEY", "private")
+
+    child_environment = _local_process_environment(tmp_path)
+
+    assert "DATABASE_URL" not in child_environment
+    assert "CLERK_SECRET_KEY" not in child_environment
+    assert child_environment["HOME"] == str(tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -315,11 +340,13 @@ class TestIsOom:
 
 class TestIsCpuLimitKill:
     def test_sigxcpu(self):
-        assert _is_cpu_limit_kill(-signal.SIGXCPU) is True
+        sigxcpu = getattr(signal, "SIGXCPU", 24)
+        assert _is_cpu_limit_kill(-sigxcpu) is hasattr(signal, "SIGXCPU")
 
     def test_sigxcpu_positive(self):
         # Python may report as positive on some paths
-        assert _is_cpu_limit_kill(128 + signal.SIGXCPU) is False
+        sigxcpu = getattr(signal, "SIGXCPU", 24)
+        assert _is_cpu_limit_kill(128 + sigxcpu) is False
 
     def test_other_negative(self):
         assert _is_cpu_limit_kill(-9) is False
