@@ -1,203 +1,73 @@
 # Architecture
 
-> Status note: diagram reflects current `feat/sprint1-backend` plus planned realtime. For authoritative status see `docs/status.md`.
+The implementation snapshot is in docs/status.md. The judge is a separate Python service; Next.js never executes contestant code.
 
-## System diagram (current + planned)
+## System diagram
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Frontend (Next.js 16 + React)             │
-│  Landing │ Dashboard │ Problems │ Contests/Arena │ Rankings  │
-│  Submissions/[id] │ Admin (problem create + summary)         │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ HTTP (fetch) + Clerk auth
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Presentation Layer                        │
-│              Next.js Route Handlers (`app/api/*`)            │
-│  POST /submissions │ GET /problems │ GET /contests │ etc.   │
-│  GET /rankings │ GET/POST /admin/* │ GET /health             │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ SQL (Drizzle) + HTTP (FastAPI)
-         ┌─────────────────┼──────────────────┐
-         ▼                 ▼                  ▼
-┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-│  Auth (Clerk)│   │ Problem /    │   │Contest +     │
-│  Organizations│  │ Submission   │   │Rankings API  │
-│  proxy.ts    │   │ API (Next)   │   │ (Next)       │
-└──────────────┘   └──────┬───────┘   └──────────────┘
-                          │  POST /judge  (X-Judge-Secret)
-                          ▼
-                   ┌──────────────────┐
-                   │  Judge Service   │
-                   │  FastAPI (Python)│
-                   │  py_compile +    │
-                   │  subprocess.run  │
-                   │  + setrlimit     │
-                   └────────┬─────────┘
-                            │ SQL (psycopg)
-                            ▼
-                     ┌──────────────────┐
-                     │  Postgres (Neon) │
-                     │  users           │
-                     │  problems        │
-                     │  problem_test_cases│
-                     │  contests        │
-                     │  contest_problems│
-                     │  contest_registrations│
-                     │  submissions     │
-                     └──────────────────┘
+Vercel Next.js routes
+  ├─ Clerk auth and authorization
+  ├─ transactional submission + judge job insert ── SQL ──┐
+  ├─ admin, problem, contest, and ranking APIs            │
+  └─ SSE status polling                                   │
+                                                         ▼
+                                                 Neon Postgres
+                                            submissions / judge_jobs
+                                            judge_workers / app data
+                                                         ▲
+                                      SQL / lease / heartbeat / verdict
+                                                         │
+                                      Cloud Run worker pool
+                                      python -m app.worker
+                                             │
+                                      compile + bounded judge run
 
-┌─────────────────────────────────────────────────────────────┐
-│  Planned: Redis (Caching & Pub/Sub) → Next.js SSE           │
-│  Leaderboard cache (invalidate on AC) · submission events   │
-│  Status: NOT IMPLEMENTED — see docs/status.md               │
-└─────────────────────────────────────────────────────────────┘
-```
+Cloud Run FastAPI compatibility API provides health and legacy HTTP routes only.
 
-Previous diagram referencing Supabase Postgres/Realtime is superseded — Neon is authoritative and realtime is Redis→SSE (planned).
+Cloud Run's worker pool uses explicit instance scaling and does not expose a public HTTP endpoint. The worker pulls from Postgres; the web app does not make judging a part of the submission request.
 
----
+## Submission lifecycle
 
-## Architectural styles
+1. Next.js authenticates the user, validates submission and contest constraints, and checks the per-user/problem cooldown under a Postgres advisory lock.
+2. One transaction inserts a pending submission and its queued judge job.
+3. A worker claims one eligible job with SELECT FOR UPDATE SKIP LOCKED, increments the attempt, and writes a time-limited lease.
+4. The worker loads the source and appropriate cases, starts judging, and renews the lease from a heartbeat thread.
+5. The worker persists either the verdict or a retryable infrastructure error only if its ID, attempt, status, and lease still match.
+6. Expired leases can be claimed again. Retry backoff is bounded and jobs stop after max attempts.
+7. The browser receives state through a bounded SSE stream that polls Postgres and reconnects; the daily Vercel Cron only requeues old submissions with no job row.
 
-| Style | Where | Why | Concrete example | Status |
-|---|---|---|---|---|
-| **Layered** | Entire system | Separation of concerns | Next UI → Route Handlers → Drizzle/Neon; Next → FastAPI → Neon | Implemented |
-| **Pipe-and-Filter** | Judge module | Single-responsibility stages | Read code → py_compile → Execute per test → Compare (normalized) → Aggregate verdict | Implemented (`api/app/judge.py`) |
-| **MVC** | Frontend | Model (problem/contest state), View (React), Controller (page handlers + Route Handlers) | Problem detail loads from `GET /api/problems/[id]`, renders statement, handles Run/Submit | Implemented |
-| **Event-Driven / Broker** | Realtime leaderboard | DB event triggers broadcast; UI subscribes | Planned: submission verdict → Redis pub/sub → SSE → live leaderboard | **Planned, not implemented** |
-| **Master-Slave** | Judge execution | Master (Next handler) dispatches to slave (FastAPI subprocess) | `POST /api/submissions` spawns judge via HTTP, collects verdict | Implemented (HTTP, not in-process thread pool) |
+## Components
 
----
+### Next.js application
 
-## Module decomposition
+App Router pages and Route Handlers run on Vercel. Authorization is enforced in Route Handlers and protected Server Components, not solely by the Clerk proxy. Drizzle connects to Neon. Submission rows and queue rows are created transactionally.
 
-### Module 1: Judge Module (Python) — [Implemented]
+### FastAPI and worker
 
-**Responsibility:** Execute untrusted Python code safely, return verdicts.
+FastAPI provides health and compatibility endpoints. Normal queue work runs with python -m app.worker. Each worker processes one job at a time. The worker uses psycopg and shares the Neon schema with Drizzle.
 
-**Entry:** `POST /judge` (`api/app/main.py` → `api/app/judge.py:execute_judge`)
+### Judge pipeline
 
-```python
-execute_judge(req: JudgeRequest) -> JudgeResponse  # language, code, cases, time_limit_ms, memory_mb
-```
+The pipeline writes sources to a per-submission temporary directory, compiles where needed, runs each case in a fresh process, compares normalized output, redacts hidden-case output, and aggregates a verdict. Stdout/stderr capture is bounded and process groups are terminated on timeout.
 
-**Isolation:**
-- Syntax check via `py_compile.compile(doraise=True)` — CE on `PyCompileError`/`SyntaxError`
-- Per-case `subprocess.run([sys.executable, tmp.py], input=stdin, timeout=wall_timeout, preexec_fn=setrlimit(RLIMIT_AS, memory_mb*1024*1024))`
-- Wall timeout = `time_limit_ms/1000 + 2.0` s; `RLIMIT_AS` skipped on Windows (no `resource` module)
-- Stdout/stderr truncated 4KB per case; error_message truncated 2KB
+Cloud Run uses rlimit: process limits, bounded output, file growth and descriptor caps, and wall timeout. It has no filesystem or network namespace. See docs/threat-model.md. Docker mode offers a stronger container setup on a dedicated Linux host with Docker, cgroups, and the seccomp profile provisioned.
 
-**Honest limitations:** No fork-bomb protection, no seccomp, timing variance under load — see `docs/status.md`.
+### Postgres queue
 
----
+judge_jobs stores status, attempts, availability time, lease owner, expiry, heartbeat, error, and completion data. judge_workers stores host and liveness information. A unique job-per-submission constraint supports idempotent enqueue; administrative rejudge resets terminal jobs and requeues them.
 
-### Module 2: Problem API (Next) — [Implemented]
+### SSE and rankings
 
-**Responsibility:** List/get problems, compute acceptance/status.
+Submission and contest events are read from Postgres with bounded SSE streams. Rankings are computed from submission rows; Redis is optional for selected read-side caches and is not a queue or verdict event bus.
 
-**Routes:**
-```
-GET  /api/problems          List published problems (?q=&difficulty=&category=)
-GET  /api/problems/[id]     Fetch problem + sample cases + stats
-POST /api/admin/problems    Create problem (admin only) — Module 6
-```
+## Deployment
 
-**State machine (intended):**
-```
-Draft ──(problem setter submits to contest)──> Contest-Active ──(contest ends)──> Published
-```
-Seed creates 8 `published` problems directly; transitions via contest lifecycle are future work.
+- Vercel: Next.js frontend and route handlers.
+- Cloud Run service: FastAPI health and compatibility endpoints.
+- Cloud Run worker pool: pull worker, with explicit instance count.
+- Neon: application and queue database.
 
----
+Configuration and rollout steps are in docs/deployment.md and api/DEPLOYMENT_CONTRACT.md.
 
-### Module 3: Submission API (Next + FastAPI) — [Implemented]
+## Remaining architecture work
 
-**Responsibility:** Accept submissions, call judge, persist verdicts.
-
-**Routes:**
-```
-POST /api/submissions              Submit (mode run|submit)
-GET  /api/submissions?problemId=&contestId=  List caller's submissions
-GET  /api/submissions/[id]         Fetch one (owner-only)
-POST /judge (FastAPI)              Internal judge
-```
-
-**Lifecycle (actual):**
-```
-Pending (INSERT) ──> Running (UPDATE startedAt) ──> Verdict via FastAPI ──> persisted (completedAt)
-```
-No background queue — synchronous HTTP with 55s abort, `maxDuration=60`. Background thread pool / Redis queue is future work.
-
----
-
-### Module 4: Contest Engine (Next) — [Partially implemented]
-
-**Responsibility:** List/get contests, register, enforce submission windows.
-
-**Routes:**
-```
-GET  /api/contests              List all contests (with problem/registration counts, registered flag)
-GET  /api/contests/[id]         Fetch contest by slug|id + problems
-POST /api/contests/[id]/register Register (auth required)
-```
-
-**State machine (DB enum):**
-```
-draft ──> live ──> ended ──> archived
-```
-UI status derived from `status` + `startsAt/endsAt` (`deriveUiStatus`). No create/start/end/publish endpoints yet — requires role decision (see `docs/status.md`). Seed provides 4 contests.
-
----
-
-### Module 5: Leaderboard (Next) — [Implemented, on-demand]
-
-**Responsibility:** Compute contest rankings.
-
-**Route:** `GET /api/rankings?contestId=` — requires `live|ended|archived`, sorts by `solved DESC, penalty ASC`.
-
-**Algorithm:**
-```
-For each contestant:
-  solved_count = problems with first AC
-  penalty = sum over solved problems:
-    minutes(first_AC - contest.startsAt) + 20 * wrong_before_first_AC
-Sort by (solved DESC, penalty ASC)
-```
-
-**Live updates:** computed per request from `submissions`; Redis cache invalidation + SSE is planned, not implemented.
-
----
-
-### Module 6: Admin (Next) — [Implemented]
-
-**Responsibility:** Admin-only overview and problem creation.
-
-**Routes:**
-```
-GET  /api/admin/summary     Counts + recent problems/users (admin: ADMIN_CLERK_IDS or users.role=admin)
-POST /api/admin/problems    Create problem (same gate)
-```
-
-UI: `app/admin/page.tsx` — fetches summary, shows 403 for non-admins, form to create problems. No contest management or user role editing yet.
-
----
-
-### Module 7: Frontend (Next.js + React) — [Implemented]
-
-**Pages (see `docs/status.md` for access):**
-- `app/page.tsx` — landing
-- `app/dashboard/page.tsx` — dashboard (no auto-redirect)
-- `app/problems/page.tsx` / `app/problems/[id]/page.tsx` — archive + detail with Run/Submit
-- `app/contests/page.tsx` / `app/contests/[id]/page.tsx` / `app/contests/[id]/arena/page.tsx` — list/detail/arena
-- `app/rankings/page.tsx` — rankings
-- `app/submissions/[id]/page.tsx` — submission detail
-- `app/admin/page.tsx` — admin dashboard
-- `app/sign-in/[[...sign-in]]/page.tsx` / `app/sign-up/[[...sign-up]]/page.tsx` — Clerk catch-alls
-
----
-
-## DB reference (authoritative)
-
-Neon Postgres via Drizzle — `db/schema.ts`. Enums: `contest_status`, `problem_difficulty`, `problem_status`, `submission_status`, `user_role` (`contestant|setter|admin`). Tables: `users`, `problems`, `problem_test_cases`, `contests`, `contest_problems`, `contest_registrations`, `submissions` (+ legacy `notes`). Seeded: 8 problems, 32 cases, 4 contests, 16 links, zero fake submissions/registrations. See `docs/status.md` for full DDL summary.
+The current judge has no special checker, floating-point checker, or interactive-problem protocol. Contest freeze/reveal, clarifications, audit logs, load benchmarks, and real contest evidence are also still outstanding. Do not claim filesystem/network isolation or measured capacity for Cloud Run rlimit deployments.
