@@ -17,6 +17,9 @@ type AdminSubmission = {
   executionTimeMs: number | null;
   submittedAt: string;
   completedAt: string | null;
+  jobStatus: "queued" | "leased" | "completed" | "dead" | null;
+  attempts: number | null;
+  maxAttempts: number | null;
 };
 
 const inputCls =
@@ -33,13 +36,16 @@ const verdictColor: Record<string, string> = {
   running: "text-blue-400",
 };
 
-export default function SubmissionsSection() {
+export default function SubmissionsSection({ canRejudge }: { canRejudge: boolean }) {
   const [subs, setSubs] = useState<AdminSubmission[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState("");
   const [problemIdFilter, setProblemIdFilter] = useState("");
+  const [rejudgingId, setRejudgingId] = useState<number | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const limit = 25;
 
@@ -86,6 +92,28 @@ export default function SubmissionsSection() {
 
   const totalPages = Math.ceil(total / limit);
 
+  async function rejudge(id: number) {
+    if (!window.confirm(`Rejudge submission #${id}?`)) return;
+    setRejudgingId(id);
+    setActionMessage(null);
+    setActionError(null);
+    try {
+      const response = await fetch("/api/admin/submissions/rejudge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ submissionId: id }),
+      });
+      const result = (await response.json().catch(() => null)) as { error?: string } | null;
+      if (!response.ok) throw new Error(result?.error ?? `failed (${response.status})`);
+      setActionMessage(`Submission #${id} queued for rejudge`);
+      await load();
+    } catch (caught) {
+      setActionError(caught instanceof Error ? caught.message : "rejudge failed");
+    } finally {
+      setRejudgingId(null);
+    }
+  }
+
   return (
     <section className="bg-kjsurface border border-kjborder rounded-lg overflow-hidden mt-6">
       <div className="px-5 py-4 border-b border-kjborder flex justify-between items-center flex-wrap gap-3">
@@ -123,6 +151,8 @@ export default function SubmissionsSection() {
           {error}
         </p>
       )}
+      {actionMessage && <p className="mx-5 mt-4 text-xs font-mono text-kjprimary">{actionMessage}</p>}
+      {actionError && <p className="mx-5 mt-4 text-xs font-mono text-red-400">{actionError}</p>}
 
       {loading ? (
         <p className="px-5 py-8 text-center text-xs font-mono text-kjtext-muted">Loading submissions…</p>
@@ -133,7 +163,7 @@ export default function SubmissionsSection() {
           <table className="w-full">
             <thead>
               <tr>
-                {["#", "User", "Problem", "Verdict", "Tests", "Time", "Submitted"].map((h) => (
+                {["#", "User", "Problem", "Verdict", "Tests", "Time", "Queue", "Submitted", "Action"].map((h) => (
                   <th
                     key={h}
                     className="px-4 py-3 text-left text-[11px] uppercase tracking-widest font-mono text-kjtext-muted"
@@ -161,7 +191,22 @@ export default function SubmissionsSection() {
                   <td className="px-4 py-3 font-mono text-xs text-kjtext-muted">
                     {s.executionTimeMs !== null ? `${s.executionTimeMs}ms` : "—"}
                   </td>
+                  <td className="px-4 py-3 font-mono text-xs text-kjtext-muted">
+                    {s.jobStatus ? `${s.jobStatus} · ${s.attempts}/${s.maxAttempts}` : "—"}
+                  </td>
                   <td className="px-4 py-3 font-mono text-[11px] text-kjtext-muted">{formatDate(s.submittedAt)}</td>
+                  <td className="px-4 py-3">
+                    {canRejudge && s.status !== "pending" && s.status !== "running" && (
+                      <button
+                        type="button"
+                        onClick={() => void rejudge(s.id)}
+                        disabled={rejudgingId === s.id}
+                        className="border border-kjprimary/30 rounded px-2 py-1 text-[10px] font-mono text-kjprimary hover:bg-kjprimary/10 disabled:opacity-50"
+                      >
+                        {rejudgingId === s.id ? "QUEUING…" : "REJUDGE"}
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

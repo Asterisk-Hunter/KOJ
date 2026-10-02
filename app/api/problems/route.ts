@@ -89,13 +89,17 @@ export async function GET(req: NextRequest) {
 
   // Acceptance: accepted / completed (completed = not pending/running)
   const subs = await db
-    .select({ problemId: submissions.problemId, status: submissions.status })
+    .select({
+      problemId: submissions.problemId,
+      status: submissions.status,
+      mode: submissions.mode,
+    })
     .from(submissions)
     .where(inArray(submissions.problemId, ids));
 
   const completedByProblem = new Map<number, { total: number; accepted: number }>();
   for (const s of subs) {
-    if (s.status === "pending" || s.status === "running") continue;
+    if (s.mode !== "submit" || s.status === "pending" || s.status === "running") continue;
     const entry = completedByProblem.get(s.problemId) ?? { total: 0, accepted: 0 };
     entry.total += 1;
     if (s.status === "accepted") entry.accepted += 1;
@@ -113,10 +117,15 @@ export async function GET(req: NextRequest) {
   const userStatusMap = new Map<number, string[]>();
   if (userId) {
     const userSubs = await db
-      .select({ problemId: submissions.problemId, status: submissions.status })
+      .select({
+        problemId: submissions.problemId,
+        status: submissions.status,
+        mode: submissions.mode,
+      })
       .from(submissions)
       .where(and(eq(submissions.userId, userId), inArray(submissions.problemId, ids)));
     for (const s of userSubs) {
+      if (s.mode !== "submit") continue;
       const arr = userStatusMap.get(s.problemId) ?? [];
       arr.push(s.status);
       userStatusMap.set(s.problemId, arr);

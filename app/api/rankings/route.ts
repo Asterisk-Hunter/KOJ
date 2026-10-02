@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contests, problems, submissions, users } from "@/db/schema";
 import { getRedis } from "@/lib/redis";
@@ -118,7 +118,7 @@ export async function GET(req: NextRequest) {
   const submissionRows = await db
     .select()
     .from(submissions)
-    .where(eq(submissions.contestId, contestId));
+    .where(and(eq(submissions.contestId, contestId), eq(submissions.mode, "submit")));
 
   const submittedUserIds = [...new Set(submissionRows.map((s) => s.userId))];
   const userMap = new Map<string, string>();
