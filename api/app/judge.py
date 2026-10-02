@@ -43,8 +43,10 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import BinaryIO, Literal
 
 from pydantic import BaseModel, Field
 
@@ -80,8 +82,10 @@ _DOCKER_TMPFS_TMP = "rw,noexec,nosuid,size=64m"
 # required here (compiled binaries cannot run from noexec /tmp);
 # size-bounded and cleared with the container (--rm).
 _DOCKER_TMPFS_SCRATCH = "rw,nosuid,exec,size=256m"
-_DOCKER_FSIZE_ULIMIT = "fsize=1048576:1048576"  # 1 MiB file writes: bounds runaway stdout
+_RUN_FSIZE_LIMIT_BYTES = 1024 * 1024
+_COMPILE_FSIZE_LIMIT_BYTES = 64 * 1024 * 1024
 _DOCKER_NPROC_ULIMIT = "nproc=64:64"
+_DOCKER_NOFILE_ULIMIT = "nofile=256:256"
 _DOCKER_KILL_TIMEOUT_S = 5.0
 # Compile gets a safe floor so small problem limits cannot OOM the
 # toolchain; verdict timing/memory still use the request limits.
@@ -176,6 +180,140 @@ def _truncate(s: str, limit: int) -> str:
     if len(s) <= limit:
         return s
     return s[:limit]
+
+
+@dataclass(frozen=True)
+class ProcessResult:
+    returncode: int
+    stdout: str
+    stderr: str
+    output_limit_exceeded: bool
+
+
+_MAX_PROCESS_OUTPUT_BYTES = 1024 * 1024
+
+
+def _read_bounded_stream(
+    stream: BinaryIO,
+    buffer: bytearray,
+    total_bytes: list[int],
+    output_limit_exceeded: threading.Event,
+) -> None:
+    while True:
+        block = stream.read(64 * 1024)
+        if not block:
+            return
+        previous_size = total_bytes[0]
+        total_bytes[0] = previous_size + len(block)
+        remaining = _MAX_PROCESS_OUTPUT_BYTES - previous_size
+        if remaining > 0:
+            buffer.extend(block[:remaining])
+        if total_bytes[0] > _MAX_PROCESS_OUTPUT_BYTES:
+            output_limit_exceeded.set()
+
+
+def _write_process_input(stream: BinaryIO | None, input_text: str | None) -> None:
+    if stream is None:
+        return
+    try:
+        if input_text is not None:
+            stream.write(input_text.encode("utf-8"))
+            stream.flush()
+    except (BrokenPipeError, OSError):
+        pass
+    finally:
+        try:
+            stream.close()
+        except OSError:
+            pass
+
+
+def _run_bounded_process(
+    argv: list[str],
+    timeout_s: float,
+    stdin_text: str | None = None,
+    *,
+    cwd: str | None = None,
+    env: dict[str, str] | None = None,
+    preexec_fn: Callable[[], None] | None = None,
+    spawn_lock: threading.Lock | None = None,
+) -> ProcessResult:
+    def start_process() -> subprocess.Popen[bytes]:
+        return subprocess.Popen(
+            argv,
+            cwd=cwd,
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            preexec_fn=preexec_fn,
+            start_new_session=True,
+        )
+
+    if spawn_lock is None:
+        process = start_process()
+    else:
+        with spawn_lock:
+            process = start_process()
+
+    stdout_buffer = bytearray()
+    stderr_buffer = bytearray()
+    stdout_size = [0]
+    stderr_size = [0]
+    output_limit_exceeded = threading.Event()
+    stdout_stream = process.stdout
+    stderr_stream = process.stderr
+    if stdout_stream is None or stderr_stream is None:
+        _kill_process_group(process)
+        raise SandboxUnavailable("failed to capture sandbox process output")
+
+    readers = [
+        threading.Thread(
+            target=_read_bounded_stream,
+            args=(stdout_stream, stdout_buffer, stdout_size, output_limit_exceeded),
+            daemon=True,
+        ),
+        threading.Thread(
+            target=_read_bounded_stream,
+            args=(stderr_stream, stderr_buffer, stderr_size, output_limit_exceeded),
+            daemon=True,
+        ),
+    ]
+    for reader in readers:
+        reader.start()
+    input_writer = threading.Thread(
+        target=_write_process_input,
+        args=(process.stdin, stdin_text),
+        daemon=True,
+    )
+    input_writer.start()
+
+    deadline = time.monotonic() + timeout_s
+    timed_out = False
+    while process.poll() is None:
+        if output_limit_exceeded.is_set():
+            _kill_process_group(process)
+            break
+        if time.monotonic() >= deadline:
+            timed_out = True
+            _kill_process_group(process)
+            break
+        time.sleep(0.01)
+    returncode = process.wait()
+    input_writer.join(timeout=1)
+    for reader in readers:
+        reader.join(timeout=2)
+
+    stdout = bytes(stdout_buffer).decode("utf-8", errors="replace")
+    stderr = bytes(stderr_buffer).decode("utf-8", errors="replace")
+    if timed_out:
+        raise subprocess.TimeoutExpired(argv, timeout_s, output=stdout, stderr=stderr)
+    return ProcessResult(
+        returncode=returncode,
+        stdout=stdout,
+        stderr=stderr,
+        output_limit_exceeded=output_limit_exceeded.is_set(),
+    )
 
 
 def _normalize_output(s: str) -> list[str]:
@@ -350,7 +488,11 @@ def _compile_container_memory_mb(language: str, requested: int) -> int:
 
 
 def _docker_base_argv(
-    image: str, host_workdir: Path, container_name: str, memory_mb: int
+    image: str,
+    host_workdir: Path,
+    container_name: str,
+    memory_mb: int,
+    fsize_bytes: int,
 ) -> list[str]:
     """Fixed sandbox flags. No caller/user input beyond image/workdir/limits.
 
@@ -386,9 +528,11 @@ def _docker_base_argv(
         "--cpus",
         str(settings.JUDGE_DOCKER_CPUS),
         "--ulimit",
-        _DOCKER_FSIZE_ULIMIT,
+        f"fsize={fsize_bytes}:{fsize_bytes}",
         "--ulimit",
         _DOCKER_NPROC_ULIMIT,
+        "--ulimit",
+        _DOCKER_NOFILE_ULIMIT,
         "--tmpfs",
         f"/tmp:{_DOCKER_TMPFS_TMP}",
         "--tmpfs",
@@ -416,21 +560,19 @@ def _run_docker(
     memory_mb: int,
     timeout_s: float,
     stdin_text: str | None = None,
-) -> subprocess.CompletedProcess[str]:
+    *,
+    fsize_bytes: int = _RUN_FSIZE_LIMIT_BYTES,
+) -> ProcessResult:
     """Run one sandboxed command. Raises SandboxUnavailable on infra failure."""
     if shutil.which("docker") is None:
         raise SandboxUnavailable("docker binary not found on judge host")
     # Full UUID: unique container names for reliable timeout cleanup.
     container_name = f"koj-judge-{uuid.uuid4().hex}"
-    argv = _docker_base_argv(image, host_workdir, container_name, memory_mb) + inner_cmd
+    argv = _docker_base_argv(
+        image, host_workdir, container_name, memory_mb, fsize_bytes
+    ) + inner_cmd
     try:
-        proc = subprocess.run(
-            argv,
-            input=stdin_text,
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-        )
+        proc = _run_bounded_process(argv, timeout_s, stdin_text)
     except FileNotFoundError as e:
         raise SandboxUnavailable(f"docker binary not found: {e}") from e
     except subprocess.TimeoutExpired:
@@ -441,6 +583,8 @@ def _run_docker(
     except Exception as e:  # noqa: BLE001 — docker infra failure fails closed
         _cleanup_container(container_name)
         raise SandboxUnavailable(str(e)) from e
+    if proc.output_limit_exceeded:
+        _cleanup_container(container_name)
     stderr = proc.stderr or ""
     if "Cannot connect to the Docker daemon" in stderr:
         _cleanup_container(container_name)
@@ -476,9 +620,8 @@ def _run_docker(
 # exists.
 # ---------------------------------------------------------------------------
 
-_LOCAL_FSIZE_BYTES = 1024 * 1024
-# Output bound for parity with the docker backend's fsize ulimit.
-_LOCAL_STDOUT_LIMIT = 1024 * 1024
+_LOCAL_FSIZE_BYTES = _RUN_FSIZE_LIMIT_BYTES
+_LOCAL_COMPILE_FSIZE_BYTES = _COMPILE_FSIZE_LIMIT_BYTES
 # Compilers need more headroom than the problem's judge limit.
 _LOCAL_COMPILE_MIN_MB = 512
 # Binaries a host toolchain must be able to invoke. A missing entry is judge
@@ -582,7 +725,7 @@ def warm_go_cache() -> None:
                 ],
                 _LOCAL_COMPILE_MIN_MB,
                 COMPILE_TIMEOUT_S,
-                fsize_bytes=0,
+                fsize_bytes=_LOCAL_COMPILE_FSIZE_BYTES,
             )
             logger.info("go build cache warmed at %s", _shared_go_cache())
         except Exception:  # noqa: BLE001 - warm-up is best effort
@@ -640,19 +783,35 @@ def _limit_preexec(cpu_s: int, memory_mb: int, nproc: int, fsize_bytes: int):
             resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
         if nproc > 0:
             resource.setrlimit(resource.RLIMIT_NPROC, (nproc, nproc))
+        _, current_hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        file_limit = min(256, current_hard) if current_hard != resource.RLIM_INFINITY else 256
+        resource.setrlimit(resource.RLIMIT_NOFILE, (file_limit, file_limit))
 
     return _apply
 
 
-def _kill_process_group(proc: subprocess.Popen[str]) -> None:
+def _kill_process_group(proc: subprocess.Popen[bytes]) -> None:
     """SIGKILL the run's whole process group (best effort)."""
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except OSError:
+    except (AttributeError, OSError):
         try:
             proc.kill()
         except OSError:
             pass
+
+
+def _local_process_environment(host_workdir: Path) -> dict[str, str]:
+    return {
+        "PATH": os.environ.get("PATH", os.defpath),
+        "HOME": str(host_workdir),
+        "TMPDIR": str(host_workdir),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPYCACHEPREFIX": str(host_workdir / ".pycache"),
+    }
 
 
 def _local_run(
@@ -664,7 +823,7 @@ def _local_run(
     stdin_text: str | None = None,
     *,
     fsize_bytes: int = _LOCAL_FSIZE_BYTES,
-) -> subprocess.CompletedProcess[str]:
+) -> ProcessResult:
     """Run one command under the rlimit sandbox.
 
     The image argument exists so this is call-compatible with `_run_docker`;
@@ -673,41 +832,24 @@ def _local_run(
     if resource is None:
         raise SandboxUnavailable("rlimit sandbox unavailable on this platform")
     cpu_s = max(1, math.ceil(timeout_s))
-    env = {
-        **os.environ,
-        "PYTHONUNBUFFERED": "1",
-        "PYTHONDONTWRITEBYTECODE": "1",
-        "PYTHONPYCACHEPREFIX": str(host_workdir / ".pycache"),
-    }
+    env = _local_process_environment(host_workdir)
     argv = [str(part) for part in inner_cmd]
     try:
-        with _FORK_LOCK:
-            proc = subprocess.Popen(
-                argv,
-                cwd=str(host_workdir),
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                preexec_fn=_limit_preexec(
-                    cpu_s, memory_mb, _uid_process_allowance(), fsize_bytes
-                ),
-                start_new_session=True,
-                env=env,
-            )
-        stdout, stderr = proc.communicate(stdin_text, timeout=timeout_s)
+        return _run_bounded_process(
+            argv,
+            timeout_s,
+            stdin_text,
+            cwd=str(host_workdir),
+            env=env,
+            preexec_fn=_limit_preexec(
+                cpu_s, memory_mb, _uid_process_allowance(), fsize_bytes
+            ),
+            spawn_lock=_FORK_LOCK,
+        )
     except subprocess.TimeoutExpired:
-        _kill_process_group(proc)
-        stdout, stderr = proc.communicate()
-        raise subprocess.TimeoutExpired(argv, timeout_s, output=stdout, stderr=stderr) from None
+        raise
     except OSError as e:
         raise SandboxUnavailable(f"failed to start sandboxed process: {e}") from e
-    return subprocess.CompletedProcess(
-        argv,
-        proc.returncode,
-        _truncate(stdout, _LOCAL_STDOUT_LIMIT),
-        _truncate(stderr, _LOCAL_STDOUT_LIMIT),
-    )
 
 
 def _local_compile(
@@ -735,12 +877,13 @@ def _local_compile(
 
     def _compile_cmd(cmd: list[str]) -> str | None:
         try:
-            # No RLIMIT_FSIZE while compiling: linkers and code generators write
-            # artefacts larger than the run-time output bound, and a truncated
-            # write would surface as a bogus compilation error. COMPILE_TIMEOUT_S
-            # already bounds a runaway compiler.
             proc = _local_run(
-                None, host_workdir, cmd, mem, COMPILE_TIMEOUT_S, fsize_bytes=0
+                None,
+                host_workdir,
+                cmd,
+                mem,
+                COMPILE_TIMEOUT_S,
+                fsize_bytes=_LOCAL_COMPILE_FSIZE_BYTES,
             )
         except subprocess.TimeoutExpired:
             return "compilation timed out"
@@ -748,6 +891,8 @@ def _local_compile(
             raise
         except OSError as e:
             raise SandboxUnavailable(str(e)) from e
+        if proc.output_limit_exceeded:
+            return "compiler output exceeded the 1 MiB limit"
         if proc.returncode != 0:
             return (proc.stderr or "").strip() or f"compilation failed (exit {proc.returncode})"
         return None
@@ -847,13 +992,22 @@ def _docker_compile(
 
     def _compile_cmd(cmd: list[str]) -> str | None:
         try:
-            proc = _run_docker(image, host_workdir, cmd, mem, COMPILE_TIMEOUT_S)
+            proc = _run_docker(
+                image,
+                host_workdir,
+                cmd,
+                mem,
+                COMPILE_TIMEOUT_S,
+                fsize_bytes=_COMPILE_FSIZE_LIMIT_BYTES,
+            )
         except subprocess.TimeoutExpired:
             return "compilation timed out"
         except SandboxUnavailable:
             raise
         except Exception as e:  # noqa: BLE001 — docker infra failure fails closed
             raise SandboxUnavailable(str(e)) from e
+        if proc.output_limit_exceeded:
+            return "compiler output exceeded the 1 MiB limit"
         if "Cannot connect to the Docker daemon" in (proc.stderr or ""):
             raise SandboxUnavailable("docker daemon unreachable")
         if proc.returncode != 0:
@@ -1067,7 +1221,8 @@ def _is_cpu_limit_kill(returncode: int | None) -> bool:
     generic runtime error. The docker backend never reaches the process this
     way: it is stopped by the wall-clock timeout instead.
     """
-    return returncode is not None and returncode == -signal.SIGXCPU
+    sigxcpu = getattr(signal, "SIGXCPU", None)
+    return returncode is not None and sigxcpu is not None and returncode == -sigxcpu
 
 
 def execute_judge(req: JudgeRequest) -> JudgeResponse:
@@ -1125,6 +1280,25 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
 
                 if elapsed_ms > max_runtime:
                     max_runtime = elapsed_ms
+
+                if proc.output_limit_exceeded:
+                    verdict = "runtime_error"
+                    message = "program output exceeded the 1 MiB limit"
+                    if first_error is None:
+                        first_error = message
+                        aggregate = verdict
+                    results.append(
+                        _visible_case(
+                            index=idx,
+                            passed=False,
+                            verdict=verdict,
+                            runtime_ms=elapsed_ms,
+                            stdout=stdout_raw,
+                            stderr=stderr_raw,
+                            is_sample=is_sample,
+                        )
+                    )
+                    continue
 
                 daemon_err = "Cannot connect to the Docker daemon" in stderr_raw
                 if daemon_err:
