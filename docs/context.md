@@ -30,6 +30,8 @@ Grew out of a college course project; now personally owned as `Asterisk-Hunter/K
 7. **Migration bookkeeping is broken.** Two `0002_*` + two `0003_*` in `db/migrations/`; `meta/_journal.json` registers only 4 of the 8 SQL files. Which migrations ran on live Neon is UNVERIFIED — see `docs/status.md`.
 8. **Fresh clone has no `node_modules`.** Run `npm install` first. `npm test`'s Python leg calls `python3`, absent on stock Windows — there only the 2 TS suites run.
 
+Dispatch hazard: if the 5s judge-dispatch timeout fires, the catch writes terminal `runtime_error` and the judge's guarded verdict UPDATE then discards the real verdict — see `docs/status.md` and "Open questions for the owner" in `docs/KOJ_ Plan to Make It a Solid Project.md` before touching dispatch.
+
 ## 4. Layout
 
 ```text
@@ -64,6 +66,8 @@ Grew out of a college course project; now personally owned as `Asterisk-Hunter/K
 | `npm test` | 2 TS suites + `python3 -m pytest -q` in `api/`; `python3` missing on stock Windows |
 | `npm run db:generate` / `db:migrate` / `db:push` / `db:studio` | Drizzle workflow (but the journal is broken — see §3.7) |
 | `npm run db:seed` | Runs `scripts/seed.ts` (8 published problems + 4 contests) |
+
+Hosting is three deployables: Next + `app/api/*` → Vercel (`npm run build`); FastAPI judge → a container host from `api/Dockerfile`; DB → Neon. Root `/api/` stays off Vercel via `.vercelignore` (leading slash deliberate); Next reaches the judge via `fetch(process.env.FASTAPI_URL)` (`app/api/submissions/route.ts:285`, `app/api/judge/run/route.ts:154`).
 
 ## 6. Data model
 

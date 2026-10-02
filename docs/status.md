@@ -159,6 +159,8 @@ Honest flags: the Python leg invokes `python3`, which does not exist on stock Wi
 - `app/api/judge/run/route.ts` rate-limits with an in-memory Map, so it resets per serverless instance and is not durable across instances.
 - `app/api/admin/problems/import/route.ts` performs real outbound server-side requests to leetcode.com, codeforces.com, and atcoder.jp — real network egress from the Next server, which sits awkwardly against the hermetic-unit-test policy.
 - `JUDGE_DOCKER_IMAGE_GO/RUST/NODE` are implemented but missing from `api/.env.example`, so an operator cannot see them.
+- Dispatch writes terminal state on timeout: `app/api/submissions/route.ts:285` fetches `/judge-async` with a 5s `AbortSignal.timeout` (`route.ts:292`), and the catch (`route.ts:294-303`) writes terminal `runtime_error` "judge unavailable". The judge's verdict UPDATE is guarded to `pending`/`running` (`api/app/main.py:491`), so the real verdict is then silently discarded — a timeout under load turns a good submission into "judge unavailable".
+- Cloud Run forces the weaker sandbox: `api/app/judge.py:464-465` states Cloud Run cannot run containers, so `JUDGE_SANDBOX_MODE=auto` falls back to `rlimit` (no filesystem or network namespace). "Deploy to Cloud Run" means "run unhardened".
 - No TODO/FIXME/HACK markers anywhere in ts/tsx/py/sql. No commented-out code blocks of 4+ lines.
 
 ---

@@ -71,11 +71,15 @@ Obsolete: `SUPABASE_URL`, `SUPABASE_ANON_KEY` — not used; KOJ uses Clerk + Neo
 
 **FastAPI separately:** Host the judge on a Linux VM or managed service with a Docker daemon and cgroups available. The judge runs submissions in Docker and fails closed when Docker is unavailable; the current image cannot run judging on a standard Cloud Run service without a separate Docker-capable execution design. Copy `api/.env.example` keys to the service environment (`DATABASE_URL`, `FASTAPI_HOST=0.0.0.0`, `JUDGE_INTERNAL_SECRET`, `FRONTEND_URL`) and pre-pull the configured runner images. Set `FRONTEND_URL=https://<vercel-app>.vercel.app` and ensure `JUDGE_INTERNAL_SECRET` is identical on both sides.
 
-**Clerk:** In Clerk dashboard, set Sign-in/Sign-up URLs and fallback redirects to the same values. Mirror all `NEXT_PUBLIC_CLERK_*` vars in Vercel Project Settings → Environment Variables. Organizations are **enabled** — `org:admin` role is used for admin APIs.
+**Clerk:** In Clerk dashboard, set Sign-in/Sign-up URLs and fallback redirects to the same values. Mirror all `NEXT_PUBLIC_CLERK_*` vars in Vercel Project Settings → Environment Variables. Admin authorization does **not** use Clerk organizations — no Organizations API call exists in the codebase. It gates on the comma-separated `ADMIN_CLERK_IDS` env allowlist first, then Neon `users.role` (`app/api/admin/authz.ts`). Set `ADMIN_CLERK_IDS` on Vercel to bootstrap the first admin; it is not in `.env.example`. Whether Organizations are enabled in the dashboard is UNVERIFIED and irrelevant to authz.
 
 **Neon:** Use pooled connection string (`…-pooler…?sslmode=require&channel_binding=require`). Next.js `pg` Pool `max:10`; FastAPI uses a bounded `psycopg` connection pool per worker.
 
-**Function duration:** `app/api/submissions` exports `maxDuration=60` (55s judge timeout + 2s buffer). Vercel Hobby caps at 10s — requires Pro (60s) or moving judging to background queue/worker later. No `regions` pin needed.
+**Function duration:** `app/api/submissions` exports **no** `maxDuration` — only `app/api/judge/run`, `app/api/submissions/[id]/events`, and `app/api/contests/[id]/events` do (all `=60`). So the submissions route takes Vercel's platform default (10s on Hobby), and its judge dispatch self-imposes a much tighter 5s `AbortSignal.timeout` at `app/api/submissions/route.ts:292`. On Hobby the cap is 10s, which is under the 60s the other routes assume — Pro is required, or judging moves to a queue/worker. No `regions` pin needed.
+
+### Hosting split and the Cloud Run sandbox caveat
+
+Three separate deployables: Next.js + `app/api/*` route handlers → Vercel; FastAPI judge → a container host built from `api/Dockerfile`; Postgres → Neon. Root `/api/` is kept off Vercel by `.vercelignore` (leading slash deliberate, so `app/api/` is NOT excluded). Sandbox consequence: a host without a Docker daemon (standard Cloud Run) forces `JUDGE_SANDBOX_MODE=auto` to fall back to `rlimit`, which has no filesystem or network namespace (`api/app/judge.py:464-465`) — "deploy to Cloud Run" means "run with the weaker sandbox". Full judge contract: `api/DEPLOYMENT_CONTRACT.md`. Open hosting decisions: "Open questions for the owner" in `docs/KOJ_ Plan to Make It a Solid Project.md`.
 
 ---
 
@@ -87,7 +91,7 @@ Preserved Vercel section above is accurate for intended production. Limitations 
 2. **Redis/SSE not deployed** — no Redis instance, no SSE route; leaderboard is on-demand
 3. **Contest CRUD not deployed** — no API to create contests in production; contests come from seed script
 4. **Webhook sync not deployed** — Clerk webhooks for `users`/`org memberships` not wired; `users` rows are lazy-created on first submission/admin call
-5. **Vercel Hobby limit** — `maxDuration=60` needs Pro or a queue/worker refactor before production contests
+5. **Vercel Hobby limit** — the routes that set `maxDuration=60` (and `app/api/submissions`, which sets none) need Pro or a queue/worker refactor before production contests; see "Function duration" above
 
 ---
 
