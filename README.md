@@ -10,14 +10,14 @@ Contest hosting platform with an integrated problem archive for IIIT Kottayam.
 
 | Package | Version | Notes |
 |---|---|---|
-| `next` | 16.3.0 | App Router, Route Handlers under `app/api/*` |
+| `next` | 16.3.5 | App Router, Route Handlers under `app/api/*` |
 | `react` / `react-dom` | 19.2.8 | |
 | `@clerk/nextjs` | 7.x | Authentication (see `AGENTS.md` for the verified setup) |
-| `tailwindcss` | 4.3.3 | v4, config via `@tailwindcss/postcss` + `@import "tailwindcss"` in `app/globals.css` |
-| `drizzle-orm` | 0.36.4 | |
-| `drizzle-kit` | 0.28.1 | Dev tool: `npm run db:generate` / `db:migrate` / `db:push` / `db:studio` |
-| `pg` | 8.23.0 | Node Postgres driver used by the Drizzle client |
-| `dotenv` | 16.4.x | Loads env vars outside Next (drizzle-kit, FastAPI) |
+| `tailwindcss` | 4.x | v4, config via `@tailwindcss/postcss` + `@import "tailwindcss"` in `app/globals.css` |
+| `drizzle-orm` | 0.45.x | |
+| `drizzle-kit` | 0.31.x | Dev tool: `npm run db:generate` / `db:migrate` / `db:push` / `db:studio` |
+| `pg` | 8.x | Node Postgres driver used by the Drizzle client |
+| `dotenv` | 16.x | Loads env vars outside Next (drizzle-kit, FastAPI) |
 
 ## Layout
 
@@ -94,6 +94,9 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 Then <http://127.0.0.1:8000/health> and <http://127.0.0.1:8000/docs>.
+For local queue processing, run a second API process with `python -m app.worker`.
+Both processes use the same `DATABASE_URL`; the worker pulls queued jobs from
+Postgres and does not require `FASTAPI_URL`.
 
 ## Scripts
 
@@ -102,6 +105,8 @@ Then <http://127.0.0.1:8000/health> and <http://127.0.0.1:8000/docs>.
 | `npm run dev` | Next.js dev server |
 | `npm run build` / `npm start` | Production build + start |
 | `npm run lint` | ESLint |
+| `npx tsc --noEmit` | TypeScript check |
+| `npm test` | Cross-platform TypeScript and Python unit tests |
 | `npm run db:generate` | Drizzle: generate SQL migration from schema |
 | `npm run db:migrate` | Drizzle: apply migrations to the DB |
 | `npm run db:push` | Drizzle: push schema directly (skips migrations) |
@@ -116,7 +121,7 @@ Then <http://127.0.0.1:8000/health> and <http://127.0.0.1:8000/docs>.
 ## Production deployment
 
 - **Frontend**: Vercel (Next.js 16). See `docs/deployment.md` § 2.
-- **Judge**: Google Cloud Run (`api/Dockerfile` — Python 3.11-slim + gcc/g++/JDK). See `docs/deployment.md` § 3.
+- **Judge API + workers**: Google Cloud Run service and pull worker pool (`api/Dockerfile`). See `docs/deployment.md`.
 - **Database**: Neon Postgres with Drizzle ORM. See `docs/deployment.md` § 1.
 
 ## Contributors
