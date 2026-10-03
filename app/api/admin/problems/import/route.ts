@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { problems, problemTestCases } from "@/db/schema";
 import { ensureUserRow, jsonError, requireSetter } from "@/app/api/admin/authz";
+import { MAX_PROBLEM_AUTHORING_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 import {
   extractAtCoderTaskId,
   extractCodeforcesId,
@@ -28,14 +29,13 @@ export async function POST(req: NextRequest) {
     return jsonError("user not found or could not be synced", 400);
   }
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return jsonError("invalid json payload", 400);
-  }
-
-  const b = body as Record<string, unknown>;
+  const parsedBody = await readBoundedJsonObject(
+    req,
+    MAX_PROBLEM_AUTHORING_BODY_BYTES,
+    "invalid json payload",
+  );
+  if (!parsedBody.ok) return parsedBody.response;
+  const b = parsedBody.value;
   const source = typeof b.source === "string" ? b.source.toLowerCase() : "auto";
   const rawInput = b.input;
   const autoCreate = Boolean(b.autoCreate);

@@ -13,13 +13,13 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   if (!userId) redirect("/sign-in");
 
   const rows = await db
-    .select({ role: users.role })
+    .select({ role: users.role, suspended: users.suspended })
     .from(users)
     .where(eq(users.clerkId, userId))
     .limit(1);
 
-  const role = rows.length > 0 ? rows[0].role : null;
-  if (!role || !STAFF_ROLES.has(role)) redirect("/dashboard");
+  const user = rows[0];
+  if (!user || user.suspended || !STAFF_ROLES.has(user.role)) redirect("/dashboard");
 
   return <>{children}</>;
 }

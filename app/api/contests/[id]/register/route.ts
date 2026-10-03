@@ -5,6 +5,7 @@ import { db } from "@/db";
 import { contestRegistrations, contests, users } from "@/db/schema";
 import { settleExpiredContests, isRegistrationOpen, contestRequiresInvite } from "@/app/api/contests/lifecycle";
 import { verifyInviteCode } from "@/app/api/contests/invite-code";
+import { MAX_CONTEST_REGISTRATION_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,12 +46,9 @@ export async function POST(
   // exact match (read-only migration path — never written as plaintext).
   if (contestRequiresInvite(contest)) {
     let inviteCode: unknown = null;
-    try {
-      const body = (await req.json()) as Record<string, unknown>;
-      inviteCode = body.inviteCode ?? body.invite_code ?? null;
-    } catch {
-      inviteCode = null;
-    }
+    const parsed = await readBoundedJsonObject(req, MAX_CONTEST_REGISTRATION_BODY_BYTES);
+    if (!parsed.ok) return parsed.response;
+    inviteCode = parsed.value.inviteCode ?? parsed.value.invite_code ?? null;
     if (
       !verifyInviteCode(inviteCode, {
         hash: contest.inviteCodeHash ?? null,

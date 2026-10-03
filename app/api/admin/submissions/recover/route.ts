@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/app/api/admin/authz";
-import { readBoundedJson, MAX_RECOVER_BODY_BYTES } from "@/app/api/body-guard";
+import { readBoundedJsonObject, MAX_RECOVER_BODY_BYTES } from "@/app/api/body-guard";
 import {
   recoverStaleRunningSubmissions,
   STALE_RUNNING_AFTER_MS,
@@ -45,9 +45,9 @@ async function handleRecovery(req: NextRequest, allowBody: boolean) {
     (rawLength !== null && Number(rawLength) > 0)
   );
   if (hasBody) {
-    const parsed = await readBoundedJson(req, MAX_RECOVER_BODY_BYTES);
+    const parsed = await readBoundedJsonObject(req, MAX_RECOVER_BODY_BYTES);
     if (!parsed.ok) return parsed.response;
-    const b = parsed.value as Record<string, unknown>;
+    const b = parsed.value;
     if (b.staleAfterMinutes !== undefined) {
       const n =
         typeof b.staleAfterMinutes === "string"

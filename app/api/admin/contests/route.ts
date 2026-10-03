@@ -3,6 +3,7 @@ import { asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contestRegistrations, contests, problems } from "@/db/schema";
 import { ensureUserRow, jsonError, requireContestManager } from "@/app/api/admin/authz";
+import { MAX_CONTEST_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 import { hashInviteCode } from "@/app/api/contests/invite-code";
 
 export const runtime = "nodejs";
@@ -84,13 +85,9 @@ export async function POST(req: NextRequest) {
   const grant = await requireContestManager();
   if (!grant.ok) return grant.response;
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return jsonError("invalid json", 400);
-  }
-  const b = body as Record<string, unknown>;
+  const parsed = await readBoundedJsonObject(req, MAX_CONTEST_BODY_BYTES, "invalid json");
+  if (!parsed.ok) return parsed.response;
+  const b = parsed.value;
 
   const title = b.title;
   if (typeof title !== "string" || title.trim().length === 0) {

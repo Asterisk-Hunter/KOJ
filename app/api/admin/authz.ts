@@ -3,6 +3,7 @@ import { auth, clerkClient } from "@clerk/nextjs/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { users } from "@/db/schema";
+import { decideStaffAccess, type AccessRole, type StaffAccess } from "./access-policy";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,28 +14,45 @@ export function jsonError(message: string, status: number) {
 
 export type AdminGrant = { ok: true; userId: string } | { ok: false; response: NextResponse };
 
+async function checkStaffAccess(
+  userId: string,
+  access: StaffAccess,
+  allowlistedAdmin = false,
+): Promise<{ role: AccessRole; response: NextResponse | null }> {
+  const rows = await db
+    .select({ role: users.role, suspended: users.suspended })
+    .from(users)
+    .where(eq(users.clerkId, userId))
+    .limit(1);
+  const user = rows[0];
+  const decision = decideStaffAccess(
+    user?.role ?? null,
+    user?.suspended ?? false,
+    allowlistedAdmin,
+    access,
+  );
+  const response =
+    decision === "suspended"
+      ? jsonError("account suspended", 403)
+      : decision === "forbidden"
+        ? jsonError("forbidden", 403)
+        : null;
+  return { role: user?.role ?? null, response };
+}
+
 /** Admin-only gate: `ADMIN_CLERK_IDS` env allowlist OR `users.role == "admin"` in Neon. */
 export async function requireAdmin(): Promise<AdminGrant> {
   const { userId } = await auth();
   if (!userId) return { ok: false, response: jsonError("unauthorized", 401) };
 
-  // Fast-path: env-based allowlist (comma-separated Clerk user IDs).
-  const raw = process.env.ADMIN_CLERK_IDS;
-  if (raw) {
-    const allowed = raw
-      .split(",")
-      .map((id) => id.trim())
-      .filter(Boolean);
-    if (allowed.includes(userId)) return { ok: true, userId };
-  }
-
-  const rows = await db
-    .select({ role: users.role })
-    .from(users)
-    .where(eq(users.clerkId, userId))
-    .limit(1);
-  if (rows.length > 0 && rows[0].role === "admin") return { ok: true, userId };
-  return { ok: false, response: jsonError("forbidden", 403) };
+  const allowedAdminIds = (process.env.ADMIN_CLERK_IDS ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+  const result = await checkStaffAccess(userId, "admin", allowedAdminIds.includes(userId));
+  return result.response
+    ? { ok: false, response: result.response }
+    : { ok: true, userId };
 }
 
 export type SetterGrant =
@@ -50,15 +68,10 @@ export type SetterGrant =
 export async function requireContestManager(): Promise<AdminGrant> {
   const { userId } = await auth();
   if (!userId) return { ok: false, response: jsonError("unauthorized", 401) };
-  const rows = await db
-    .select({ role: users.role })
-    .from(users)
-    .where(eq(users.clerkId, userId))
-    .limit(1);
-  if (rows.length > 0 && (rows[0].role === "admin" || rows[0].role === "setter")) {
-    return { ok: true, userId };
-  }
-  return { ok: false, response: jsonError("forbidden", 403) };
+  const result = await checkStaffAccess(userId, "contestManager");
+  return result.response
+    ? { ok: false, response: result.response }
+    : { ok: true, userId };
 }
 
 /**
@@ -67,12 +80,9 @@ export async function requireContestManager(): Promise<AdminGrant> {
 export async function requireSetter(): Promise<SetterGrant> {
   const { userId } = await auth();
   if (!userId) return { ok: false, response: jsonError("unauthorized", 401) };
-  const rows = await db
-    .select({ role: users.role })
-    .from(users)
-    .where(eq(users.clerkId, userId))
-    .limit(1);
-  const dbRole = rows.length > 0 ? rows[0].role : null;
+  const result = await checkStaffAccess(userId, "contestManager");
+  if (result.response) return { ok: false, response: result.response };
+  const dbRole = result.role;
   if (dbRole === "admin" || dbRole === "setter") {
     return { ok: true, userId, dbRole };
   }
@@ -91,14 +101,11 @@ export type StaffGrant =
 export async function requireStaff(): Promise<StaffGrant> {
   const { userId } = await auth();
   if (!userId) return { ok: false, response: jsonError("unauthorized", 401) };
-  const rows = await db
-    .select({ role: users.role })
-    .from(users)
-    .where(eq(users.clerkId, userId))
-    .limit(1);
-  const r = rows.length > 0 ? rows[0].role : null;
+  const result = await checkStaffAccess(userId, "contestManager");
+  if (result.response) return { ok: false, response: result.response };
+  const r = result.role;
   if (r === "admin" || r === "setter") {
-    return { ok: true, userId, role: r as StaffRole };
+    return { ok: true, userId, role: r };
   }
   return { ok: false, response: jsonError("forbidden", 403) };
 }

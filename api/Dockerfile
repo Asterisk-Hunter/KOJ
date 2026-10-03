@@ -22,5 +22,10 @@ COPY app ./app
 
 ENV FASTAPI_HOST=0.0.0.0
 
+RUN groupadd --system --gid 10001 koj \
+    && useradd --system --uid 10001 --gid koj --home-dir /home/koj --create-home --shell /usr/sbin/nologin koj
+
+USER 10001:10001
+
 # The API service uses one process. Queue workers use `python -m app.worker`.
 CMD exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1
