@@ -15,24 +15,24 @@ export default async function ProblemCreatePage() {
     redirect(`/sign-in?redirect_url=${encodeURIComponent("/problems/create")}`);
   }
 
-  let role = await db
-    .select({ role: users.role })
+  let user = await db
+    .select({ role: users.role, suspended: users.suspended })
     .from(users)
     .where(eq(users.clerkId, userId))
     .limit(1)
-    .then((rows) => rows[0]?.role ?? null);
+    .then((rows) => rows[0] ?? null);
 
-  if (role === null) {
+  if (user === null) {
     await ensureUserRow(userId);
-    role = await db
-      .select({ role: users.role })
+    user = await db
+      .select({ role: users.role, suspended: users.suspended })
       .from(users)
       .where(eq(users.clerkId, userId))
       .limit(1)
-      .then((rows) => rows[0]?.role ?? null);
+      .then((rows) => rows[0] ?? null);
   }
 
-  if (role !== "admin" && role !== "setter") {
+  if (user?.suspended || (user?.role !== "admin" && user?.role !== "setter")) {
     return (
       <main className="mx-auto max-w-3xl px-4 py-16 text-center font-mono">
         <p className="text-red-300">403 · authoring access required</p>

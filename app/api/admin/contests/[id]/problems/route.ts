@@ -3,6 +3,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contests, problems } from "@/db/schema";
 import { jsonError, requireContestManager } from "@/app/api/admin/authz";
+import { MAX_CONTEST_PROBLEM_LINK_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,13 +30,9 @@ export async function POST(
     return jsonError("problems can only be added to draft contests", 400);
   }
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return jsonError("invalid json", 400);
-  }
-  const b = body as Record<string, unknown>;
+  const parsed = await readBoundedJsonObject(req, MAX_CONTEST_PROBLEM_LINK_BODY_BYTES, "invalid json");
+  if (!parsed.ok) return parsed.response;
+  const b = parsed.value;
   const problemId = b.problemId;
   if (typeof problemId !== "number" || !Number.isInteger(problemId) || problemId <= 0) {
     return jsonError("problemId must be a positive integer", 400);

@@ -13,7 +13,7 @@ import {
   users,
 } from "@/db/schema";
 import { settleExpiredContests } from "@/app/api/contests/lifecycle";
-import { readBoundedJson, MAX_SUBMISSION_BODY_BYTES } from "@/app/api/body-guard";
+import { readBoundedJsonObject, MAX_SUBMISSION_BODY_BYTES } from "@/app/api/body-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,11 +45,9 @@ export async function POST(req: NextRequest) {
 
   // Bounded body: 413 before parsing when the payload exceeds the cap
   // (code limit is 100KB; the cap leaves room for JSON overhead).
-  const parsed = await readBoundedJson(req, MAX_SUBMISSION_BODY_BYTES);
+  const parsed = await readBoundedJsonObject(req, MAX_SUBMISSION_BODY_BYTES);
   if (!parsed.ok) return parsed.response;
-  const body: unknown = parsed.value;
-
-  const b = body as Partial<PostBody>;
+  const b = parsed.value as Partial<PostBody>;
 
   const problemId = b.problemId;
   const contestId = b.contestId ?? null;

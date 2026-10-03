@@ -8,6 +8,7 @@ import {
   problems,
 } from "@/db/schema";
 import { jsonError, requireContestManager } from "@/app/api/admin/authz";
+import { MAX_CONTEST_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 import {
   lockLinkedProblems,
   nextStatuses,
@@ -100,13 +101,9 @@ export async function PATCH(
   const contest = await findContest(idRaw);
   if (!contest) return jsonError("contest not found", 404);
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return jsonError("invalid json", 400);
-  }
-  const b = body as PatchBody;
+  const parsed = await readBoundedJsonObject(req, MAX_CONTEST_BODY_BYTES, "invalid json");
+  if (!parsed.ok) return parsed.response;
+  const b = parsed.value as PatchBody;
   const now = new Date();
   const current = contest.status as ContestStatus;
 

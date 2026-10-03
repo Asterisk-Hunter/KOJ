@@ -3,6 +3,7 @@ import { asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contests, problemTestCases, problems } from "@/db/schema";
 import { jsonError, requireSetter } from "@/app/api/admin/authz";
+import { MAX_TEST_CASE_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 import { parseTestCasesFromText } from "@/app/api/admin/problems/import/parser";
 
 export const runtime = "nodejs";
@@ -44,14 +45,9 @@ export async function POST(
     return jsonError("test cases are locked while the contest is live", 403);
   }
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return jsonError("invalid json", 400);
-  }
-
-  const b = body as Record<string, unknown>;
+  const parsed = await readBoundedJsonObject(req, MAX_TEST_CASE_BODY_BYTES);
+  if (!parsed.ok) return parsed.response;
+  const b = parsed.value;
 
   // Check current test case count and max position
   const [countRow] = await db

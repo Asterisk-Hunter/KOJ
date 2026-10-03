@@ -4,6 +4,7 @@ import { clerkClient } from "@clerk/nextjs/server";
 import { db } from "@/db";
 import { users } from "@/db/schema";
 import { jsonError, requireAdmin, uniqueUsername } from "@/app/api/admin/authz";
+import { MAX_ADMIN_USER_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -152,13 +153,9 @@ export async function PATCH(req: NextRequest) {
   const grant = await requireAdmin();
   if (!grant.ok) return grant.response;
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return jsonError("invalid json", 400);
-  }
-  const b = body as Record<string, unknown>;
+  const parsed = await readBoundedJsonObject(req, MAX_ADMIN_USER_BODY_BYTES, "invalid json");
+  if (!parsed.ok) return parsed.response;
+  const b = parsed.value;
 
   const clerkId = b.clerkId;
   if (typeof clerkId !== "string" || clerkId.length === 0) {

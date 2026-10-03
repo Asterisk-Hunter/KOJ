@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { contestRegistrations, contests, problems, submissions, users } from "@/db/schema";
 import { uniqueUsername } from "@/app/api/admin/authz";
+import { MAX_CLERK_WEBHOOK_BODY_BYTES, readBoundedText } from "@/app/api/body-guard";
 import { verifyWebhookSignature } from "@/app/api/webhooks/clerk/verify";
 
 export const runtime = "nodejs";
@@ -100,7 +101,9 @@ export async function POST(req: NextRequest) {
   const signature = req.headers.get("svix-signature");
   if (!id || !timestamp || !signature) return jsonError("missing signature headers", 400);
 
-  const rawBody = await req.text();
+  const bounded = await readBoundedText(req, MAX_CLERK_WEBHOOK_BODY_BYTES);
+  if (!bounded.ok) return bounded.response;
+  const rawBody = bounded.value;
   if (!verifyWebhookSignature(secret, id, timestamp, rawBody, signature)) {
     return jsonError("invalid signature", 401);
   }
@@ -110,6 +113,9 @@ export async function POST(req: NextRequest) {
     evt = JSON.parse(rawBody) as unknown;
   } catch {
     return jsonError("invalid json", 400);
+  }
+  if (typeof evt !== "object" || evt === null || Array.isArray(evt)) {
+    return jsonError("invalid event", 400);
   }
   const type = (evt as { type?: unknown }).type;
   const data = (evt as { data?: unknown }).data;

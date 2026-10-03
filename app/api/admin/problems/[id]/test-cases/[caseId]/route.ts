@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contests, problemTestCases, problems } from "@/db/schema";
 import { jsonError, requireSetter } from "@/app/api/admin/authz";
-import { readBoundedJson, MAX_TEST_CASE_BODY_BYTES } from "@/app/api/body-guard";
+import { readBoundedJsonObject, MAX_TEST_CASE_BODY_BYTES } from "@/app/api/body-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -78,9 +78,9 @@ export async function PATCH(
 
   // Bounded body: 413 before parsing (fields cap at 10MB each; the cap
   // leaves room for JSON overhead). Field validation below is unchanged.
-  const parsed = await readBoundedJson(req, MAX_TEST_CASE_BODY_BYTES);
+  const parsed = await readBoundedJsonObject(req, MAX_TEST_CASE_BODY_BYTES);
   if (!parsed.ok) return parsed.response;
-  const b = parsed.value as Record<string, unknown>;
+  const b = parsed.value;
   const patch: Partial<typeof problemTestCases.$inferInsert> = {};
 
   if (b.input !== undefined) {
