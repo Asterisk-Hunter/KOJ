@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { contestProblems, contestRegistrations, contests, problems } from "@/db/schema";
+import { contestProblems, contestRegistrations, contestTeams, contestVirtualRegistrations, contests, problems } from "@/db/schema";
 import { settleExpiredContests, deriveContestUiStatus, contestRequiresInvite } from "@/app/api/contests/lifecycle";
 
 export const runtime = "nodejs";
@@ -35,6 +35,7 @@ export async function GET(
   await settleExpiredContests();
   const contest = await findContest(idRaw);
   if (!contest) return jsonError("contest not found", 404);
+  if (contest.status === "draft") return jsonError("contest not found", 404);
 
   const { userId } = await auth();
 
@@ -50,9 +51,11 @@ export async function GET(
 
   // registered check
   let registered = false;
+  let teamName: string | null = null;
+  let virtualParticipation: { startedAt: string; endsAt: string } | null = null;
   if (userId) {
     const reg = await db
-      .select()
+      .select({ teamId: contestRegistrations.teamId })
       .from(contestRegistrations)
       .where(
         and(
@@ -62,6 +65,15 @@ export async function GET(
       )
       .limit(1);
     registered = reg.length > 0;
+    if (reg[0]?.teamId) {
+      const [team] = await db.select({ name: contestTeams.name }).from(contestTeams).where(eq(contestTeams.id, reg[0].teamId)).limit(1);
+      teamName = team?.name ?? null;
+    }
+    const virtual = await db.select({ startedAt: contestVirtualRegistrations.startedAt, endsAt: contestVirtualRegistrations.endsAt })
+      .from(contestVirtualRegistrations)
+      .where(and(eq(contestVirtualRegistrations.contestId, contest.id), eq(contestVirtualRegistrations.userId, userId)))
+      .limit(1);
+    if (virtual[0]) virtualParticipation = { startedAt: virtual[0].startedAt.toISOString(), endsAt: virtual[0].endsAt.toISOString() };
   }
 
   // ordered contest problems
@@ -141,6 +153,8 @@ export async function GET(
     problemsCount: problemList.length,
     participants,
     registered,
+    teamName,
+    virtualParticipation,
     inviteRequired: contestRequiresInvite(contest),
     currentUserId: userId ?? null,
   });

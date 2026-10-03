@@ -16,6 +16,8 @@ type AdminContest = {
 };
 
 type ContestDetail = AdminContest & {
+  scoreboardFreezeMode: "automatic" | "frozen" | "unfrozen";
+  scoreboardRevealCount: number;
   problems: Array<{
     problemId: number;
     position: number;
@@ -200,6 +202,21 @@ export default function ContestsSection() {
     });
   }
 
+  async function handleScoreboard(id: number, action: "freeze" | "unfreeze" | "reveal-next" | "reveal-all") {
+    await mutate(`${id}:scoreboard:${action}`, async () => {
+      const r = await callJson(`/api/admin/contests/${id}/scoreboard`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      if (r.ok) {
+        const d = await callJson(`/api/admin/contests/${id}`);
+        if (d.ok) setExpanded((prev) => ({ ...prev, [id]: d.body as ContestDetail }));
+      }
+      return { ...r, message: r.ok ? `Scoreboard action: ${action}` : r.message };
+    });
+  }
+
   return (
     <section className="bg-kjsurface border border-kjborder rounded-lg overflow-hidden mt-6">
       <div className="px-5 py-4 border-b border-kjborder flex justify-between items-center">
@@ -300,6 +317,16 @@ export default function ContestsSection() {
 
           {expanded[c.id] && (
             <div className="mt-3 border border-kjborder rounded p-3 bg-kjbg/30">
+              {c.status === "live" && <div className="mb-3 flex flex-wrap gap-2 border-b border-kjborder pb-3">
+                <span className="self-center text-[11px] font-mono text-kjtext-muted">Freeze: {expanded[c.id].scoreboardFreezeMode}</span>
+                <button onClick={() => void handleScoreboard(c.id, "freeze")} disabled={busy !== null} className={btnGhost}>FREEZE NOW</button>
+                <button onClick={() => void handleScoreboard(c.id, "unfreeze")} disabled={busy !== null} className={btnGhost}>UNFREEZE</button>
+              </div>}
+              {(c.status === "ended" || c.status === "archived") && <div className="mb-3 flex flex-wrap gap-2 border-b border-kjborder pb-3">
+                <span className="self-center text-[11px] font-mono text-kjtext-muted">Revealed post-freeze submissions: {expanded[c.id].scoreboardRevealCount}</span>
+                <button onClick={() => void handleScoreboard(c.id, "reveal-next")} disabled={busy !== null || expanded[c.id].scoreboardFreezeMode !== "frozen"} className={btnGhost}>REVEAL NEXT</button>
+                <button onClick={() => void handleScoreboard(c.id, "reveal-all")} disabled={busy !== null || expanded[c.id].scoreboardFreezeMode !== "frozen"} className={btnGhost}>REVEAL ALL</button>
+              </div>}
               {expanded[c.id].problems.length === 0 ? (
                 <p className="text-xs font-mono text-kjtext-muted">No problems linked yet.</p>
               ) : (

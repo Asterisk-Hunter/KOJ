@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
-import { contestProblems, contests, problems, submissions, users } from "@/db/schema";
+import { contestProblems, contestTeams, contestVirtualRegistrations, contests, problems, submissions, users } from "@/db/schema";
 import { getRedis } from "@/lib/redis";
 import { countWrongBefore, penaltyMinutesForSolve } from "@/lib/scoring";
+import { getScoreboardFreezeAt, selectRevealedSubmissionIds } from "@/app/api/contests/scoreboard-policy";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -58,18 +59,9 @@ export async function GET(req: NextRequest) {
   if (!Number.isInteger(contestId) || contestId <= 0) {
     return jsonError("contestId must be a positive integer", 400);
   }
-
-  // Redis cache check (short TTL for live contests)
-  const redis = getRedis();
-  const cacheKey = `standings:${contestId}`;
-  if (redis) {
-    try {
-      const cached = await redis.get(cacheKey);
-      if (cached) return NextResponse.json(cached);
-    } catch {
-      // Redis unavailable — fall through to DB path
-    }
-  }
+  const virtualRaw = req.nextUrl.searchParams.get("virtual");
+  if (virtualRaw !== null && virtualRaw !== "0" && virtualRaw !== "1") return jsonError("virtual must be 0 or 1", 400);
+  const virtual = virtualRaw === "1";
 
   const contestRows = await db
     .select()
@@ -83,6 +75,20 @@ export async function GET(req: NextRequest) {
 
   if (contest.status !== "live" && contest.status !== "ended" && contest.status !== "archived") {
     return jsonError("contest not found or not visible", 404);
+  }
+  if (virtual && contest.status !== "ended" && contest.status !== "archived") {
+    return jsonError("virtual standings are available after the contest ends", 409);
+  }
+
+  const redis = getRedis();
+  const cacheKey = `standings:${contestId}:${virtual ? "virtual" : "official"}`;
+  if (redis) {
+    try {
+      const cached = await redis.get(cacheKey);
+      if (cached) return NextResponse.json(cached);
+    } catch {
+      // Redis unavailable — fall through to DB path
+    }
   }
 
   const cpRows = await db
@@ -106,6 +112,7 @@ export async function GET(req: NextRequest) {
         startsAt: contest.startsAt.toISOString(),
         endsAt: contest.endsAt.toISOString(),
         isFrozen: false,
+        freezeMode: contest.scoreboardFreezeMode,
       },
       problems: [],
       rows: [],
@@ -115,12 +122,40 @@ export async function GET(req: NextRequest) {
 
   const problemIds = cpRows.map((r) => r.problemId);
 
-  const submissionRows = await db
+  const virtualRegistrations = virtual
+    ? await db.select({ userId: contestVirtualRegistrations.userId, startedAt: contestVirtualRegistrations.startedAt })
+      .from(contestVirtualRegistrations).where(eq(contestVirtualRegistrations.contestId, contestId))
+    : [];
+  const virtualStartByUser = new Map(virtualRegistrations.map((registration) => [registration.userId, registration.startedAt.getTime()]));
+  const allSubmissionRows = await db
     .select()
     .from(submissions)
-    .where(and(eq(submissions.contestId, contestId), eq(submissions.mode, "submit")));
+    .where(and(eq(submissions.contestId, contestId), eq(submissions.mode, "submit"), eq(submissions.participation, virtual ? "virtual" : "official")));
 
-  const submittedUserIds = [...new Set(submissionRows.map((s) => s.userId))];
+  const freezeAt = getScoreboardFreezeAt(
+    contest.scoreboardFreezeMode,
+    contest.scoreboardFrozenAt,
+    contest.startsAt,
+    contest.endsAt,
+  );
+  const effectiveFreezeAt = virtual ? null : freezeAt;
+  const revealedSubmissionIds = selectRevealedSubmissionIds(
+    allSubmissionRows.map((submission) => ({ id: submission.id, submittedAt: submission.submittedAt })),
+    effectiveFreezeAt,
+    contest.scoreboardRevealCount,
+  );
+  const automaticFreezeActive = !virtual && contest.scoreboardFreezeMode === "automatic" && contest.status === "live" &&
+    freezeAt !== null && Date.now() >= freezeAt.getTime() && Date.now() < contest.endsAt.getTime();
+  const stagedFreezeActive = !virtual && contest.scoreboardFreezeMode === "frozen" &&
+    (contest.status === "live" || allSubmissionRows.some((submission) => freezeAt !== null && submission.submittedAt >= freezeAt && !revealedSubmissionIds.has(submission.id)));
+  const isFrozen = automaticFreezeActive || stagedFreezeActive;
+  const submissionRows = allSubmissionRows.map((submission) =>
+    isFrozen && effectiveFreezeAt !== null && submission.submittedAt >= effectiveFreezeAt && !revealedSubmissionIds.has(submission.id)
+      ? { ...submission, status: "running" as const }
+      : submission,
+  );
+
+  const submittedUserIds = [...new Set([...submissionRows.map((s) => s.userId), ...virtualRegistrations.map((registration) => registration.userId)])];
   const userMap = new Map<string, string>();
   if (submittedUserIds.length > 0) {
     const userRows = await db
@@ -132,23 +167,29 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  const teamIds = [...new Set(submissionRows.flatMap((submission) => submission.teamId === null ? [] : [submission.teamId]))];
+  const standingNameMap = new Map(userMap);
+  if (teamIds.length > 0) {
+    const teamRows = await db.select({ id: contestTeams.id, name: contestTeams.name }).from(contestTeams).where(inArray(contestTeams.id, teamIds));
+    for (const team of teamRows) standingNameMap.set(`team:${team.id}`, team.name);
+  }
+
   const contestStartMs = contest.startsAt.getTime();
   const contestEndMs = contest.endsAt.getTime();
   const nowMs = Date.now();
 
   // Scoreboard freeze: in ICPC/DOMjudge, scoreboard freezes in the last 60 minutes of live contest
-  const FREEZE_WINDOW_MS = 60 * 60 * 1000;
-  const freezeAtMs = Math.max(contestStartMs, contestEndMs - FREEZE_WINDOW_MS);
-  const isFrozen = contest.status === "live" && nowMs >= freezeAtMs && nowMs < contestEndMs;
+  const freezeAtMs = effectiveFreezeAt?.getTime() ?? Number.POSITIVE_INFINITY;
 
   // Group submissions by userId -> problemId -> sorted list
   const byUserProblem = new Map<string, Map<number, typeof submissionRows>>();
   for (const s of submissionRows) {
     if (!problemIds.includes(s.problemId)) continue;
-    let m = byUserProblem.get(s.userId);
+    const standingId = s.teamId === null ? s.userId : `team:${s.teamId}`;
+    let m = byUserProblem.get(standingId);
     if (!m) {
       m = new Map<number, typeof submissionRows>();
-      byUserProblem.set(s.userId, m);
+      byUserProblem.set(standingId, m);
     }
     let list = m.get(s.problemId);
     if (!list) {
@@ -170,10 +211,16 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  if (virtual) {
+    for (const registration of virtualRegistrations) {
+      if (!byUserProblem.has(registration.userId)) byUserProblem.set(registration.userId, new Map<number, typeof submissionRows>());
+    }
+  }
+
   // Detect First-to-Solve (First AC) per problem across entire contest
   // If scoreboard is currently frozen, post-freeze solves are masked until contest ends
   const firstSolverByProblem = new Map<number, { userId: string; submittedAtMs: number }>();
-  for (const [userId, m] of byUserProblem) {
+  for (const [standingId, m] of byUserProblem) {
     for (const [pid, list] of m) {
       for (const s of list) {
         if (s.status === "accepted") {
@@ -183,7 +230,7 @@ export async function GET(req: NextRequest) {
           }
           const currentFirst = firstSolverByProblem.get(pid);
           if (!currentFirst || subMs < currentFirst.submittedAtMs) {
-            firstSolverByProblem.set(pid, { userId, submittedAtMs: subMs });
+            firstSolverByProblem.set(pid, { userId: standingId, submittedAtMs: subMs });
           }
           break; // First AC for this user on this problem
         }
@@ -193,7 +240,7 @@ export async function GET(req: NextRequest) {
 
   const standings: StandingRow[] = [];
   for (const [userId, probMap] of byUserProblem) {
-    const username = userMap.get(userId) ?? userId;
+    const username = userId.startsWith("team:") ? standingNameMap.get(userId) ?? userId : userMap.get(userId) ?? userId;
     let solvedCount = 0;
     let penalty = 0;
     const perProblem: PerProblemStanding[] = [];
@@ -222,7 +269,7 @@ export async function GET(req: NextRequest) {
       }
 
       const firstSolver = firstSolverByProblem.get(pid);
-      const isFirst = firstSolver?.userId === userId;
+      const isFirst = !virtual && (firstSolver?.userId === userId || firstSolver?.userId === `user:${userId}`);
 
       if (firstAcIndex === -1) {
         // No AC
@@ -277,7 +324,8 @@ export async function GET(req: NextRequest) {
           .slice(0, firstAcIndex)
           .map((s) => s.status);
         const wrongBefore = countWrongBefore(statusesBefore);
-        const minutes = Math.max(0, Math.floor((submittedAtMs - contestStartMs) / 60000));
+        const participantStartMs = virtualStartByUser.get(userId) ?? contestStartMs;
+        const minutes = Math.max(0, Math.floor((submittedAtMs - participantStartMs) / 60000));
         const penaltyMinutes = penaltyMinutesForSolve(minutes, wrongBefore);
         solvedCount += 1;
         penalty += penaltyMinutes;
@@ -293,7 +341,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    standings.push({ rank: 0, userId, username, solvedCount, penalty, perProblem });
+    standings.push({ rank: 0, userId: userId.startsWith("team:") ? userId : `user:${userId}`, username, solvedCount, penalty, perProblem });
   }
 
   standings.sort((a, b) => {
@@ -331,7 +379,7 @@ export async function GET(req: NextRequest) {
       }
     }
     const firstSolver = firstSolverByProblem.get(p.problemId);
-    const firstSolveMinutes = firstSolver
+    const firstSolveMinutes = !virtual && firstSolver
       ? Math.max(0, Math.floor((firstSolver.submittedAtMs - contestStartMs) / 60000))
       : null;
     return {
@@ -352,7 +400,10 @@ export async function GET(req: NextRequest) {
       startsAt: contest.startsAt.toISOString(),
       endsAt: contest.endsAt.toISOString(),
       isFrozen,
+      freezeMode: contest.scoreboardFreezeMode,
+      participation: virtual ? "virtual" : "official",
       freezeMinutesRemaining: isFrozen ? Math.max(0, Math.ceil((contestEndMs - nowMs) / 60000)) : 0,
+      revealedAfterFreeze: contest.scoreboardRevealCount,
     },
     problems: problemsMeta,
     summary: problemSummary,

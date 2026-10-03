@@ -31,6 +31,8 @@ type ContestDetail = {
   problemsCount: number;
   participants: number;
   registered: boolean;
+  teamName: string | null;
+  virtualParticipation: { startedAt: string; endsAt: string } | null;
   inviteRequired: boolean;
   currentUserId: string | null;
 };
@@ -77,6 +79,9 @@ export default function ContestDetailPage() {
   const [registering, setRegistering] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [inviteCode, setInviteCode] = useState("");
+  const [teamName, setTeamName] = useState("");
+  const [teamCode, setTeamCode] = useState("");
+  const [teamJoinCode, setTeamJoinCode] = useState<string | null>(null);
   const boundaryReloaded = useRef(false);
   const { isLoaded, isSignedIn } = useAuth();
 
@@ -155,14 +160,36 @@ export default function ContestDetailPage() {
       const res = await fetch(`/api/contests/${encodeURIComponent(contest.id)}/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(contest.inviteRequired ? { inviteCode } : {}),
+        body: JSON.stringify({
+          ...(contest.inviteRequired ? { inviteCode } : {}),
+          ...(teamName.trim() ? { teamName: teamName.trim() } : {}),
+          ...(teamCode.trim() ? { teamCode: teamCode.trim() } : {}),
+        }),
       });
-      const data = (await res.json()) as { error?: string };
+      const data = (await res.json()) as { error?: string; teamJoinCode?: string };
       if (!res.ok) throw new Error(data.error ?? `Failed (${res.status})`);
-      setContest((prev) => (prev ? { ...prev, registered: true, participants: prev.participants + 1 } : prev));
-      setNotice("Registered successfully");
+      setTeamJoinCode(data.teamJoinCode ?? null);
+      await load();
+      setNotice(data.teamJoinCode ? "Team created. Share its one-time join code with up to two teammates." : "Registered successfully");
     } catch (e) {
       setNotice(e instanceof Error ? e.message : "Registration failed");
+    } finally {
+      setRegistering(false);
+    }
+  }
+
+  async function handleVirtualStart() {
+    if (!contest || !isSignedIn) return;
+    setRegistering(true);
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/contests/${encodeURIComponent(contest.id)}/virtual`, { method: "POST" });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error ?? `Failed (${response.status})`);
+      await load();
+      setNotice("Virtual attempt started. Your full contest duration begins now.");
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : "Could not start virtual attempt");
     } finally {
       setRegistering(false);
     }
@@ -273,6 +300,11 @@ export default function ContestDetailPage() {
               <h2 className="text-xs uppercase tracking-widest font-mono text-kjtext-muted mb-4">Actions</h2>
               {showRegister ? (
                 <>
+                  {(contest.status === "Registration Open" || contest.status === "Active") && !contest.registered && <div className="mb-3 space-y-2">
+                    <input value={teamName} onChange={(event) => { setTeamName(event.target.value); setTeamCode(""); }} maxLength={80} placeholder="Optional: create a team (max 3)" className="w-full bg-kjbg border border-kjborder rounded px-3 py-2 text-xs font-mono text-kjtext" />
+                    <input value={teamCode} onChange={(event) => { setTeamCode(event.target.value); setTeamName(""); }} maxLength={64} placeholder="Or join with team code (ID.secret)" className="w-full bg-kjbg border border-kjborder rounded px-3 py-2 text-xs font-mono text-kjtext" />
+                  </div>}
+                  {teamJoinCode && <p className="mb-3 break-all rounded border border-kjprimary/30 p-2 text-xs font-mono text-kjprimary">TEAM JOIN CODE: {teamJoinCode}</p>}
                   {contest.inviteRequired && !contest.registered && (
                     <div className="mb-3">
                       <label className="block text-[11px] font-mono text-kjtext-muted mb-1.5">Invite code required</label>
@@ -301,6 +333,8 @@ export default function ContestDetailPage() {
                   )}
                 </>
               ) : null}
+              {contest.status === "Finished" && !contest.virtualParticipation && isSignedIn && <button onClick={() => void handleVirtualStart()} disabled={registering} className="mt-3 w-full rounded border border-kjprimary px-4 py-3 text-xs font-mono font-bold text-kjprimary disabled:opacity-50">START VIRTUAL ATTEMPT</button>}
+              {contest.virtualParticipation && new Date(contest.virtualParticipation.endsAt).getTime() > now && <Link href={`/contests/${encodeURIComponent(contest.id)}/arena?virtual=1`} className="mt-3 block rounded border border-kjprimary px-4 py-3 text-center text-xs font-mono font-bold text-kjprimary">ENTER VIRTUAL ARENA · UNTIL {formatDate(contest.virtualParticipation.endsAt)}</Link>}
               {canEnterArena ? (
                 <Link
                   href={`/contests/${encodeURIComponent(contest.id)}/arena`}
@@ -319,6 +353,7 @@ export default function ContestDetailPage() {
               >
                 OPEN LEADERBOARD →
               </Link>
+              {contest.virtualParticipation && <Link href={`/rankings?contestId=${contest.numericId}&virtual=1`} className="mt-2 block text-center text-xs font-mono text-kjprimary hover:underline">OPEN VIRTUAL STANDINGS →</Link>}
             </div>
             <div className="bg-kjsurface border border-kjborder rounded-lg p-5 text-xs font-mono text-kjtext-muted leading-7">
               <p>
