@@ -41,14 +41,22 @@ python -m pytest -q -m integration integration_tests
 - Output capture stops a child after 1 MiB of combined stdout or stderr.
 - Unit tests cover verdict helpers, output normalization/redaction, resource
   mapping, bounded retry backoff, output comparator tolerance boundaries,
-  streaming request-body limits, scoring, invite-code handling, and rejudge
-  scope parsing.
+  special-checker result handling and process separation, streaming request-body
+  limits, scoring, invite-code handling, rejudge scope parsing, contest freeze,
+  participation and clarification policies, audit metadata filtering, and
+  monitoring-policy rendering.
 - The known-verdict corpus checks accepted output for Python, C, C++, Java, Go,
   Rust, and JavaScript, plus Python wrong-answer, runtime-error,
   compilation-error, and time-limit outcomes.
 - Linux `rlimit` probes exercise wall-time termination and file-growth caps.
 - Empty-database migration CI catches migration syntax/order failures, but does
   not establish which historical migrations have already run on live Neon.
+
+The repository includes an opt-in k6 smoke/load script (`scripts/load/k6.js`);
+it requires a configured base URL and does not submit source unless explicitly
+enabled. Cloud Monitoring policy YAML is rendered with
+`python scripts/monitoring/render_policies.py`; rendering does not create or
+deploy policies.
 
 ## Limitations and required operational evidence
 

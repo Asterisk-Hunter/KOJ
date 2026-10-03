@@ -103,7 +103,7 @@ Once these are answered, the build order at the end of this file, the hosting sh
 
 ## 3. Judging correctness
 
-- **Checkers.** Per-problem finite numeric-token comparison with bounded absolute/relative tolerance is implemented. Support a sandboxed checker program per problem (testlib-style) for problems with multiple valid answers; run the checker in the same execution boundary as submissions.
+- **Checkers.** Per-problem finite numeric-token comparison and optional Python special checkers are implemented. The checker receives JSON test input, expected output, and contestant output; exit codes and resource failures have defined outcomes. The execution boundary is still Cloud Run `rlimit` for the owner-approved trusted-college deployment, not a namespace sandbox.
 - **Interactive problems.** Interactor process connected to the contestant program via pipes, with its own limits. This is a clear marker of a serious judge.
 - **Precise time and memory measurement.** Measure CPU time separately from wall time. Handle noisy borderline cases by re-running near the limit before declaring TLE. Support per-language time multipliers, and handle JVM and Go/Rust/JS memory accounting sensibly (a JVM baseline will otherwise trigger false MLE).
 - **Verdict precedence and per-test results.** Define and document the rules (what wins when a program both exceeds time and crashes). Keep `case_results` consistent with them.
@@ -114,12 +114,12 @@ Once these are answered, the build order at the end of this file, the hosting sh
 ## 4. Contest features
 
 - **Scoreboard correctness.** `lib/scoring.ts` already has ICPC logic and tests. Extend with property-based tests (shuffle submission order, rejudge, ties) and make sure rejudges recompute cleanly.
-- **Operator-controlled scoreboard freeze/unfreeze and staged reveal.** The current scoreboard automatically masks post-freeze accepted submissions during the final hour and shows full results after contest end; manual freeze controls and an explicit reveal action remain future work.
-- **Clarifications and announcements.** Contestants ask questions, setters answer privately or broadcast.
-- **Virtual participation and practice mode** after a contest ends.
-- **Team contests** if your college runs ICPC-style events.
-- **Post-contest plagiarism check.** Token-based similarity (winnowing, as in MOSS) across submissions to the same problem, with a report for admins. Keep it advisory, not automatic punishment.
-- **Audit log** for admin actions (rejudge, role change, problem edit, contest edit).
+- **Operator-controlled scoreboard freeze/unfreeze and staged reveal.** Implemented with persisted state, full or incremental reveal, and audit events.
+- **Clarifications and announcements.** Implemented with private/public clarification visibility and announcements.
+- **Virtual participation** after a contest ends. Implemented with a fixed-duration attempt and separate standings; it is not a full arbitrary practice mode.
+- **Team contests.** Implemented with teams of up to three registrants; roster editing and role assignment are not included.
+- **Post-contest plagiarism check.** Implemented as an advisory report over a bounded recent same-problem sample. It does not establish misconduct and never triggers automatic punishment.
+- **Audit log.** Implemented as append-only staff action records with allowlisted metadata.
 
 ## 5. App security and correctness
 
@@ -153,7 +153,7 @@ Once these are answered, the build order at the end of this file, the hosting sh
 
 ## 9. Performance and reliability evidence
 
-- **Load test** with k6 or Locust that simulates a contest: N contestants, realistic submission bursts at the start and near the end, scoreboard polling. Record throughput, queue latency p95, and error rate against worker count and machine spec. Put a table and chart in the README.
+- **Load test** harness with k6 is implemented, but deployment-specific runs and measured throughput, queue latency p95, and error-rate results remain outstanding. Do not fill the benchmark table until it is run against the target stack.
 - **Chaos test**: kill a worker mid-judge, restart the database connection, and kill the judge during a burst. Show that jobs are recovered and no verdict is lost or duplicated.
 - **Cost and capacity note**: how many concurrent submissions one worker handles, and what that means for a contest of 100 people.
 
