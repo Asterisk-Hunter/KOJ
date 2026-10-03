@@ -31,6 +31,7 @@ here prints request bodies.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
@@ -122,6 +123,7 @@ _CXX_HARDEN_FLAGS = [
 # Robust Solution-class check (word-boundary; comment/string stripped
 # in _java_has_solution_class so `// class Solution` cannot spoof it).
 _JAVA_SOLUTION_CLASS_RE = re.compile(r"\bclass\s+Solution\b")
+_SPECIAL_CHECKER_TIMEOUT_S = 2.0
 
 Verdict = Literal[
     "accepted",
@@ -152,6 +154,7 @@ class JudgeRequest(BaseModel):
     output_comparator: Literal["exact", "float"] = "exact"
     absolute_tolerance: float = Field(default=0.000001, ge=0, le=1, allow_inf_nan=False)
     relative_tolerance: float = Field(default=0.000001, ge=0, le=1, allow_inf_nan=False)
+    checker_code: str | None = Field(default=None, max_length=65_536)
 
 
 class CaseResult(BaseModel):
@@ -392,6 +395,12 @@ def _whitespace_only_diff(actual: str, expected: str) -> bool:
     # logically correct but formatted wrong -> presentation_error (REQ-JUDGE-11)
     strip = lambda s: "".join(s.split())
     return strip(actual) == strip(expected) and not _outputs_equal(actual, expected)
+
+
+def _special_checker_passed(returncode: int | None, output_limit_exceeded: bool) -> bool | None:
+    if output_limit_exceeded or returncode not in (0, 1):
+        return None
+    return returncode == 0
 
 
 def _ce_response(message: str, total: int, is_sample_list: list[bool] | None = None) -> JudgeResponse:
@@ -1287,8 +1296,12 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
         # Caller should have already returned 422, but keep as safety
         raise ValueError("Unsupported language")
 
-    with tempfile.TemporaryDirectory(prefix="koj-judge-") as tmp:
+    with (
+        tempfile.TemporaryDirectory(prefix="koj-judge-") as tmp,
+        tempfile.TemporaryDirectory(prefix="koj-checker-") as checker_tmp,
+    ):
         workdir = Path(tmp)
+        checker_workdir = Path(checker_tmp)
         sample_flags = [bool(c.is_sample) for c in req.cases]
         try:
             _prepare(req.language, req.code, workdir)
@@ -1304,6 +1317,12 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
         )
         compile_fn = _docker_compile if backend == "docker" else _local_compile
         run_fn = _run_docker if backend == "docker" else _local_run
+        checker_image = _image_for("python") if backend == "docker" else None
+        checker_cmd = (
+            ["python3", "-I", "-S", "-c", req.checker_code or ""]
+            if backend == "docker"
+            else [sys.executable, "-I", "-S", "-c", req.checker_code or ""]
+        )
 
         try:
             image = _image_for(req.language)
@@ -1319,6 +1338,11 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
             mem = _run_memory_mb(req.language, req.memory_mb)
         else:
             mem = _local_run_memory_mb(req.language, req.memory_mb)
+        checker_mem = (
+            _run_memory_mb("python", req.memory_mb)
+            if backend == "docker"
+            else _local_run_memory_mb("python", req.memory_mb)
+        )
 
         results: list[CaseResult] = []
         max_runtime = 0
@@ -1329,6 +1353,7 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
         for idx, case in enumerate(req.cases):
             is_sample = bool(case.is_sample)
             start = time.monotonic()
+            checker_phase = False
             try:
                 proc = run_fn(image, workdir, run_cmd, mem, wall_timeout, stdin_text=case.stdin)
                 elapsed_ms = int((time.monotonic() - start) * 1000)
@@ -1413,17 +1438,71 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
                     )
                     continue
 
-                # Compare output
-                outputs_match = (
-                    _outputs_equal(stdout_raw, case.expected_stdout)
-                    if req.output_comparator == "exact"
-                    else _float_outputs_equal(
-                        stdout_raw,
-                        case.expected_stdout,
-                        req.absolute_tolerance,
-                        req.relative_tolerance,
+                checker_feedback = ""
+                if req.checker_code is not None:
+                    checker_payload = json.dumps(
+                        {
+                            "input": case.stdin,
+                            "expected_output": case.expected_stdout,
+                            "actual_output": stdout_raw,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
                     )
-                )
+                    checker_timeout = min(
+                        _SPECIAL_CHECKER_TIMEOUT_S,
+                        max(0.1, req.time_limit_ms / 1000),
+                    )
+                    checker_phase = True
+                    checker_proc = run_fn(
+                        checker_image,
+                        checker_workdir,
+                        checker_cmd,
+                        checker_mem,
+                        checker_timeout,
+                        stdin_text=checker_payload,
+                    )
+                    checker_phase = False
+                    checker_passed = _special_checker_passed(
+                        checker_proc.returncode,
+                        checker_proc.output_limit_exceeded,
+                    )
+                    if checker_passed is None:
+                        logger.error(
+                            "special checker failed language=%s exit=%s output_limit=%s",
+                            req.language,
+                            checker_proc.returncode,
+                            checker_proc.output_limit_exceeded,
+                        )
+                        if first_error is None:
+                            first_error = "special checker failed; ask an administrator to inspect it"
+                            aggregate = "runtime_error"
+                        saw_infra = True
+                        results.append(
+                            _visible_case(
+                                index=idx,
+                                passed=False,
+                                verdict="runtime_error",
+                                runtime_ms=elapsed_ms,
+                                stdout=stdout_raw,
+                                stderr="special checker failed",
+                                is_sample=is_sample,
+                            )
+                        )
+                        continue
+                    outputs_match = checker_passed
+                    checker_feedback = _truncate(checker_proc.stdout.strip(), 1024)
+                else:
+                    outputs_match = (
+                        _outputs_equal(stdout_raw, case.expected_stdout)
+                        if req.output_comparator == "exact"
+                        else _float_outputs_equal(
+                            stdout_raw,
+                            case.expected_stdout,
+                            req.absolute_tolerance,
+                            req.relative_tolerance,
+                        )
+                    )
                 if outputs_match:
                     results.append(
                         _visible_case(
@@ -1436,7 +1515,7 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
                             is_sample=is_sample,
                         )
                     )
-                elif _whitespace_only_diff(stdout_raw, case.expected_stdout):
+                elif req.checker_code is None and _whitespace_only_diff(stdout_raw, case.expected_stdout):
                     verdict = "presentation_error"
                     if first_error is None:
                         aggregate = verdict
@@ -1448,7 +1527,7 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
                             verdict=verdict,
                             runtime_ms=elapsed_ms,
                             stdout=stdout_raw,
-                            stderr=stderr_raw,
+                            stderr=checker_feedback or stderr_raw,
                             is_sample=is_sample,
                         )
                     )
@@ -1464,7 +1543,7 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
                             verdict=verdict,
                             runtime_ms=elapsed_ms,
                             stdout=stdout_raw,
-                            stderr=stderr_raw,
+                            stderr=checker_feedback or stderr_raw,
                             is_sample=is_sample,
                         )
                     )
@@ -1475,10 +1554,16 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
                     max_runtime = elapsed_ms
                 stdout_raw = (e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")) if e.stdout else ""
                 stderr_raw = (e.stderr.decode() if isinstance(e.stderr, bytes) else (e.stderr or "")) if e.stderr else ""
-                verdict = "time_limit_exceeded"
+                verdict: Verdict = "runtime_error" if checker_phase else "time_limit_exceeded"
                 if first_error is None:
-                    first_error = f"time limit exceeded ({req.time_limit_ms}ms)"
+                    first_error = (
+                        "special checker timed out"
+                        if checker_phase
+                        else f"time limit exceeded ({req.time_limit_ms}ms)"
+                    )
                     aggregate = verdict
+                if checker_phase:
+                    saw_infra = True
                 results.append(
                     _visible_case(
                         index=idx,
@@ -1486,7 +1571,7 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
                         verdict=verdict,
                         runtime_ms=elapsed_ms,
                         stdout=stdout_raw,
-                        stderr=stderr_raw,
+                        stderr="special checker timed out" if checker_phase else stderr_raw,
                         is_sample=is_sample,
                     )
                 )

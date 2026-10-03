@@ -121,6 +121,7 @@ type ProblemResponse = {
   outputComparator: "exact" | "float";
   absoluteTolerance: number;
   relativeTolerance: number;
+  hasSpecialChecker: boolean;
   status: string;
   samples: { input: string; expectedOutput: string }[];
   contestId?: number;
@@ -349,6 +350,8 @@ export default function ProblemDetailPage() {
         body: JSON.stringify({
           language,
           code: currentCode,
+          problemId: problem.id,
+          contestId: problem.contestId ?? null,
           input: customInput,
           expectedOutput: customExpected,
           timeLimitMs: problem.timeLimitMs,
@@ -407,6 +410,8 @@ export default function ProblemDetailPage() {
         body: JSON.stringify({
           language,
           code: currentCode,
+          problemId: problem.id,
+          contestId: problem.contestId ?? null,
           cases: problem.samples.map((s) => ({ stdin: s.input, expectedOutput: s.expectedOutput })),
           timeLimitMs: problem.timeLimitMs,
           memoryMb: problem.memoryMb,
@@ -628,6 +633,9 @@ export default function ProblemDetailPage() {
                   abs {problem.absoluteTolerance}, rel {problem.relativeTolerance}
                 </strong>
               </span>
+            )}
+            {problem.hasSpecialChecker && (
+              <span className="text-xs font-mono text-kjtext-muted">Custom checker</span>
             )}
           </div>
         </div>

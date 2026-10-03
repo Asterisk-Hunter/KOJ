@@ -34,6 +34,7 @@ class SubmissionInput:
     output_comparator: str
     absolute_tolerance: float
     relative_tolerance: float
+    checker_code: str | None
     submitted_at: datetime
     cases: tuple[JudgeCase, ...]
 
@@ -151,7 +152,7 @@ def load_submission(submission_id: int) -> SubmissionInput | None:
             cur.execute(
                 "SELECT s.problem_id, s.language, s.code, s.mode, p.time_limit_ms, "
                 "p.memory_limit_mb, p.output_comparator, p.absolute_tolerance, "
-                "p.relative_tolerance, s.submitted_at "
+                "p.relative_tolerance, p.checker_code, s.submitted_at "
                 "FROM submissions AS s JOIN problems AS p ON p.id = s.problem_id "
                 "WHERE s.id = %s AND s.status IN ('pending', 'running')",
                 (submission_id,),
@@ -169,6 +170,7 @@ def load_submission(submission_id: int) -> SubmissionInput | None:
                 output_comparator,
                 absolute_tolerance,
                 relative_tolerance,
+                checker_code,
                 submitted_at,
             ) = row
             cur.execute(
@@ -192,6 +194,7 @@ def load_submission(submission_id: int) -> SubmissionInput | None:
         output_comparator=output_comparator,
         absolute_tolerance=absolute_tolerance,
         relative_tolerance=relative_tolerance,
+        checker_code=checker_code,
         submitted_at=submitted_at,
         cases=cases,
     )

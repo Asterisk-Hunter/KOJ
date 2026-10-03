@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import signal
 import sys
+import json
 
 import pytest
 from pydantic import ValidationError
@@ -21,6 +22,8 @@ from app.judge import (
     _normalize_output,
     _outputs_equal,
     _float_outputs_equal,
+    _special_checker_passed,
+    ProcessResult,
     _run_memory_mb,
     _run_bounded_process,
     _sandbox_unavailable_response,
@@ -155,6 +158,110 @@ class TestFloatOutputsEqual:
     @pytest.mark.parametrize("value", ["nan", "NaN", "inf", "-inf", "Infinity", "-Infinity"])
     def test_non_finite_numeric_tokens_never_match(self, value):
         assert _float_outputs_equal(value, value, 1, 1) is False
+
+
+class TestSpecialCheckerResult:
+    def test_accepts_only_exit_zero(self):
+        assert _special_checker_passed(0, False) is True
+        assert _special_checker_passed(1, False) is False
+
+    @pytest.mark.parametrize("returncode", [None, 2, -9])
+    def test_other_exit_codes_are_checker_failures(self, returncode):
+        assert _special_checker_passed(returncode, False) is None
+
+    def test_output_limit_is_a_checker_failure(self):
+        assert _special_checker_passed(0, True) is None
+
+    def test_special_checker_receives_case_data_and_decides_verdict(self, monkeypatch):
+        from app import judge
+
+        monkeypatch.setattr(judge, "resolve_sandbox_backend", lambda: "rlimit")
+        monkeypatch.setattr(judge, "_local_compile", lambda *_args: (["python3", "solution.py"], None))
+        run_dirs = []
+
+        def run(_image, workdir, command, _memory, _timeout, stdin_text=None, **_kwargs):
+            run_dirs.append(workdir)
+            if "-c" in command:
+                case = json.loads(stdin_text)
+                assert case == {
+                    "input": "19 23\\n",
+                    "expected_output": "not a fixed answer",
+                    "actual_output": "42\\n",
+                }
+                assert command[-1] == "import json"
+                return ProcessResult(0, "", "", False)
+            return ProcessResult(0, "42\\n", "", False)
+
+        monkeypatch.setattr(judge, "_local_run", run)
+        response = judge.execute_judge(
+            judge.JudgeRequest(
+                language="python",
+                code="print(42)",
+                cases=[judge.JudgeCase(stdin="19 23\\n", expected_stdout="not a fixed answer")],
+                time_limit_ms=2000,
+                memory_mb=256,
+                checker_code="import json",
+            )
+        )
+
+        assert response.status == "accepted"
+        assert response.passed_tests == 1
+        assert run_dirs[0] != run_dirs[1]
+
+    def test_checker_rejection_is_wrong_answer_not_presentation_error(self, monkeypatch):
+        from app import judge
+
+        monkeypatch.setattr(judge, "resolve_sandbox_backend", lambda: "rlimit")
+        monkeypatch.setattr(judge, "_local_compile", lambda *_args: (["python3", "solution.py"], None))
+
+        def run(_image, _workdir, command, _memory, _timeout, **_kwargs):
+            if "-c" in command:
+                return ProcessResult(1, "rejected", "", False)
+            return ProcessResult(0, "42\n", "", False)
+
+        monkeypatch.setattr(judge, "_local_run", run)
+        response = judge.execute_judge(
+            judge.JudgeRequest(
+                language="python",
+                code="print(42)",
+                cases=[judge.JudgeCase(stdin="", expected_stdout="4 2\n", is_sample=True)],
+                time_limit_ms=2000,
+                memory_mb=256,
+                checker_code="raise SystemExit(1)",
+            )
+        )
+
+        assert response.status == "wrong_answer"
+        assert response.cases[0].verdict == "wrong_answer"
+
+    def test_checker_crash_is_not_attributed_to_submission(self, monkeypatch):
+        from app import judge
+
+        monkeypatch.setattr(judge, "resolve_sandbox_backend", lambda: "rlimit")
+        monkeypatch.setattr(judge, "_local_compile", lambda *_args: (["python3", "solution.py"], None))
+
+        def run(_image, _workdir, command, _memory, _timeout, **_kwargs):
+            if "-c" in command:
+                return ProcessResult(2, "", "checker traceback", False)
+            return ProcessResult(0, "42\\n", "", False)
+
+        monkeypatch.setattr(judge, "_local_run", run)
+        response = judge.execute_judge(
+            judge.JudgeRequest(
+                language="python",
+                code="print(42)",
+                cases=[judge.JudgeCase(stdin="", expected_stdout="42\\n", is_sample=False)],
+                time_limit_ms=2000,
+                memory_mb=256,
+                checker_code="broken checker",
+            )
+        )
+
+        assert response.status == "runtime_error"
+        assert response.infra_error is True
+        assert response.error_message == "special checker failed; ask an administrator to inspect it"
+        assert response.cases[0].stdout == ""
+        assert response.cases[0].stderr == ""
 
 
 # ---------------------------------------------------------------------------

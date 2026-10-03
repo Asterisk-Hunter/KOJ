@@ -5,6 +5,7 @@ import { db } from "@/db";
 import {
   contestProblems,
   contestRegistrations,
+  contestVirtualRegistrations,
   contests,
   problemTestCases,
   problems,
@@ -88,6 +89,14 @@ export async function GET(
               contestIdToReturn = effectiveContestId;
             }
           }
+        } else if (contest.status === "ended" || contest.status === "archived") {
+          const virtualRows = await db.select({ endsAt: contestVirtualRegistrations.endsAt }).from(contestVirtualRegistrations)
+            .where(and(eq(contestVirtualRegistrations.contestId, effectiveContestId), eq(contestVirtualRegistrations.userId, userId))).limit(1);
+          const cp = await db.select({ problemId: contestProblems.problemId }).from(contestProblems)
+            .where(and(eq(contestProblems.contestId, effectiveContestId), eq(contestProblems.problemId, id))).limit(1);
+          if (virtualRows.length > 0 && Date.now() < virtualRows[0].endsAt.getTime() && cp.length > 0) {
+            contestIdToReturn = effectiveContestId;
+          }
         }
       }
     }
@@ -105,24 +114,18 @@ export async function GET(
         .from(contests)
         .where(eq(contests.id, effectiveContestId))
         .limit(1);
-      if (contestRows.length === 0 || contestRows[0].status !== "live") {
-        return jsonError("contest not live or not found", 403);
-      }
-      if (Date.now() < new Date(contestRows[0].startsAt).getTime()) {
-        return jsonError("contest has not started", 403);
-      }
-      const reg = await db
-        .select()
-        .from(contestRegistrations)
-        .where(
-          and(
-            eq(contestRegistrations.contestId, effectiveContestId),
-            eq(contestRegistrations.userId, userId),
-          ),
-        )
-        .limit(1);
-      if (reg.length === 0) {
-        return jsonError("not registered for contest", 403);
+      if (contestRows.length === 0) return jsonError("contest not found", 403);
+      const targetContest = contestRows[0];
+      if (targetContest.status === "live" && Date.now() >= targetContest.startsAt.getTime() && Date.now() < targetContest.endsAt.getTime()) {
+        const reg = await db.select({ userId: contestRegistrations.userId }).from(contestRegistrations)
+          .where(and(eq(contestRegistrations.contestId, effectiveContestId), eq(contestRegistrations.userId, userId))).limit(1);
+        if (reg.length === 0) return jsonError("not registered for contest", 403);
+      } else if (targetContest.status === "ended" || targetContest.status === "archived") {
+        const virtual = await db.select({ endsAt: contestVirtualRegistrations.endsAt }).from(contestVirtualRegistrations)
+          .where(and(eq(contestVirtualRegistrations.contestId, effectiveContestId), eq(contestVirtualRegistrations.userId, userId))).limit(1);
+        if (virtual.length === 0 || Date.now() >= virtual[0].endsAt.getTime()) return jsonError("active virtual participation required", 403);
+      } else {
+        return jsonError("contest not accepting submissions", 403);
       }
       const cp = await db
         .select()
@@ -194,6 +197,7 @@ export async function GET(
     outputComparator: problem.outputComparator,
     absoluteTolerance: problem.absoluteTolerance,
     relativeTolerance: problem.relativeTolerance,
+    hasSpecialChecker: problem.checkerCode !== null,
     status: problem.status,
     samples: sampleRows.map((r) => ({ input: r.input, expectedOutput: r.expectedOutput })),
   };

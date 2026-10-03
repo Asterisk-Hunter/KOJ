@@ -28,6 +28,7 @@ type Problem = {
   outputComparator: OutputComparator;
   absoluteTolerance: number;
   relativeTolerance: number;
+  checkerCode: string | null;
   status: "draft" | "published" | "contest_active";
   testCases?: TestCase[];
 };
@@ -487,6 +488,18 @@ export default function ProblemManagerSection({
                 </div>
               </>
             )}
+          </div>
+          <div>
+            <label className="block text-xs text-kjtext-muted mb-1">Python Special Checker (optional)</label>
+            <textarea
+              className={`${inputCls} text-xs`}
+              rows={8}
+              maxLength={64_000}
+              spellCheck={false}
+              value={formData.checkerCode ?? ""}
+              onChange={(e) => handleProblemChange("checkerCode", e.target.value)}
+            />
+            <p className="mt-1 text-[10px] text-kjtext-muted">JSON stdin contains input, expected_output, and actual_output strings. Exit 0 accepts; exit 1 rejects. Other exits or timeouts are judge infrastructure errors.</p>
           </div>
         </div>
         <div className="flex justify-end pt-4">

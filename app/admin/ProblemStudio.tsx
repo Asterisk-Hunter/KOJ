@@ -31,6 +31,7 @@ type ProblemForm = {
   outputComparator: OutputComparator;
   absoluteTolerance: string;
   relativeTolerance: string;
+  checkerCode: string;
   testCases: TestCaseDraft[];
 };
 
@@ -221,6 +222,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
     outputComparator: "exact",
     absoluteTolerance: "0.000001",
     relativeTolerance: "0.000001",
+    checkerCode: "",
     testCases: [],
   });
 
@@ -254,6 +256,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
     outputComparator?: OutputComparator;
     absoluteTolerance?: number;
     relativeTolerance?: number;
+    checkerCode?: string | null;
     testCases?: TestCaseDraft[];
   }) {
     setForm({
@@ -270,6 +273,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
       outputComparator: parsed.outputComparator || "exact",
       absoluteTolerance: String(parsed.absoluteTolerance ?? 0.000001),
       relativeTolerance: String(parsed.relativeTolerance ?? 0.000001),
+      checkerCode: parsed.checkerCode ?? "",
       testCases: parsed.testCases || [],
     });
     setActiveTab("studio");
@@ -332,6 +336,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
           outputComparator?: OutputComparator;
           absoluteTolerance?: number;
           relativeTolerance?: number;
+          checkerCode?: string | null;
           testCases?: TestCaseDraft[];
         };
         problemId?: number;
@@ -388,6 +393,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
         outputComparator: form.outputComparator,
         absoluteTolerance: form.absoluteTolerance,
         relativeTolerance: form.relativeTolerance,
+        checkerCode: form.checkerCode,
         status,
         testCases: form.testCases,
       };
@@ -680,6 +686,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                   outputComparator: "exact",
                   absoluteTolerance: "0.000001",
                   relativeTolerance: "0.000001",
+                  checkerCode: "",
                   testCases: [],
                 });
                 setActiveTab("studio");
@@ -926,6 +933,7 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                   outputComparator: "exact",
                   absoluteTolerance: "0.000001",
                   relativeTolerance: "0.000001",
+                  checkerCode: "",
                   testCases: [],
                 });
                 setStatusNotice("Form cleared.");
@@ -1082,6 +1090,20 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                       </div>
                     </>
                   )}
+                </div>
+
+                <div>
+                  <label className="block text-[11px] text-kjtext-muted uppercase mb-1">Python Special Checker (optional)</label>
+                  <textarea
+                    value={form.checkerCode}
+                    onChange={(e) => setForm({ ...form, checkerCode: e.target.value })}
+                    rows={8}
+                    maxLength={64_000}
+                    spellCheck={false}
+                    placeholder={'import json, sys\ncase = json.load(sys.stdin)\n# Exit 0 to accept, 1 for wrong answer\n'}
+                    className="w-full bg-kjbg border border-kjborder rounded px-3 py-2 text-xs font-mono text-kjtext focus:border-kjprimary focus:outline-none"
+                  />
+                  <p className="mt-1 text-[10px] text-kjtext-muted">Reads one JSON object on stdin with input, expected_output, and actual_output strings. Exit 0 accepts; exit 1 rejects. Other exits or timeouts are judge infrastructure errors. 64 KiB maximum.</p>
                 </div>
 
                 {/* Quick Tag Pills */}

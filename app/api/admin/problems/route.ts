@@ -7,6 +7,8 @@ import {
   parseOutputComparator,
   parseOutputTolerance,
 } from "@/app/api/admin/problems/comparator";
+import { parseCheckerCode } from "@/app/api/admin/problems/checker-code";
+import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
 import { MAX_PROBLEM_AUTHORING_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 
 export const runtime = "nodejs";
@@ -52,6 +54,10 @@ export async function POST(req: NextRequest) {
   const comparatorRaw = b.outputComparator ?? "exact";
   const absoluteToleranceRaw = b.absoluteTolerance ?? DEFAULT_OUTPUT_TOLERANCE;
   const relativeToleranceRaw = b.relativeTolerance ?? DEFAULT_OUTPUT_TOLERANCE;
+  const checkerCodeResult = parseCheckerCode(b.checkerCode);
+  if (!checkerCodeResult.valid) {
+    return jsonError("checkerCode must be Python source no larger than 64 KiB", 400);
+  }
   const statusRaw = b.status;
 
   if (typeof title !== "string" || title.trim().length === 0) {
@@ -202,6 +208,7 @@ export async function POST(req: NextRequest) {
         outputComparator,
         absoluteTolerance,
         relativeTolerance,
+        checkerCode: checkerCodeResult.checkerCode,
         status: initialStatus,
       })
       .returning({ id: problems.id });
@@ -219,6 +226,14 @@ export async function POST(req: NextRequest) {
         }))
       );
     }
+
+    await recordAdminAuditEvent(tx, {
+      actorId: userId,
+      action: "problem.created",
+      entityType: "problem",
+      entityId: problemId,
+      metadata: { status: initialStatus, count: validatedCases.length },
+    });
 
     return { id: problemId, testCaseCount: validatedCases.length };
   });

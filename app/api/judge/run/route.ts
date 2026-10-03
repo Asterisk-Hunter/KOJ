@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { users } from "@/db/schema";
+import { contestProblems, contestRegistrations, contests, problems, users } from "@/db/schema";
 import { MAX_INTERACTIVE_RUN_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 import { parseOutputComparator, parseOutputTolerance } from "@/app/api/admin/problems/comparator";
 
@@ -32,6 +32,8 @@ interface SingleRunBody {
   outputComparator?: unknown;
   absoluteTolerance?: unknown;
   relativeTolerance?: unknown;
+  problemId?: unknown;
+  contestId?: unknown;
 }
 
 // In-memory rate limiting map for interactive testing: user ID -> last run timestamp
@@ -95,12 +97,76 @@ export async function POST(req: NextRequest) {
     return jsonError("code must be non-empty", 400);
   }
 
-  const outputComparator = parseOutputComparator(b.outputComparator ?? "exact");
+  let outputComparator = parseOutputComparator(b.outputComparator ?? "exact");
   if (!outputComparator) return jsonError("outputComparator must be exact or float", 400);
-  const absoluteTolerance = parseOutputTolerance(b.absoluteTolerance ?? 0.000001);
+  let absoluteTolerance = parseOutputTolerance(b.absoluteTolerance ?? 0.000001);
   if (absoluteTolerance === null) return jsonError("absoluteTolerance must be between 0 and 1", 400);
-  const relativeTolerance = parseOutputTolerance(b.relativeTolerance ?? 0.000001);
+  let relativeTolerance = parseOutputTolerance(b.relativeTolerance ?? 0.000001);
   if (relativeTolerance === null) return jsonError("relativeTolerance must be between 0 and 1", 400);
+
+  let checkerCode: string | null = null;
+  if (b.problemId !== undefined) {
+    if (typeof b.problemId !== "number" || !Number.isInteger(b.problemId) || b.problemId <= 0) {
+      return jsonError("problemId must be a positive integer", 400);
+    }
+    const problemRows = await db
+      .select({
+        status: problems.status,
+        outputComparator: problems.outputComparator,
+        absoluteTolerance: problems.absoluteTolerance,
+        relativeTolerance: problems.relativeTolerance,
+        checkerCode: problems.checkerCode,
+      })
+      .from(problems)
+      .where(eq(problems.id, b.problemId))
+      .limit(1);
+    const problem = problemRows[0];
+    if (!problem || problem.status === "draft") return jsonError("problem not found", 404);
+    if (problem.status === "contest_active") {
+      if (typeof b.contestId !== "number" || !Number.isInteger(b.contestId) || b.contestId <= 0) {
+        return jsonError("contestId is required for contest problems", 400);
+      }
+      const contestRows = await db
+        .select({ status: contests.status, startsAt: contests.startsAt })
+        .from(contests)
+        .where(eq(contests.id, b.contestId))
+        .limit(1);
+      const contest = contestRows[0];
+      if (
+        !contest ||
+        contest.status !== "live" ||
+        Date.now() < new Date(contest.startsAt).getTime()
+      ) {
+        return jsonError("contest is not available", 403);
+      }
+      const registrations = await db
+        .select({ userId: contestRegistrations.userId })
+        .from(contestRegistrations)
+        .where(
+          and(
+            eq(contestRegistrations.contestId, b.contestId),
+            eq(contestRegistrations.userId, userId),
+          ),
+        )
+        .limit(1);
+      if (registrations.length === 0) return jsonError("not registered for contest", 403);
+      const problemLinks = await db
+        .select({ problemId: contestProblems.problemId })
+        .from(contestProblems)
+        .where(
+          and(
+            eq(contestProblems.contestId, b.contestId),
+            eq(contestProblems.problemId, b.problemId),
+          ),
+        )
+        .limit(1);
+      if (problemLinks.length === 0) return jsonError("problem not in contest", 403);
+    }
+    outputComparator = problem.outputComparator as "exact" | "float";
+    absoluteTolerance = problem.absoluteTolerance;
+    relativeTolerance = problem.relativeTolerance;
+    checkerCode = problem.checkerCode;
+  }
 
   if (Buffer.byteLength(code, "utf8") > 100 * 1024) {
     return jsonError("code exceeds 100KB limit", 400);
@@ -177,6 +243,7 @@ export async function POST(req: NextRequest) {
         output_comparator: outputComparator,
         absolute_tolerance: absoluteTolerance,
         relative_tolerance: relativeTolerance,
+        checker_code: checkerCode,
       }),
       signal: AbortSignal.timeout(35000),
     });
