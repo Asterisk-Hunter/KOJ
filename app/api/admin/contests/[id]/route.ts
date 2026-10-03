@@ -18,6 +18,7 @@ import {
   type ContestStatus,
 } from "@/app/api/contests/lifecycle";
 import { hashInviteCode } from "@/app/api/contests/invite-code";
+import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -67,6 +68,8 @@ export async function GET(
     startsAt: contest.startsAt.toISOString(),
     endsAt: contest.endsAt.toISOString(),
     status: contest.status,
+    scoreboardFreezeMode: contest.scoreboardFreezeMode,
+    scoreboardRevealCount: contest.scoreboardRevealCount,
     // Legacy plaintext only (migration visibility for unmigrated rows);
     // hashed codes are never revealed. Prefer `hasInviteCode`.
     inviteCode: contest.inviteCode,
@@ -121,11 +124,17 @@ export async function PATCH(
         .from(contestProblems)
         .where(eq(contestProblems.contestId, contest.id));
       if (links.length === 0) return jsonError("cannot publish a contest with no problems", 400);
-      await db
-        .update(contests)
-        .set({ status: "live", updatedAt: now })
-        .where(eq(contests.id, contest.id));
-      await lockLinkedProblems(contest.id, now);
+      await db.transaction(async (tx) => {
+        await tx.update(contests).set({ status: "live", updatedAt: now }).where(eq(contests.id, contest.id));
+        await lockLinkedProblems(contest.id, now, tx);
+        await recordAdminAuditEvent(tx, {
+          actorId: grant.userId,
+          action: "contest.status_changed",
+          entityType: "contest",
+          entityId: contest.id,
+          metadata: { status: target },
+        });
+      });
       return NextResponse.json({ id: contest.id, status: "live" });
     }
 
@@ -133,28 +142,46 @@ export async function PATCH(
       if (now >= contest.startsAt) {
         return jsonError("cannot unpublish after the contest has started", 400);
       }
-      await db
-        .update(contests)
-        .set({ status: "draft", updatedAt: now })
-        .where(eq(contests.id, contest.id));
-      await revertLinkedProblems(contest.id, now);
+      await db.transaction(async (tx) => {
+        await tx.update(contests).set({ status: "draft", updatedAt: now }).where(eq(contests.id, contest.id));
+        await revertLinkedProblems(contest.id, now, tx);
+        await recordAdminAuditEvent(tx, {
+          actorId: grant.userId,
+          action: "contest.status_changed",
+          entityType: "contest",
+          entityId: contest.id,
+          metadata: { status: target },
+        });
+      });
       return NextResponse.json({ id: contest.id, status: "draft" });
     }
 
     if (current === "live" && target === "ended") {
       const endsAt = contest.endsAt.getTime() > now.getTime() ? now : contest.endsAt;
-      await db
-        .update(contests)
-        .set({ status: "ended", endsAt, updatedAt: now })
-        .where(eq(contests.id, contest.id));
-      await releaseLinkedProblems([contest.id], now);
+      await db.transaction(async (tx) => {
+        await tx.update(contests).set({ status: "ended", endsAt, updatedAt: now }).where(eq(contests.id, contest.id));
+        await releaseLinkedProblems([contest.id], now, tx);
+        await recordAdminAuditEvent(tx, {
+          actorId: grant.userId,
+          action: "contest.status_changed",
+          entityType: "contest",
+          entityId: contest.id,
+          metadata: { status: target },
+        });
+      });
       return NextResponse.json({ id: contest.id, status: "ended" });
     }
 
-    await db
-      .update(contests)
-      .set({ status: target, updatedAt: now })
-      .where(eq(contests.id, contest.id));
+    await db.transaction(async (tx) => {
+      await tx.update(contests).set({ status: target, updatedAt: now }).where(eq(contests.id, contest.id));
+      await recordAdminAuditEvent(tx, {
+        actorId: grant.userId,
+        action: "contest.status_changed",
+        entityType: "contest",
+        entityId: contest.id,
+        metadata: { status: target },
+      });
+    });
     return NextResponse.json({ id: contest.id, status: target });
   }
 
@@ -212,7 +239,16 @@ export async function PATCH(
     return jsonError("endsAt must be after startsAt", 400);
   }
 
-  await db.update(contests).set(patch).where(eq(contests.id, contest.id));
+  await db.transaction(async (tx) => {
+    await tx.update(contests).set(patch).where(eq(contests.id, contest.id));
+    await recordAdminAuditEvent(tx, {
+      actorId: grant.userId,
+      action: "contest.metadata_updated",
+      entityType: "contest",
+      entityId: contest.id,
+      metadata: { count: Object.keys(patch).filter((field) => field !== "updatedAt").length },
+    });
+  });
   return NextResponse.json({ id: contest.id, status: current });
 }
 
@@ -231,6 +267,14 @@ export async function DELETE(
     return jsonError("only draft contests can be deleted", 400);
   }
 
-  await db.delete(contests).where(eq(contests.id, contest.id));
+  await db.transaction(async (tx) => {
+    await tx.delete(contests).where(eq(contests.id, contest.id));
+    await recordAdminAuditEvent(tx, {
+      actorId: grant.userId,
+      action: "contest.deleted",
+      entityType: "contest",
+      entityId: contest.id,
+    });
+  });
   return NextResponse.json({ deleted: true });
 }

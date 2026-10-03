@@ -5,6 +5,7 @@ import { db } from "@/db";
 import {
   contestProblems,
   contestRegistrations,
+  contestVirtualRegistrations,
   contests,
   judgeJobs,
   problemTestCases,
@@ -13,6 +14,7 @@ import {
   users,
 } from "@/db/schema";
 import { settleExpiredContests } from "@/app/api/contests/lifecycle";
+import { isVirtualAttemptActive } from "@/app/api/contests/participation-policy";
 import { readBoundedJsonObject, MAX_SUBMISSION_BODY_BYTES } from "@/app/api/body-guard";
 
 export const runtime = "nodejs";
@@ -36,6 +38,8 @@ function jsonError(message: string, status: number) {
 class RateLimited {
   constructor(readonly retryAfter: number) {}
 }
+
+class VirtualParticipationExpired {}
 
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
@@ -99,6 +103,9 @@ export async function POST(req: NextRequest) {
   }
 
   const effectiveContestId: number | null = contestId ?? null;
+  let participation: "official" | "virtual" = "official";
+  let teamId: number | null = null;
+  let virtualEndsAt: Date | null = null;
 
   // Settle past-due live contests before enforcing contest windows.
   await settleExpiredContests();
@@ -125,24 +132,19 @@ export async function POST(req: NextRequest) {
       return jsonError("contest not found", 403);
     }
     const contest = contestRows[0];
-    if (contest.status !== "live") {
-      return jsonError("contest is not live", 403);
-    }
-    if (Date.now() < new Date(contest.startsAt).getTime()) {
-      return jsonError("contest has not started", 403);
-    }
-    const regRows = await db
-      .select()
-      .from(contestRegistrations)
-      .where(
-        and(
-          eq(contestRegistrations.contestId, effectiveContestId),
-          eq(contestRegistrations.userId, userId),
-        ),
-      )
-      .limit(1);
-    if (regRows.length === 0) {
-      return jsonError("not registered for contest", 403);
+    if (contest.status === "live" && Date.now() >= contest.startsAt.getTime() && Date.now() < contest.endsAt.getTime()) {
+      const regRows = await db.select({ teamId: contestRegistrations.teamId }).from(contestRegistrations)
+        .where(and(eq(contestRegistrations.contestId, effectiveContestId), eq(contestRegistrations.userId, userId))).limit(1);
+      if (regRows.length === 0) return jsonError("not registered for contest", 403);
+      teamId = regRows[0].teamId;
+    } else if (contest.status === "ended" || contest.status === "archived") {
+      const virtualRows = await db.select({ endsAt: contestVirtualRegistrations.endsAt }).from(contestVirtualRegistrations)
+        .where(and(eq(contestVirtualRegistrations.contestId, effectiveContestId), eq(contestVirtualRegistrations.userId, userId))).limit(1);
+      if (virtualRows.length === 0 || !isVirtualAttemptActive(new Date(), virtualRows[0].endsAt)) return jsonError("active virtual participation required", 403);
+      virtualEndsAt = virtualRows[0].endsAt;
+      participation = "virtual";
+    } else {
+      return jsonError("contest is not accepting submissions", 403);
     }
     const cpRows = await db
       .select()
@@ -233,6 +235,9 @@ export async function POST(req: NextRequest) {
   // lock, so concurrent double-submits cannot both pass the check. This is
   // the single insert path for this route. Applies to run and submit modes.
   let submissionId: number;
+  if (virtualEndsAt !== null && !isVirtualAttemptActive(new Date(), virtualEndsAt)) {
+    return jsonError("virtual participation time expired", 403);
+  }
   try {
     submissionId = await db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${userId}), ${problemId})`);
@@ -248,12 +253,17 @@ export async function POST(req: NextRequest) {
           throw new RateLimited(Math.max(1, Math.ceil(30 - elapsedSec)));
         }
       }
+      if (virtualEndsAt !== null && !isVirtualAttemptActive(new Date(), virtualEndsAt)) {
+        throw new VirtualParticipationExpired();
+      }
       const inserted = await tx
         .insert(submissions)
         .values({
           userId,
           problemId,
           contestId: effectiveContestId,
+          teamId,
+          participation,
           language,
           code,
           mode,
@@ -270,6 +280,9 @@ export async function POST(req: NextRequest) {
         { error: "rate limited: 1 submission per 30 seconds per problem" },
         { status: 429, headers: { "Retry-After": String(e.retryAfter) } },
       );
+    }
+    if (e instanceof VirtualParticipationExpired) {
+      return jsonError("virtual participation time expired", 403);
     }
     throw e;
   }

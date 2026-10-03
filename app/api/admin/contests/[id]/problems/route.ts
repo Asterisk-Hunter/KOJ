@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { contestProblems, contests, problems } from "@/db/schema";
 import { jsonError, requireContestManager } from "@/app/api/admin/authz";
 import { MAX_CONTEST_PROBLEM_LINK_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
+import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -72,7 +73,16 @@ export async function POST(
     return jsonError("position must be a non-negative integer", 400);
   }
 
-  await db.insert(contestProblems).values({ contestId: contest.id, problemId, position });
+  await db.transaction(async (tx) => {
+    await tx.insert(contestProblems).values({ contestId: contest.id, problemId, position });
+    await recordAdminAuditEvent(tx, {
+      actorId: grant.userId,
+      action: "contest.problem_linked",
+      entityType: "contest",
+      entityId: contest.id,
+      metadata: { count: 1, problemId },
+    });
+  });
   return NextResponse.json({ contestId: contest.id, problemId, position }, { status: 201 });
 }
 
@@ -97,34 +107,44 @@ export async function DELETE(
     return jsonError("problemId query param must be a positive integer", 400);
   }
 
-  const deleted = await db
-    .delete(contestProblems)
-    .where(
-      and(
-        eq(contestProblems.contestId, contest.id),
-        eq(contestProblems.problemId, problemId),
-      ),
-    )
-    .returning({ problemId: contestProblems.problemId });
-  if (deleted.length === 0) return jsonError("problem not in contest", 404);
-
-  // Compact positions so arena labels stay contiguous.
-  const remaining = await db
-    .select({ problemId: contestProblems.problemId })
-    .from(contestProblems)
-    .where(eq(contestProblems.contestId, contest.id))
-    .orderBy(asc(contestProblems.position));
-  for (let i = 0; i < remaining.length; i++) {
-    await db
-      .update(contestProblems)
-      .set({ position: i })
+  const deleted = await db.transaction(async (tx) => {
+    const rows = await tx
+      .delete(contestProblems)
       .where(
         and(
           eq(contestProblems.contestId, contest.id),
-          eq(contestProblems.problemId, remaining[i].problemId),
+          eq(contestProblems.problemId, problemId),
         ),
-      );
-  }
+      )
+      .returning({ problemId: contestProblems.problemId });
+    if (rows.length === 0) return false;
+
+    const remaining = await tx
+      .select({ problemId: contestProblems.problemId })
+      .from(contestProblems)
+      .where(eq(contestProblems.contestId, contest.id))
+      .orderBy(asc(contestProblems.position));
+    for (let i = 0; i < remaining.length; i++) {
+      await tx
+        .update(contestProblems)
+        .set({ position: i })
+        .where(
+          and(
+            eq(contestProblems.contestId, contest.id),
+            eq(contestProblems.problemId, remaining[i].problemId),
+          ),
+        );
+    }
+    await recordAdminAuditEvent(tx, {
+      actorId: grant.userId,
+      action: "contest.problem_unlinked",
+      entityType: "contest",
+      entityId: contest.id,
+      metadata: { count: 1, problemId },
+    });
+    return true;
+  });
+  if (!deleted) return jsonError("problem not in contest", 404);
 
   return NextResponse.json({ removed: true });
 }

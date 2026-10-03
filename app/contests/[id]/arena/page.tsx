@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Navigation from "@/app/components/Navigation";
+import ContestCommunication from "@/app/contests/[id]/ContestCommunication";
 
 type UiStatus = "Active" | "Registration Open" | "Upcoming" | "Finished";
 
@@ -29,6 +30,7 @@ type ContestDetail = {
   problemsCount: number;
   participants: number;
   registered: boolean;
+  virtualParticipation: { startedAt: string; endsAt: string } | null;
 };
 
 const BALLOON_COLORS = [
@@ -89,7 +91,7 @@ export default function ContestArenaPage() {
       }
       const c = data as ContestDetail;
       setContest(c);
-      if (c.numericId && c.registered) {
+      if (c.numericId && (c.registered || (c.virtualParticipation !== null && Date.now() < new Date(c.virtualParticipation.endsAt).getTime()))) {
         void loadSubmissions(c.numericId);
       }
     } catch (e) {
@@ -111,7 +113,7 @@ export default function ContestArenaPage() {
 
   const diffMs = useMemo(() => {
     if (!contest) return 0;
-    return Math.max(0, new Date(contest.endsAt).getTime() - now);
+    return Math.max(0, new Date(contest.virtualParticipation?.endsAt ?? contest.endsAt).getTime() - now);
   }, [contest, now]);
 
   const isUrgent = diffMs > 0 && diffMs < 15 * 60 * 1000;
@@ -172,8 +174,9 @@ export default function ContestArenaPage() {
     );
   }
 
-  const isLive = contest.status === "Active";
-  const isRegistered = contest.registered;
+  const isVirtual = contest.virtualParticipation !== null && now < new Date(contest.virtualParticipation.endsAt).getTime();
+  const isLive = contest.status === "Active" || isVirtual;
+  const isRegistered = contest.registered || isVirtual;
 
   if (!isLive) {
     return (
@@ -238,7 +241,7 @@ export default function ContestArenaPage() {
             <div className="flex items-center gap-3">
               <span className="flex items-center gap-1.5 text-[10px] font-mono font-bold uppercase tracking-widest text-kjprimary">
                 <span className="w-1.5 h-1.5 rounded-full bg-kjprimary animate-pulse" />
-                Live Arena
+                {isVirtual ? "Virtual Attempt" : "Live Arena"}
               </span>
               <h1 className="text-sm sm:text-base font-mono font-bold text-kjtext">{contest.title}</h1>
             </div>
@@ -255,7 +258,7 @@ export default function ContestArenaPage() {
             {/* Timer — the focal point */}
             <div className="flex-1 flex items-center justify-center px-5 py-3">
               <div className="text-center">
-                <p className="text-[9px] uppercase tracking-[0.2em] font-mono text-kjtext-muted font-bold mb-1">Time Remaining</p>
+                <p className="text-[9px] uppercase tracking-[0.2em] font-mono text-kjtext-muted font-bold mb-1">{isVirtual ? "Virtual Time Remaining" : "Time Remaining"}</p>
                 <p className={`text-2xl sm:text-3xl font-mono font-bold tabular-nums tracking-wider ${
                   isCritical
                     ? "text-red-400 animate-pulse"
@@ -381,6 +384,8 @@ export default function ContestArenaPage() {
             })
           )}
         </div>
+
+        {!isVirtual && <ContestCommunication contestId={contest.id} registered={isRegistered} />}
 
         <Link
           href={`/contests/${encodeURIComponent(contest.id)}`}

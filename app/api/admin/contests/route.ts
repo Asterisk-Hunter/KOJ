@@ -5,6 +5,7 @@ import { contestProblems, contestRegistrations, contests, problems } from "@/db/
 import { ensureUserRow, jsonError, requireContestManager } from "@/app/api/admin/authz";
 import { MAX_CONTEST_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 import { hashInviteCode } from "@/app/api/contests/invite-code";
+import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -165,28 +166,37 @@ export async function POST(req: NextRequest) {
   const ready = await ensureUserRow(grant.userId);
   if (!ready) return jsonError("failed to resolve user", 500);
 
-  const inserted = await db
-    .insert(contests)
-    .values({
-      createdBy: grant.userId,
-      slug,
-      title: title.trim(),
-      description: descriptionRaw,
-      startsAt,
-      endsAt,
-      status: "draft",
-      // Invite codes are stored hashed only — never plaintext.
-      inviteCode: null,
-      inviteCodeHash: inviteCode === null ? null : hashInviteCode(inviteCode),
-    })
-    .returning({ id: contests.id });
+  const contestId = await db.transaction(async (tx) => {
+    const [inserted] = await tx
+      .insert(contests)
+      .values({
+        createdBy: grant.userId,
+        slug,
+        title: title.trim(),
+        description: descriptionRaw,
+        startsAt,
+        endsAt,
+        status: "draft",
+        // Invite codes are stored hashed only — never plaintext.
+        inviteCode: null,
+        inviteCodeHash: inviteCode === null ? null : hashInviteCode(inviteCode),
+      })
+      .returning({ id: contests.id });
 
-  const contestId = inserted[0].id;
-  if (problemIds.length > 0) {
-    await db.insert(contestProblems).values(
-      problemIds.map((problemId, i) => ({ contestId, problemId, position: i })),
-    );
-  }
+    if (problemIds.length > 0) {
+      await tx.insert(contestProblems).values(
+        problemIds.map((problemId, i) => ({ contestId: inserted.id, problemId, position: i })),
+      );
+    }
+    await recordAdminAuditEvent(tx, {
+      actorId: grant.userId,
+      action: "contest.created",
+      entityType: "contest",
+      entityId: inserted.id,
+      metadata: { count: problemIds.length },
+    });
+    return inserted.id;
+  });
 
   return NextResponse.json({ id: contestId, slug, status: "draft" }, { status: 201 });
 }
