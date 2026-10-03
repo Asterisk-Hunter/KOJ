@@ -90,10 +90,12 @@ Once these are answered, the build order at the end of this file, the hosting sh
 
 **Where it is now.** Cloud Run uses `rlimit`, explicitly documented as lacking filesystem and network namespaces and suitable only for the trusted-college audience. The host backend now caps compiler/runtime file growth and output, open files, process count, memory, and time. A threat model and a small Linux integration corpus are in place; broad adversarial coverage and deployed verification remain outstanding.
 
+**Owner decision governs deployment.** Cloud Run with `rlimit` is the selected trusted-college target. The namespaced sandbox and VM suggestions below describe a possible future change if the threat model expands; they are not prerequisites for the current owner-approved deployment choice. Do not claim arbitrary-public-code isolation for `rlimit`.
+
 **What to build.**
 
 - **Make a namespaced sandbox the default**, not an opt-in. Options: your existing Docker backend, or `isolate` / `nsjail`, which are what real judges use and are cheaper per run than starting a container. `isolate` with cgroups gives accurate CPU time and memory accounting, which also helps judging correctness.
-- **Deployment reality check.** Cloud Run generally does not give a container the privileges needed to run Docker or nsjail. Verify this for your setup, but plan on running the judge workers on a small VM (any cheap VPS or a college machine) where you control the host. This also fits the "self-hosted" identity of the project.
+- **Future deployment alternative.** If KOJ later needs stronger isolation for arbitrary hostile submissions, evaluate a dedicated Linux VM with Docker or a namespace/cgroup sandbox. This supersedes neither the owner's current Cloud Run choice nor the documented trusted-college limitation.
 - **Expand sandbox probes.** Compile/runtime file and output caps and resource limits are implemented, but broad adversarial tests (filesystem, network, process-tree, and cross-language resource probes) are still needed.
 - **Keep hidden tests unreachable.** Test data must not be readable from inside the sandbox and must never appear in any API response.
 - **Adversarial test suite (this is the portfolio piece).** A folder of hostile programs per language: fork bomb, memory bomb, infinite loop, busy loop vs sleep, stdout flood, reading `/etc/passwd`, opening sockets, `ptrace`, writing outside the work dir, symlink tricks, reading other submissions' files. Each has an expected verdict. Run it in CI and document in the README what is blocked and how.
@@ -101,7 +103,7 @@ Once these are answered, the build order at the end of this file, the hosting sh
 
 ## 3. Judging correctness
 
-- **Special checkers.** Support a checker program per problem (testlib-style) for problems with multiple valid answers, plus floating-point tolerance comparison. Run the checker sandboxed too.
+- **Checkers.** Per-problem finite numeric-token comparison with bounded absolute/relative tolerance is implemented. Support a sandboxed checker program per problem (testlib-style) for problems with multiple valid answers; run the checker in the same execution boundary as submissions.
 - **Interactive problems.** Interactor process connected to the contestant program via pipes, with its own limits. This is a clear marker of a serious judge.
 - **Precise time and memory measurement.** Measure CPU time separately from wall time. Handle noisy borderline cases by re-running near the limit before declaring TLE. Support per-language time multipliers, and handle JVM and Go/Rust/JS memory accounting sensibly (a JVM baseline will otherwise trigger false MLE).
 - **Verdict precedence and per-test results.** Define and document the rules (what wins when a program both exceeds time and crashes). Keep `case_results` consistent with them.
@@ -112,7 +114,7 @@ Once these are answered, the build order at the end of this file, the hosting sh
 ## 4. Contest features
 
 - **Scoreboard correctness.** `lib/scoring.ts` already has ICPC logic and tests. Extend with property-based tests (shuffle submission order, rejudge, ties) and make sure rejudges recompute cleanly.
-- **Live scoreboard** with freeze and unfreeze, including the "reveal" at the end.
+- **Operator-controlled scoreboard freeze/unfreeze and staged reveal.** The current scoreboard automatically masks post-freeze accepted submissions during the final hour and shows full results after contest end; manual freeze controls and an explicit reveal action remain future work.
 - **Clarifications and announcements.** Contestants ask questions, setters answer privately or broadcast.
 - **Virtual participation and practice mode** after a contest ends.
 - **Team contests** if your college runs ICPC-style events.
@@ -124,8 +126,8 @@ Once these are answered, the build order at the end of this file, the hosting sh
 - **Centralize authorization.** Sixteen admin handlers each calling `requireX` is easy to get wrong. Wrap handlers in one authorization helper and write an **authz matrix test**: every route against every role (anonymous, contestant, setter, admin) with the expected status code. This catches the next missing check automatically.
 - **Fix the exposed routes.** `/problems/create` and arena pages are public at the proxy layer with only a client-side check. Enforce on the server.
 - **Verify webhook signatures** on the Clerk webhook, if not already done.
-- **Basic hardening.** Security headers and CSP, consistent input validation (Zod or similar) on every handler, and sensible request size limits (you already have `body-guard`).
-- **Add `ADMIN_CLERK_IDS` to `.env.example`** and document the admin bootstrap flow.
+- **Basic hardening.** Security headers and streaming request-size limits now cover the main submission, authoring, contest, admin, interactive-run, and webhook write paths. Complete route-by-route runtime schema validation and a tested CSP remain future work.
+- `ADMIN_CLERK_IDS` is present in the root `.env.example`; document and configure it in the deployment environment to bootstrap the first admin.
 
 ## 6. Code health and data
 
