@@ -1,6 +1,6 @@
 # KOJ implementation status
 
-This is the current code-oriented snapshot. Deployment, live Neon migration state, and a real college contest are not claimed as verified.
+This is the current code-oriented snapshot. A live deployment, live Neon migration state, and a real college contest are not verified or claimed. Performance, capacity, uptime, and usage figures are withheld until measured on the deployed stack.
 
 ## Current architecture
 
@@ -16,7 +16,7 @@ This is the current code-oriented snapshot. Deployment, live Neon migration stat
 
 Roles remain contestant, setter, and admin in Neon. Admin and setter API routes use centralized authorization helpers. ADMIN_CLERK_IDS can bootstrap admin API access.
 
-The problem-authoring page now checks setter/admin access in a Server Component. The contest arena layout checks sign-in, live contest timing, and registration on the server. API handlers still enforce their own authorization.
+Suspended accounts are rejected by staff API gates, the admin layout, and the problem-authoring page. Submission and interactive-run routes also reject suspended accounts. The problem-authoring page now checks setter/admin access in a Server Component. The contest arena layout checks sign-in, live contest timing, and registration on the server. API handlers still enforce their own authorization.
 
 ## Queue and rejudge
 
@@ -26,17 +26,23 @@ The problem-authoring page now checks setter/admin access in a Server Component.
 - Admins can rejudge one submission, a problem batch, or a contest batch. Batches are capped at 500.
 - Admin observability includes queue state, oldest wait, worker heartbeat, infrastructure failures, and execution latency percentiles.
 
+## Contest standings
+
+ICPC-style standings include an automatic final-hour freeze: accepted submissions after the freeze time are masked as pending while the contest is live, and full results appear after the contest end time. This is partial freeze support; there are no operator controls to set, pause, or manually reveal a freeze.
+
 ## Sandbox and judge
 
-Seven languages are supported: Python, C, C++, Java, Go, Rust, and JavaScript. The runner caps captured output, limits file growth and open descriptors, uses process-group termination, and passes a minimal environment to local contestant processes.
+Seven languages are supported: Python, C, C++, Java, Go, Rust, and JavaScript. Problems use exact output comparison by default, with an optional finite numeric-token comparator using configured absolute and relative tolerances. The runner caps captured output, limits file growth and open descriptors, uses process-group termination, and passes a minimal environment to local contestant processes. The judge image runs as non-root UID/GID 10001; this reduces container privileges but does not provide filesystem or network isolation.
 
 Cloud Run rlimit mode has no filesystem or network namespace. It is accepted for a trusted-college environment only; do not present it as a hardened sandbox for arbitrary public users. See docs/threat-model.md and api/DEPLOYMENT_CONTRACT.md.
+
+Incoming bodies on submission, problem/test-case authoring, contest, admin, interactive-run, and Clerk webhook write paths are streamed to explicit byte caps before JSON parsing.
 
 Docker mode remains available on a dedicated Linux host with verified Docker, cgroup, and seccomp configuration. It is not the Cloud Run execution path.
 
 ## Database and migrations
 
-The schema includes judge_jobs, judge_workers, submission mode, leases, attempts, and retry state. The Drizzle journal registers all checked-in migration files, including the previously untracked idempotent migrations and the new queue migration. The setter-role migration is guarded so it is safe when the merged enum is already present.
+The schema includes judge_jobs, judge_workers, submission mode, leases, attempts, retry state, and per-problem output-comparison settings. The Drizzle journal registers all checked-in migration files, including the previously untracked idempotent migrations, durable queue migration, and output-comparator migration. The setter-role migration is guarded so it is safe when the merged enum is already present.
 
 The live Neon schema and migration ledger have not been inspected as part of this work. Do not apply migrations to production until the live state is checked.
 
@@ -48,9 +54,9 @@ The fast npm test command is cross-platform and excludes Linux integration tests
 
 ## Not yet delivered or externally verifiable
 
-- No special checker, floating-point checker, or interactive problem protocol.
-- No contest freeze/unfreeze reveal workflow, clarification system, team participation, plagiarism reporting, or admin audit log.
+- No sandboxed programmable special checker or interactive problem protocol.
+- No operator-controlled freeze/unfreeze or staged reveal workflow, clarification system, team participation, plagiarism reporting, or admin audit log. The automatic final-hour masking described above is implemented.
 - No measured load benchmark, published capacity claim, alerting integration, or production Cloud Run smoke test.
 - No real IIIT Kottayam contest or post-contest write-up. Those require a deployed environment, participants, and owner coordination.
 - No verification of which historical migrations are recorded on live Neon.
-- No authorization matrix covering every route and role; API authorization helpers are centralized, but a full route-mocking harness remains future work.
+- No authorization matrix covering every route and role; the centralized staff-access policy has unit coverage, but a full route-mocking harness remains future work.

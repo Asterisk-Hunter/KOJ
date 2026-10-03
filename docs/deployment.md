@@ -7,12 +7,11 @@
 ├── Neon Postgres (serverless, via DATABASE_URL)
 ├── Next.js frontend (npm run dev, port 3000)
 └── FastAPI judge (uvicorn --reload, port 8000, runs judge as subprocess)
-# Redis — planned, not yet running
 ```
+Redis is optional for read-side caches and is not used by the durable judge queue or verdict delivery.
 
-### College deployment
-- **Single Linux VM** (4 CPU, 8GB RAM) running Docker/containers, or
-- **Split:** Vercel (Next) + Cloud Run (FastAPI judge) + Neon — current intended production (see Vercel section below)
+### Primary deployment target
+The owner-selected target is Vercel (Next.js) + Cloud Run (FastAPI compatibility service and pull worker pool) + Neon. A dedicated Linux VM is a possible future alternative if KOJ's threat model changes and requires stronger judge isolation; it is not the current deployment target.
 
 ---
 
@@ -87,11 +86,11 @@ Obsolete: `SUPABASE_URL`, `SUPABASE_ANON_KEY` — not used; KOJ uses Clerk + Neo
 
 **Required env vars:** `DATABASE_URL` (Neon pooled + `sslmode=require`), Clerk keys and route/redirect settings, and `ADMIN_CLERK_IDS` to bootstrap the first admin. Set `CRON_SECRET` to protect scheduled orphan recovery. `FASTAPI_URL` and `JUDGE_INTERNAL_SECRET` are only needed when using the compatibility HTTP judge endpoints; the submission route now writes queue jobs directly.
 
-**Cloud Run HTTP service:** Build `api/Dockerfile` and deploy it with `DATABASE_URL`, `FASTAPI_HOST=0.0.0.0`, and a generated `JUDGE_INTERNAL_SECRET`. Keep `JUDGE_SANDBOX_MODE=rlimit`; standard Cloud Run does not provide a Docker daemon for nested judge containers. This service keeps the compatibility `/judge` API available, but normal submissions no longer dispatch through it.
+**Cloud Run HTTP service:** Build `api/Dockerfile` and deploy it with `DATABASE_URL`, `FASTAPI_HOST=0.0.0.0`, and a generated `JUDGE_INTERNAL_SECRET`. The image runs as non-root UID/GID `10001`. Keep `JUDGE_SANDBOX_MODE=rlimit`; standard Cloud Run does not provide a Docker daemon for nested judge containers. This service keeps the compatibility `/judge` API available, but normal submissions no longer dispatch through it. The non-root container user does not add filesystem or network namespaces; see the trusted-college limitation below.
 
-**Cloud Run worker pool:** Deploy the same image with command `python` and args `-m,app.worker`. Set `DATABASE_URL`, `JUDGE_SANDBOX_MODE=rlimit`, `JUDGE_LEASE_SECONDS=120`, and `JUDGE_WORKER_POLL_SECONDS=1`. Use Secret Manager for `DATABASE_URL`, set the instance count explicitly, and size concurrency through worker instances (each worker judges one job at a time). The worker requires no public endpoint and reads queue rows directly from Neon. See Google's [Cloud Run worker-pool overview](https://docs.cloud.google.com/run/docs/overview/what-is-cloud-run) and [resource model](https://docs.cloud.google.com/run/docs/resource-model).
+**Cloud Run worker pool:** Deploy the same image with command `python` and args `-m,app.worker`. It also runs as non-root UID/GID `10001`. Set `DATABASE_URL`, `JUDGE_SANDBOX_MODE=rlimit`, `JUDGE_LEASE_SECONDS=120`, and `JUDGE_WORKER_POLL_SECONDS=1`. Use Secret Manager for `DATABASE_URL`, set the instance count explicitly, and size concurrency through worker instances (each worker judges one job at a time). The worker requires no public endpoint and reads queue rows directly from Neon. See Google's [Cloud Run worker-pool overview](https://docs.cloud.google.com/run/docs/overview/what-is-cloud-run) and [resource model](https://docs.cloud.google.com/run/docs/resource-model).
 
-**Clerk:** In Clerk dashboard, set Sign-in/Sign-up URLs and fallback redirects to the same values. Mirror all `NEXT_PUBLIC_CLERK_*` vars in Vercel Project Settings → Environment Variables. Admin authorization does **not** use Clerk organizations — no Organizations API call exists in the codebase. It gates on the comma-separated `ADMIN_CLERK_IDS` env allowlist first, then Neon `users.role` (`app/api/admin/authz.ts`). Set `ADMIN_CLERK_IDS` on Vercel to bootstrap the first admin; it is not in `.env.example`. Whether Organizations are enabled in the dashboard is UNVERIFIED and irrelevant to authz.
+**Clerk:** In Clerk dashboard, set Sign-in/Sign-up URLs and fallback redirects to the same values. Mirror all `NEXT_PUBLIC_CLERK_*` vars in Vercel Project Settings → Environment Variables. Admin authorization does **not** use Clerk organizations — no Organizations API call exists in the codebase. It gates on the comma-separated `ADMIN_CLERK_IDS` env allowlist first, then Neon `users.role` (`app/api/admin/authz.ts`). Set `ADMIN_CLERK_IDS` on Vercel to bootstrap the first admin; the variable is present in the root `.env.example`. Whether Organizations are enabled in the dashboard is unverified and irrelevant to authz.
 
 **Neon:** Use pooled connection string (`…-pooler…?sslmode=require&channel_binding=require`). Next.js `pg` Pool `max:10`; FastAPI uses a bounded `psycopg` connection pool per worker.
 
@@ -99,17 +98,17 @@ Obsolete: `SUPABASE_URL`, `SUPABASE_ANON_KEY` — not used; KOJ uses Clerk + Neo
 
 ### Hosting split and the Cloud Run sandbox caveat
 
-Four deployables/resources: Next.js → Vercel; FastAPI compatibility API → Cloud Run service; pull worker → Cloud Run worker pool; Postgres → Neon. `.vercelignore` keeps the Python `/api/` folder off Vercel. Cloud Run deployments explicitly use `rlimit`, which has resource limits but no filesystem or network namespace. The project makes no multi-tenant hostile-code security claim for that mode. Full judge details: `api/DEPLOYMENT_CONTRACT.md`.
+Four deployables/resources: Next.js → Vercel; FastAPI compatibility API → Cloud Run service; pull worker → Cloud Run worker pool; Postgres → Neon. `.vercelignore` keeps the Python `/api/` folder off Vercel. The API image runs as non-root UID/GID `10001`; this reduces container privileges but does not change `rlimit`'s lack of filesystem or network namespaces. The project makes no multi-tenant hostile-code security claim for that mode. Full judge details: `api/DEPLOYMENT_CONTRACT.md`.
 
 ---
 
 ## Cloud Run launch checklist
 
 1. Set `JUDGE_SANDBOX_MODE=rlimit` for both Cloud Run deployables and read the trusted-college security limitations before accepting submissions.
-2. Apply the Drizzle migrations to Neon before deploying the web app or worker.
+2. Inspect the live Neon schema and migration ledger, reconcile them with the checked-in Drizzle history, and only then plan and apply any required migration. Empty-database CI does not prove which migrations have run on Neon.
 3. Create one worker-pool instance first, verify the admin queue and worker liveness panel, then increase instances only after measuring capacity.
 4. Configure Vercel `CRON_SECRET`; `vercel.json` schedules orphan recovery once daily. Vercel Hobby supports daily cadence only, so this cron is a backstop—not the queue's primary recovery path.
-5. Run the smoke/adversarial suite and a small authorized contest before inviting participants. Record real throughput and queue latency; do not infer capacity from instance count.
+5. Run the smoke and available adversarial suites, then an authorized contest before inviting participants. Record measured throughput, queue latency, errors, and resource use; do not infer capacity from instance count. These deployment results have not yet been verified.
 
 ---
 

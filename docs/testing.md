@@ -40,7 +40,8 @@ python -m pytest -q -m integration integration_tests
 
 - Output capture stops a child after 1 MiB of combined stdout or stderr.
 - Unit tests cover verdict helpers, output normalization/redaction, resource
-  mapping, bounded retry backoff, scoring, invite-code handling, and rejudge
+  mapping, bounded retry backoff, output comparator tolerance boundaries,
+  streaming request-body limits, scoring, invite-code handling, and rejudge
   scope parsing.
 - The known-verdict corpus checks accepted output for Python, C, C++, Java, Go,
   Rust, and JavaScript, plus Python wrong-answer, runtime-error,

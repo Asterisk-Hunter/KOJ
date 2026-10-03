@@ -4,8 +4,10 @@
 
 KOJ is designed for a trusted-college contest audience, not arbitrary public
 multi-tenant code execution. Submissions are untrusted and run in a separate
-Cloud Run worker pool process, but Cloud Run deployments use the `rlimit`
-backend because they cannot launch nested Docker sandboxes.
+Cloud Run worker pool process. The judge image runs as non-root UID/GID 10001,
+which reduces the privileges available to the service and its child processes.
+Cloud Run deployments use the `rlimit` backend because they cannot launch
+nested Docker sandboxes.
 
 ## Controls in `rlimit` mode
 
@@ -23,12 +25,13 @@ backend because they cannot launch nested Docker sandboxes.
 ## Residual risks
 
 `rlimit` is not a security boundary equivalent to Docker namespaces or a
-dedicated judge VM. It does not isolate the filesystem or network. A hostile
-program can inspect files available to the worker's OS user, attempt outbound
+dedicated judge VM. Running as non-root reduces available OS privileges, but
+does not isolate the filesystem or network. A hostile program running as the
+worker's UID can inspect files accessible to that UID, attempt outbound
 connections, and consume shared host resources outside the limits applied to
 its process. The worker's database credentials and Cloud Run identity are
 high-value targets. Environment sanitization reduces accidental exposure but
-does not make shared-UID execution safe for hostile public users.
+does not make same-UID execution safe for hostile public users.
 
 Do not grant the Cloud Run runtime identity unrelated project permissions.
 Keep the worker pool private, use only trusted college participants, and do

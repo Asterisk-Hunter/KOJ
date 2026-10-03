@@ -19,7 +19,10 @@ Deploy the API image as two Cloud Run deployables:
   measuring queue latency and resource use.
 
 Both deployables need the Neon `DATABASE_URL`. Use the same pinned image and
-set `JUDGE_SANDBOX_MODE=rlimit` in Cloud Run. Keep `JUDGE_INTERNAL_SECRET`
+set `JUDGE_SANDBOX_MODE=rlimit` in Cloud Run. The image runs both processes as
+non-root UID/GID `10001`, reducing container privileges. This does not add
+filesystem or network namespaces or change the trusted-college security
+boundary. Keep `JUDGE_INTERNAL_SECRET`
 random and private for the compatibility HTTP endpoints. The normal Next.js
 submission flow does not need `FASTAPI_URL` or that secret.
 
@@ -32,7 +35,8 @@ submission flow does not need `FASTAPI_URL` or that secret.
 | `auto` | Docker if the CLI exists, otherwise `rlimit`. | Development only; production should select explicitly. |
 
 Cloud Run `rlimit` is not a hardened boundary for arbitrary public submissions.
-It does not isolate filesystem or network access. A hostile program can probe
+The image runs as non-root UID/GID `10001`, but `rlimit` does not isolate
+filesystem or network access. A hostile program can probe
 files visible to the worker OS user and attempt outbound connections. Child
 processes get a minimal environment to avoid inheriting application secrets,
 but environment filtering does not replace OS isolation. See

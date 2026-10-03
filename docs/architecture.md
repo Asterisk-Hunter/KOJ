@@ -70,4 +70,4 @@ Configuration and rollout steps are in docs/deployment.md and api/DEPLOYMENT_CON
 
 ## Remaining architecture work
 
-The current judge has no special checker, floating-point checker, or interactive-problem protocol. Contest freeze/reveal, clarifications, audit logs, load benchmarks, and real contest evidence are also still outstanding. Do not claim filesystem/network isolation or measured capacity for Cloud Run rlimit deployments.
+The current judge supports numeric-token comparison with bounded absolute and relative tolerances, but has no sandboxed programmable special checker or interactive-problem protocol. The scoreboard automatically masks post-freeze accepted submissions during the final hour and reveals full standings after the contest ends; operator-controlled freeze/unfreeze and staged reveal remain outstanding. Clarifications, audit logs, load benchmarks, and real contest evidence are also still outstanding. Do not claim filesystem/network isolation or measured capacity for Cloud Run rlimit deployments.

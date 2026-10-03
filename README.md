@@ -4,6 +4,29 @@ Contest hosting platform with an integrated problem archive for IIIT Kottayam.
 
 **Docs:** [Overview](docs/overview.md) · [Architecture](docs/architecture.md) · [Features](docs/features.md) · [Stack](docs/stack.md) · [Testing](docs/testing.md) · [Deployment](docs/deployment.md) · [All docs](docs/)
 
+## Architecture and engineering highlights
+
+```text
+Vercel (Next.js app) ── atomic submission + job insert ──► Neon Postgres
+                                                               ▲
+Cloud Run worker pool ───── claim with SKIP LOCKED ────────────┘
+        │
+        └── judges with the configured rlimit backend
+
+Browser ◄── SSE status reads from Postgres ── Vercel
+```
+
+- The submission route commits a pending submission and its judge job in one Postgres transaction. Workers claim jobs with `FOR UPDATE SKIP LOCKED`, renew expiring leases, retry infrastructure failures, and fence stale attempts from persisting results.
+- The admin view reports queue depth and age, worker liveness, infrastructure failures, and stored execution-time percentiles. SSE clients can reconnect and reload status from Postgres.
+- The judge supports Python, C, C++, Java, Go, Rust, and JavaScript. CI covers the accepted-verdict corpus for all seven, selected Python failure verdicts, and bounded Linux `rlimit` probes.
+- Problem setters can choose exact output comparison or finite numeric-token comparison with bounded absolute and relative tolerances; exact remains the default.
+- Streaming byte limits bound incoming submission, problem-authoring, contest, admin, interactive-run, and webhook bodies before JSON parsing.
+- The judge container runs as non-root UID/GID `10001`, adding a privilege reduction layer. Cloud Run `rlimit` still does not isolate filesystem or network access; this deployment is for a trusted college audience, not arbitrary public code execution. See [the threat model](docs/threat-model.md).
+
+## Measured results
+
+Deployment and live Neon migration state are not verified, and KOJ has not yet been documented as used in a real IIIT Kottayam contest. Queue throughput, p95 latency, worker capacity, uptime, participant counts, and submission counts are therefore withheld until measured on the deployed stack. See [implementation status](docs/status.md) and [deployment steps](docs/deployment.md).
+
 ---
 
 ## Stack
@@ -120,9 +143,7 @@ Postgres and does not require `FASTAPI_URL`.
 
 ## Production deployment
 
-- **Frontend**: Vercel (Next.js 16). See `docs/deployment.md` § 2.
-- **Judge API + workers**: Google Cloud Run service and pull worker pool (`api/Dockerfile`). See `docs/deployment.md`.
-- **Database**: Neon Postgres with Drizzle ORM. See `docs/deployment.md` § 1.
+The intended production layout is Vercel for the Next.js app, Cloud Run for the FastAPI compatibility service and pull worker pool, and Neon Postgres for application and queue data. This is the target architecture; it has not yet been verified in a live deployment. Follow [the launch checklist](docs/deployment.md#cloud-run-launch-checklist) and its live-database migration warning before deploying.
 
 ## Contributors
 
