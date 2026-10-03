@@ -28,11 +28,11 @@ Suspended accounts are rejected by staff API gates, the admin layout, and the pr
 
 ## Contest standings
 
-ICPC-style standings include an automatic final-hour freeze: accepted submissions after the freeze time are masked as pending while the contest is live, and full results appear after the contest end time. This is partial freeze support; there are no operator controls to set, pause, or manually reveal a freeze.
+ICPC-style standings include an automatic final-hour freeze and staff controls to freeze/unfreeze, reveal all post-freeze results, or reveal them incrementally. Freeze state and reveal progress are persisted and audited. Contest communication supports private/public clarifications and announcements. Registration supports teams of up to three and timed virtual participation after a contest. Official and virtual standings are separate.
 
 ## Sandbox and judge
 
-Seven languages are supported: Python, C, C++, Java, Go, Rust, and JavaScript. Problems use exact output comparison by default, with an optional finite numeric-token comparator using configured absolute and relative tolerances. The runner caps captured output, limits file growth and open descriptors, uses process-group termination, and passes a minimal environment to local contestant processes. The judge image runs as non-root UID/GID 10001; this reduces container privileges but does not provide filesystem or network isolation.
+Seven languages are supported: Python, C, C++, Java, Go, Rust, and JavaScript. Problems use exact output comparison by default, an optional finite numeric-token comparator using configured absolute and relative tolerances, or an optional Python special checker. A special checker receives JSON on stdin (`input`, `expected_output`, `actual_output`); exit 0 accepts, exit 1 rejects, and other exits/timeouts are checker infrastructure failures. Checker processes use the configured sandbox backend with bounded time, memory, and output. The runner caps captured output, limits file growth and open descriptors, uses process-group termination, and passes a minimal environment to local contestant processes. The judge image runs as non-root UID/GID 10001; this reduces container privileges but does not provide filesystem or network isolation.
 
 Cloud Run rlimit mode has no filesystem or network namespace. It is accepted for a trusted-college environment only; do not present it as a hardened sandbox for arbitrary public users. See docs/threat-model.md and api/DEPLOYMENT_CONTRACT.md.
 
@@ -42,7 +42,7 @@ Docker mode remains available on a dedicated Linux host with verified Docker, cg
 
 ## Database and migrations
 
-The schema includes judge_jobs, judge_workers, submission mode, leases, attempts, retry state, and per-problem output-comparison settings. The Drizzle journal registers all checked-in migration files, including the previously untracked idempotent migrations, durable queue migration, and output-comparator migration. The setter-role migration is guarded so it is safe when the merged enum is already present.
+The schema includes judge_jobs, judge_workers, submission mode, leases, attempts, retry state, per-problem output-comparison and checker settings, contest communication and participation, and append-only admin audit events. The Drizzle journal registers all checked-in migrations, including contest controls/participation, special checker, and audit-log migrations. The setter-role migration is guarded so it is safe when the merged enum is already present.
 
 The live Neon schema and migration ledger have not been inspected as part of this work. Do not apply migrations to production until the live state is checked.
 
@@ -54,9 +54,10 @@ The fast npm test command is cross-platform and excludes Linux integration tests
 
 ## Not yet delivered or externally verifiable
 
-- No sandboxed programmable special checker or interactive problem protocol.
-- No operator-controlled freeze/unfreeze or staged reveal workflow, clarification system, team participation, plagiarism reporting, or admin audit log. The automatic final-hour masking described above is implemented.
-- No measured load benchmark, published capacity claim, alerting integration, or production Cloud Run smoke test.
+- No interactive problem protocol, problem package export/validation workflow, or broad adversarial sandbox suite across all supported languages.
+- Plagiarism reports are advisory similarity candidates, not proof or automatic enforcement. They examine a bounded recent submission sample.
+- A k6 load harness and Cloud Monitoring alert-policy renderer are checked in, but no measured load benchmark, published capacity claim, deployed alert policy, or production Cloud Run smoke test exists.
 - No real IIIT Kottayam contest or post-contest write-up. Those require a deployed environment, participants, and owner coordination.
 - No verification of which historical migrations are recorded on live Neon.
 - No authorization matrix covering every route and role; the centralized staff-access policy has unit coverage, but a full route-mocking harness remains future work.
+- No coverage report or production/real-contest evidence. Do not claim capacity, uptime, or deployment verification until measured.

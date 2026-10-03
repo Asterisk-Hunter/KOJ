@@ -37,6 +37,13 @@ Problems are created via the **Create Problem** form in `/admin` (or via `POST /
 | **Tags** | Optional | Comma-separated | Topic categories (e.g., `arrays, dp, two-pointers, math`). |
 | **Time Limit** | Yes | Integer: 100 to 10,000 ms | Maximum CPU execution time per test case (default: `2000` ms / 2s per SRS). |
 | **Memory Limit** | Yes | Integer: 16 to 2,048 MB | Maximum RAM allocation per test case (default: `256` MB). |
+| **Special Checker** | Optional | Python source, maximum 64 KiB | Accepts multiple valid outputs when exact or numeric-token comparison is insufficient. |
+
+### Special Checker Contract
+
+The checker runs once per judged test case through the configured judge backend. It receives one JSON object on standard input with string properties `input`, `expected_output`, and `actual_output`. Exit status `0` accepts the contestant output; exit status `1` rejects it as wrong answer; any other exit status, timeout, or resource/output-limit failure is treated as a judge/checker infrastructure error. Checker source is configured by staff and never accepted from a contestant submission. The checker uses the problem's resource limits (with a maximum two-second checker timeout) and the same sandbox limitations documented in `docs/threat-model.md`.
+
+Interactive problems are not supported; do not use a special checker as an interactor. The current checker receives completed output and cannot exchange messages with a running contestant process.
 
 Newly created problems default to the `draft` state and are assigned an incremental problem ID (e.g., `#009`).
 

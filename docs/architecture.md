@@ -47,7 +47,7 @@ FastAPI provides health and compatibility endpoints. Normal queue work runs with
 
 ### Judge pipeline
 
-The pipeline writes sources to a per-submission temporary directory, compiles where needed, runs each case in a fresh process, compares normalized output, redacts hidden-case output, and aggregates a verdict. Stdout/stderr capture is bounded and process groups are terminated on timeout.
+The pipeline writes sources to a per-submission temporary directory, compiles where needed, runs each case in a fresh process, compares normalized output or invokes an optional per-problem Python checker, redacts hidden-case output, and aggregates a verdict. The checker receives a JSON object on stdin with `input`, `expected_output`, and `actual_output`; exit 0 means accept, exit 1 means reject, and another exit or timeout is an infrastructure failure. Checker source is loaded from the database, not supplied by contestants, and runs with bounded resources in the configured judge backend. Stdout/stderr capture is bounded and process groups are terminated on timeout.
 
 Cloud Run uses rlimit: process limits, bounded output, file growth and descriptor caps, and wall timeout. It has no filesystem or network namespace. See docs/threat-model.md. Docker mode offers a stronger container setup on a dedicated Linux host with Docker, cgroups, and the seccomp profile provisioned.
 
@@ -68,6 +68,10 @@ Submission and contest events are read from Postgres with bounded SSE streams. R
 
 Configuration and rollout steps are in docs/deployment.md and api/DEPLOYMENT_CONTRACT.md.
 
+## Contest and administration
+
+Contest controls persist manual freeze state and support full or incremental reveal of post-freeze submissions. Contestants and staff can use clarification and announcement APIs; registrations support three-member teams, and post-contest virtual attempts have a fixed duration and separate standings. Admin mutations write sanitized metadata to an append-only audit log. The admin plagiarism report compares bounded recent same-problem submissions and returns advisory similarity scores without source text.
+
 ## Remaining architecture work
 
-The current judge supports numeric-token comparison with bounded absolute and relative tolerances, but has no sandboxed programmable special checker or interactive-problem protocol. The scoreboard automatically masks post-freeze accepted submissions during the final hour and reveals full standings after the contest ends; operator-controlled freeze/unfreeze and staged reveal remain outstanding. Clarifications, audit logs, load benchmarks, and real contest evidence are also still outstanding. Do not claim filesystem/network isolation or measured capacity for Cloud Run rlimit deployments.
+Interactive problem protocol and problem-package import/export/validation are not implemented. The load harness and monitoring policy templates exist, but no benchmark has been run and no alert policy has been deployed. Do not claim filesystem/network isolation or measured capacity for Cloud Run rlimit deployments.
