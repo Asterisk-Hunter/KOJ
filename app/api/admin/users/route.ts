@@ -4,6 +4,7 @@ import { clerkClient } from "@clerk/nextjs/server";
 import { db } from "@/db";
 import { users } from "@/db/schema";
 import { jsonError, requireAdmin, uniqueUsername } from "@/app/api/admin/authz";
+import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
 import { MAX_ADMIN_USER_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 
 export const runtime = "nodejs";
@@ -195,25 +196,37 @@ export async function PATCH(req: NextRequest) {
   const email = dirEmail(cu) || `${clerkId}@placeholder.local`;
   const username = await uniqueUsername(dirName(cu) || clerkId, clerkId);
 
-  const updated = await db
-    .insert(users)
-    .values({
-      clerkId,
-      username,
-      email,
-      role: patch.role ?? "contestant",
-      suspended: patch.suspended ?? false,
-    })
-    .onConflictDoUpdate({
-      target: users.clerkId,
-      set: { ...patch },
-    })
-    .returning({
-      clerkId: users.clerkId,
-      username: users.username,
-      role: users.role,
-      suspended: users.suspended,
-    });
+  const updated = await db.transaction(async (tx) => {
+    const result = await tx
+      .insert(users)
+      .values({
+        clerkId,
+        username,
+        email,
+        role: patch.role ?? "contestant",
+        suspended: patch.suspended ?? false,
+      })
+      .onConflictDoUpdate({
+        target: users.clerkId,
+        set: { ...patch },
+      })
+      .returning({
+        clerkId: users.clerkId,
+        username: users.username,
+        role: users.role,
+        suspended: users.suspended,
+      });
+    if (result[0]) {
+      await recordAdminAuditEvent(tx, {
+        actorId: grant.userId,
+        action: "user.access_updated",
+        entityType: "user",
+        entityId: clerkId,
+        metadata: { role: result[0].role, suspended: result[0].suspended },
+      });
+    }
+    return result;
+  });
   if (updated.length === 0) return jsonError("user not found", 404);
 
   return NextResponse.json({ user: updated[0] });

@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { contestProblems, contests, problemTestCases, problems } from "@/db/schema";
 import { jsonError, requireSetter } from "@/app/api/admin/authz";
 import { readBoundedJsonObject, MAX_TEST_CASE_BODY_BYTES } from "@/app/api/body-guard";
+import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -119,10 +120,20 @@ export async function POST(
     return jsonError("position must be a non-negative integer", 400);
   }
 
-  const inserted = await db
-    .insert(problemTestCases)
-    .values({ problemId: problem.id, input, expectedOutput, isSample, position })
-    .returning({ id: problemTestCases.id });
+  const inserted = await db.transaction(async (tx) => {
+    const rows = await tx
+      .insert(problemTestCases)
+      .values({ problemId: problem.id, input, expectedOutput, isSample, position })
+      .returning({ id: problemTestCases.id });
+    await recordAdminAuditEvent(tx, {
+      actorId: grant.userId,
+      action: "problem.test_case_added",
+      entityType: "problem",
+      entityId: problem.id,
+      metadata: { isSample },
+    });
+    return rows;
+  });
 
   return NextResponse.json({ id: inserted[0].id }, { status: 201 });
 }

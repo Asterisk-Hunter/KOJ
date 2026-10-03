@@ -5,6 +5,7 @@ import { judgeJobs, submissions } from "@/db/schema";
 import { requireAdmin } from "@/app/api/admin/authz";
 import { MAX_RECOVER_BODY_BYTES, readBoundedJson } from "@/app/api/body-guard";
 import { parseRejudgeScope } from "@/app/api/admin/submissions/rejudge-scope";
+import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -83,6 +84,13 @@ export async function POST(req: NextRequest) {
         },
         setWhere: inArray(judgeJobs.status, ["completed", "dead"]),
       });
+    await recordAdminAuditEvent(tx, {
+      actorId: grant.userId,
+      action: "submission.rejudge_requested",
+      entityType: scope.kind,
+      entityId: scope.id,
+      metadata: { count: ids.length },
+    });
     return ids;
   });
 

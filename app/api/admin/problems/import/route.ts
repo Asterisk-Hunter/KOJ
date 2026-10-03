@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { problems, problemTestCases } from "@/db/schema";
 import { ensureUserRow, jsonError, requireSetter } from "@/app/api/admin/authz";
 import { MAX_PROBLEM_AUTHORING_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
+import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
 import {
   extractAtCoderTaskId,
   extractCodeforcesId,
@@ -318,6 +319,14 @@ export async function POST(req: NextRequest) {
           })),
         );
       }
+
+      await recordAdminAuditEvent(tx, {
+        actorId: userId,
+        action: "problem.imported",
+        entityType: "problem",
+        entityId: problemId,
+        metadata: { count: parsed.testCases.length, status },
+      });
 
       return { id: problemId, testCaseCount: parsed.testCases.length };
     });

@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { contestProblems, contests, problemTestCases, problems } from "@/db/schema";
 import { jsonError, requireSetter } from "@/app/api/admin/authz";
 import { readBoundedJsonObject, MAX_TEST_CASE_BODY_BYTES } from "@/app/api/body-guard";
+import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -112,7 +113,16 @@ export async function PATCH(
     patch.position = b.position;
   }
 
-  await db.update(problemTestCases).set(patch).where(eq(problemTestCases.id, g.testCase.id));
+  await db.transaction(async (tx) => {
+    await tx.update(problemTestCases).set(patch).where(eq(problemTestCases.id, g.testCase.id));
+    await recordAdminAuditEvent(tx, {
+      actorId: grant.userId,
+      action: "problem.test_case_updated",
+      entityType: "problem",
+      entityId: g.problem?.id,
+      metadata: { fields: Object.keys(patch).join(",") },
+    });
+  });
   return NextResponse.json({ id: g.testCase.id, updated: true });
 }
 
@@ -128,6 +138,14 @@ export async function DELETE(
   const g = await guard(idRaw, caseIdRaw, grant.userId, grant.dbRole);
   if (g.error || !g.testCase) return g.error ?? jsonError("test case not found", 404);
 
-  await db.delete(problemTestCases).where(eq(problemTestCases.id, g.testCase.id));
+  await db.transaction(async (tx) => {
+    await tx.delete(problemTestCases).where(eq(problemTestCases.id, g.testCase.id));
+    await recordAdminAuditEvent(tx, {
+      actorId: grant.userId,
+      action: "problem.test_case_deleted",
+      entityType: "problem",
+      entityId: g.problem?.id,
+    });
+  });
   return NextResponse.json({ deleted: true });
 }
