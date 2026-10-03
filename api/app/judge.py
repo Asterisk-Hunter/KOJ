@@ -45,6 +45,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation, MAX_EMAX, MIN_EMIN, localcontext
 from pathlib import Path
 from typing import BinaryIO, Literal
 
@@ -148,6 +149,9 @@ class JudgeRequest(BaseModel):
     cases: list[JudgeCase]
     time_limit_ms: int = Field(ge=1)
     memory_mb: int = Field(ge=1)
+    output_comparator: Literal["exact", "float"] = "exact"
+    absolute_tolerance: float = Field(default=0.000001, ge=0, le=1, allow_inf_nan=False)
+    relative_tolerance: float = Field(default=0.000001, ge=0, le=1, allow_inf_nan=False)
 
 
 class CaseResult(BaseModel):
@@ -328,6 +332,59 @@ def _normalize_output(s: str) -> list[str]:
 
 def _outputs_equal(actual: str, expected: str) -> bool:
     return _normalize_output(actual) == _normalize_output(expected)
+
+
+def _float_outputs_equal(
+    actual: str,
+    expected: str,
+    absolute_tolerance: float,
+    relative_tolerance: float,
+) -> bool:
+    actual_tokens = actual.split()
+    expected_tokens = expected.split()
+    if len(actual_tokens) != len(expected_tokens):
+        return False
+
+    for actual_token, expected_token in zip(actual_tokens, expected_tokens):
+        try:
+            actual_number = Decimal(actual_token)
+        except InvalidOperation:
+            actual_number = None
+        if actual_number is not None and actual_number.is_finite() and not re.fullmatch(
+            r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?",
+            actual_token,
+        ):
+            actual_number = None
+        try:
+            expected_number = Decimal(expected_token)
+        except InvalidOperation:
+            expected_number = None
+        if expected_number is not None and expected_number.is_finite() and not re.fullmatch(
+            r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?",
+            expected_token,
+        ):
+            expected_number = None
+
+        if actual_number is not None and not actual_number.is_finite():
+            return False
+        if expected_number is not None and not expected_number.is_finite():
+            return False
+        if actual_number is not None and expected_number is not None:
+            with localcontext() as context:
+                context.prec = max(32, len(actual_token), len(expected_token)) + 8
+                context.Emax = MAX_EMAX
+                context.Emin = MIN_EMIN
+                allowed_difference = max(
+                    Decimal(str(absolute_tolerance)),
+                    Decimal(str(relative_tolerance))
+                    * max(abs(actual_number), abs(expected_number)),
+                )
+                if abs(actual_number - expected_number) > allowed_difference:
+                    return False
+        elif actual_token != expected_token:
+            return False
+
+    return True
 
 
 def _whitespace_only_diff(actual: str, expected: str) -> bool:
@@ -1357,7 +1414,17 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
                     continue
 
                 # Compare output
-                if _outputs_equal(stdout_raw, case.expected_stdout):
+                outputs_match = (
+                    _outputs_equal(stdout_raw, case.expected_stdout)
+                    if req.output_comparator == "exact"
+                    else _float_outputs_equal(
+                        stdout_raw,
+                        case.expected_stdout,
+                        req.absolute_tolerance,
+                        req.relative_tolerance,
+                    )
+                )
+                if outputs_match:
                     results.append(
                         _visible_case(
                             index=idx,

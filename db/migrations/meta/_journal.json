@@ -64,6 +64,13 @@
       "when": 1790967026638,
       "tag": "0006_durable_judge_jobs",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790970000000,
+      "tag": "0007_float_output_comparator",
+      "breakpoints": true
     }
   ]
 }

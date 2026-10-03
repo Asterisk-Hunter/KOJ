@@ -31,6 +31,9 @@ class SubmissionInput:
     mode: str
     time_limit_ms: int
     memory_limit_mb: int
+    output_comparator: str
+    absolute_tolerance: float
+    relative_tolerance: float
     submitted_at: datetime
     cases: tuple[JudgeCase, ...]
 
@@ -147,7 +150,8 @@ def load_submission(submission_id: int) -> SubmissionInput | None:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT s.problem_id, s.language, s.code, s.mode, p.time_limit_ms, "
-                "p.memory_limit_mb, s.submitted_at "
+                "p.memory_limit_mb, p.output_comparator, p.absolute_tolerance, "
+                "p.relative_tolerance, s.submitted_at "
                 "FROM submissions AS s JOIN problems AS p ON p.id = s.problem_id "
                 "WHERE s.id = %s AND s.status IN ('pending', 'running')",
                 (submission_id,),
@@ -155,7 +159,18 @@ def load_submission(submission_id: int) -> SubmissionInput | None:
             row = cur.fetchone()
             if row is None:
                 return None
-            problem_id, language, code, mode, time_limit_ms, memory_limit_mb, submitted_at = row
+            (
+                problem_id,
+                language,
+                code,
+                mode,
+                time_limit_ms,
+                memory_limit_mb,
+                output_comparator,
+                absolute_tolerance,
+                relative_tolerance,
+                submitted_at,
+            ) = row
             cur.execute(
                 "SELECT input, expected_output, is_sample FROM problem_test_cases "
                 "WHERE problem_id = %s AND (%s = 'submit' OR is_sample = true) "
@@ -174,6 +189,9 @@ def load_submission(submission_id: int) -> SubmissionInput | None:
         mode=mode,
         time_limit_ms=time_limit_ms,
         memory_limit_mb=memory_limit_mb,
+        output_comparator=output_comparator,
+        absolute_tolerance=absolute_tolerance,
+        relative_tolerance=relative_tolerance,
         submitted_at=submitted_at,
         cases=cases,
     )

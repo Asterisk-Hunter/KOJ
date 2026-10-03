@@ -118,6 +118,9 @@ type ProblemResponse = {
   tags: string[];
   timeLimitMs: number;
   memoryMb: number;
+  outputComparator: "exact" | "float";
+  absoluteTolerance: number;
+  relativeTolerance: number;
   status: string;
   samples: { input: string; expectedOutput: string }[];
   contestId?: number;
@@ -350,6 +353,9 @@ export default function ProblemDetailPage() {
           expectedOutput: customExpected,
           timeLimitMs: problem.timeLimitMs,
           memoryMb: problem.memoryMb,
+          outputComparator: problem.outputComparator,
+          absoluteTolerance: problem.absoluteTolerance,
+          relativeTolerance: problem.relativeTolerance,
         }),
       });
       const data = (await res.json()) as {
@@ -404,6 +410,9 @@ export default function ProblemDetailPage() {
           cases: problem.samples.map((s) => ({ stdin: s.input, expectedOutput: s.expectedOutput })),
           timeLimitMs: problem.timeLimitMs,
           memoryMb: problem.memoryMb,
+          outputComparator: problem.outputComparator,
+          absoluteTolerance: problem.absoluteTolerance,
+          relativeTolerance: problem.relativeTolerance,
         }),
       });
       const data = (await res.json()) as {
@@ -609,9 +618,17 @@ export default function ProblemDetailPage() {
           >
             ← {contestId ? "Return to contest arena" : "Browse all problems"}
           </Link>
-          <div className="flex items-center gap-4 text-xs font-mono text-kjtext-muted">
+          <div className="flex flex-wrap items-center gap-4 text-xs font-mono text-kjtext-muted">
             <span>Time limit: <strong className="text-kjtext">{problem.timeLimitMs}ms</strong></span>
             <span>Memory limit: <strong className="text-kjtext">{problem.memoryMb}MB</strong></span>
+            {problem.outputComparator === "float" && (
+              <span>
+                Numeric token tolerance:{" "}
+                <strong className="text-kjtext">
+                  abs {problem.absoluteTolerance}, rel {problem.relativeTolerance}
+                </strong>
+              </span>
+            )}
           </div>
         </div>
 

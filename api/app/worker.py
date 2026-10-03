@@ -66,6 +66,9 @@ def _process_job(worker_id: str, job: queue.ClaimedJob) -> None:
                 cases=list(submission.cases),
                 time_limit_ms=submission.time_limit_ms,
                 memory_mb=submission.memory_limit_mb,
+                output_comparator=submission.output_comparator,
+                absolute_tolerance=submission.absolute_tolerance,
+                relative_tolerance=submission.relative_tolerance,
             )
         )
         if lease_lost.is_set():

@@ -191,6 +191,9 @@ export async function GET(
     tags: problem.tags,
     timeLimitMs: problem.timeLimitMs,
     memoryMb: problem.memoryLimitMb,
+    outputComparator: problem.outputComparator,
+    absoluteTolerance: problem.absoluteTolerance,
+    relativeTolerance: problem.relativeTolerance,
     status: problem.status,
     samples: sampleRows.map((r) => ({ input: r.input, expectedOutput: r.expectedOutput })),
   };

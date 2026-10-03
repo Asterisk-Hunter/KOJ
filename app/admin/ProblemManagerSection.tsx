@@ -11,6 +11,8 @@ type TestCase = {
   position: number;
 };
 
+type OutputComparator = "exact" | "float";
+
 type Problem = {
   id: number;
   title: string;
@@ -23,6 +25,9 @@ type Problem = {
   tags: string[];
   timeLimitMs: number;
   memoryLimitMb: number;
+  outputComparator: OutputComparator;
+  absoluteTolerance: number;
+  relativeTolerance: number;
   status: "draft" | "published" | "contest_active";
   testCases?: TestCase[];
 };
@@ -441,6 +446,47 @@ export default function ProblemManagerSection({
                 onChange={(e) => handleProblemChange("memoryLimitMb", e.target.value)}
               />
             </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs text-kjtext-muted mb-1">Output Comparator</label>
+              <select
+                className={inputCls}
+                value={formData.outputComparator ?? "exact"}
+                onChange={(e) => handleProblemChange("outputComparator", e.target.value as OutputComparator)}
+              >
+                <option value="exact">Exact tokens</option>
+                <option value="float">Floating-point tolerance</option>
+              </select>
+            </div>
+            {formData.outputComparator === "float" && (
+              <>
+                <div>
+                  <label className="block text-xs text-kjtext-muted mb-1">Absolute Tolerance (0–1)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="1"
+                    step="any"
+                    className={inputCls}
+                    value={formData.absoluteTolerance ?? 0.000001}
+                    onChange={(e) => handleProblemChange("absoluteTolerance", e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-kjtext-muted mb-1">Relative Tolerance (0–1)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="1"
+                    step="any"
+                    className={inputCls}
+                    value={formData.relativeTolerance ?? 0.000001}
+                    onChange={(e) => handleProblemChange("relativeTolerance", e.target.value)}
+                  />
+                </div>
+              </>
+            )}
           </div>
         </div>
         <div className="flex justify-end pt-4">

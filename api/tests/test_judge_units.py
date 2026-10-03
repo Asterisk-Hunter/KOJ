@@ -6,6 +6,7 @@ import signal
 import sys
 
 import pytest
+from pydantic import ValidationError
 
 from app.judge import (
     SUPPORTED_LANGUAGES,
@@ -19,6 +20,7 @@ from app.judge import (
     _local_process_environment,
     _normalize_output,
     _outputs_equal,
+    _float_outputs_equal,
     _run_memory_mb,
     _run_bounded_process,
     _sandbox_unavailable_response,
@@ -94,6 +96,65 @@ class TestOutputsEqual:
 
     def test_different(self):
         assert _outputs_equal("hello", "world") is False
+
+    def test_judge_request_defaults_to_exact_comparison(self):
+        from app.judge import JudgeRequest
+
+        request = JudgeRequest(
+            language="python",
+            code="print(1)",
+            cases=[],
+            time_limit_ms=1000,
+            memory_mb=256,
+        )
+
+        assert request.output_comparator == "exact"
+        assert request.absolute_tolerance == 0.000001
+        assert request.relative_tolerance == 0.000001
+        assert _outputs_equal("0.3000001", "0.3") is False
+
+    def test_judge_request_rejects_unbounded_or_non_finite_tolerance(self):
+        from app.judge import JudgeRequest
+
+        for tolerance in (-0.000001, 1.000001, float("inf"), float("nan")):
+            with pytest.raises(ValidationError):
+                JudgeRequest(
+                    language="python",
+                    code="print(1)",
+                    cases=[],
+                    time_limit_ms=1000,
+                    memory_mb=256,
+                    output_comparator="float",
+                    absolute_tolerance=tolerance,
+                )
+
+
+class TestFloatOutputsEqual:
+    def test_values_within_absolute_tolerance_match_at_boundary(self):
+        assert _float_outputs_equal("1.01", "1", 0.01, 0) is True
+
+    def test_values_outside_absolute_tolerance_do_not_match(self):
+        assert _float_outputs_equal("1.010001", "1", 0.01, 0) is False
+
+    def test_relative_tolerance_scales_with_magnitude(self):
+        assert _float_outputs_equal("1001", "1000", 0, 0.001) is True
+
+    def test_token_count_must_match(self):
+        assert _float_outputs_equal("1 2", "1", 1, 1) is False
+
+    def test_tiny_finite_values_are_not_rounded_to_zero(self):
+        assert _float_outputs_equal("1e-9999", "0", 0, 0) is False
+
+    def test_mixed_numeric_and_text_tokens(self):
+        assert _float_outputs_equal("1.0000001 ok", "1 ok", 0.000001, 0) is True
+        assert _float_outputs_equal("1.0000001 OK", "1 ok", 0.000001, 0) is False
+
+    def test_underscores_are_not_accepted_as_numeric_syntax(self):
+        assert _float_outputs_equal("1_0", "10", 1, 1) is False
+
+    @pytest.mark.parametrize("value", ["nan", "NaN", "inf", "-inf", "Infinity", "-Infinity"])
+    def test_non_finite_numeric_tokens_never_match(self, value):
+        assert _float_outputs_equal(value, value, 1, 1) is False
 
 
 # ---------------------------------------------------------------------------
