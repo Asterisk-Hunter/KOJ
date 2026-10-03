@@ -21,6 +21,19 @@ export const contestStatus = pgEnum("contest_status", [
   "archived",
 ]);
 
+export const scoreboardFreezeMode = pgEnum("scoreboard_freeze_mode", [
+  "automatic",
+  "frozen",
+  "unfrozen",
+]);
+
+export const clarificationVisibility = pgEnum("clarification_visibility", [
+  "private",
+  "public",
+]);
+
+export const submissionParticipation = pgEnum("submission_participation", ["official", "virtual"]);
+
 export const problemDifficulty = pgEnum("problem_difficulty", [
   "easy",
   "medium",
@@ -99,6 +112,7 @@ export const problems = pgTable("problems", {
   outputComparator: text("output_comparator").notNull().default("exact"),
   absoluteTolerance: doublePrecision("absolute_tolerance").notNull().default(0.000001),
   relativeTolerance: doublePrecision("relative_tolerance").notNull().default(0.000001),
+  checkerCode: text("checker_code"),
   status: problemStatus("status").notNull().default("draft"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
@@ -110,6 +124,7 @@ export const problems = pgTable("problems", {
   check("problems_output_comparator_check", sql`${table.outputComparator} IN ('exact', 'float')`),
   check("problems_absolute_tolerance_check", sql`${table.absoluteTolerance} BETWEEN 0 AND 1`),
   check("problems_relative_tolerance_check", sql`${table.relativeTolerance} BETWEEN 0 AND 1`),
+  check("problems_checker_code_size_check", sql`${table.checkerCode} IS NULL OR octet_length(${table.checkerCode}) <= 65536`),
 ]);
 
 export const contests = pgTable("contests", {
@@ -127,13 +142,42 @@ export const contests = pgTable("contests", {
   // Hashed invite code (scrypt, `scrypt$salt$key`). `invite_code`
   // is legacy plaintext kept read-only until migrated; never write to it.
   inviteCodeHash: text("invite_code_hash"),
+    scoreboardFreezeMode: scoreboardFreezeMode("scoreboard_freeze_mode").notNull().default("automatic"),
+    scoreboardFrozenAt: timestamp("scoreboard_frozen_at", { withTimezone: true }),
+    scoreboardRevealCount: integer("scoreboard_reveal_count").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
-});
+}, (table) => [
+  check("contests_scoreboard_reveal_count_check", sql`${table.scoreboardRevealCount} >= 0`),
+  check("contests_scoreboard_freeze_state_check", sql`(${table.scoreboardFreezeMode} = 'frozen' AND ${table.scoreboardFrozenAt} IS NOT NULL) OR (${table.scoreboardFreezeMode} <> 'frozen' AND ${table.scoreboardFrozenAt} IS NULL)`),
+]);
+
+export const contestAnnouncements = pgTable("contest_announcements", {
+  id: serial("id").primaryKey(),
+  contestId: integer("contest_id").notNull().references(() => contests.id, { onDelete: "cascade" }),
+  authorId: text("author_id").notNull().references(() => users.clerkId),
+  body: text("body").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [index("contest_announcements_order_idx").on(table.contestId, table.createdAt)]);
+
+export const contestClarifications = pgTable("contest_clarifications", {
+  id: serial("id").primaryKey(),
+  contestId: integer("contest_id").notNull().references(() => contests.id, { onDelete: "cascade" }),
+  authorId: text("author_id").notNull().references(() => users.clerkId),
+  question: text("question").notNull(),
+  answer: text("answer"),
+  visibility: clarificationVisibility("visibility").notNull().default("private"),
+  answeredBy: text("answered_by").references(() => users.clerkId),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  answeredAt: timestamp("answered_at", { withTimezone: true }),
+}, (table) => [
+  index("contest_clarifications_order_idx").on(table.contestId, table.createdAt),
+  check("contest_clarifications_public_answer_check", sql`${table.visibility} = 'private' OR ${table.answer} IS NOT NULL`),
+]);
 
 export const problemTestCases = pgTable(
   "problem_test_cases",
@@ -175,6 +219,14 @@ export const contestProblems = pgTable(
   ],
 );
 
+export const contestTeams = pgTable("contest_teams", {
+  id: serial("id").primaryKey(),
+  contestId: integer("contest_id").notNull().references(() => contests.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  joinCodeHash: text("join_code_hash").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [index("contest_teams_contest_idx").on(table.contestId)]);
+
 export const contestRegistrations = pgTable(
   "contest_registrations",
   {
@@ -184,6 +236,7 @@ export const contestRegistrations = pgTable(
     userId: text("user_id")
       .notNull()
       .references(() => users.clerkId, { onDelete: "cascade" }),
+    teamId: integer("team_id").references(() => contestTeams.id, { onDelete: "set null" }),
     registeredAt: timestamp("registered_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -192,6 +245,23 @@ export const contestRegistrations = pgTable(
     primaryKey({ columns: [table.contestId, table.userId] }),
   ],
 );
+
+export const contestVirtualRegistrations = pgTable("contest_virtual_registrations", {
+  contestId: integer("contest_id").notNull().references(() => contests.id, { onDelete: "cascade" }),
+  userId: text("user_id").notNull().references(() => users.clerkId, { onDelete: "cascade" }),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+}, (table) => [primaryKey({ columns: [table.contestId, table.userId] })]);
+
+export const adminAuditLogs = pgTable("admin_audit_logs", {
+  id: serial("id").primaryKey(),
+  actorId: text("actor_id").notNull(),
+  action: text("action").notNull(),
+  entityType: text("entity_type").notNull(),
+  entityId: text("entity_id"),
+  metadata: jsonb("metadata").$type<Record<string, string | number | boolean | null>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [index("admin_audit_logs_created_at_idx").on(table.createdAt)]);
 
 export const submissions = pgTable(
   "submissions",
@@ -204,6 +274,8 @@ export const submissions = pgTable(
       .notNull()
       .references(() => problems.id),
     contestId: integer("contest_id").references(() => contests.id),
+    teamId: integer("team_id").references(() => contestTeams.id, { onDelete: "set null" }),
+    participation: submissionParticipation("participation").notNull().default("official"),
     language: text("language").notNull(),
     code: text("code").notNull(),
     mode: submissionMode("mode").notNull().default("submit"),
@@ -321,6 +393,9 @@ export type NewContestProblem = typeof contestProblems.$inferInsert;
 
 export type ContestRegistration = typeof contestRegistrations.$inferSelect;
 export type NewContestRegistration = typeof contestRegistrations.$inferInsert;
+
+export type ContestTeam = typeof contestTeams.$inferSelect;
+export type NewContestTeam = typeof contestTeams.$inferInsert;
 
 export type Submission = typeof submissions.$inferSelect;
 export type NewSubmission = typeof submissions.$inferInsert;
