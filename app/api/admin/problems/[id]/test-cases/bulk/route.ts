@@ -5,6 +5,7 @@ import { contestProblems, contests, problemTestCases, problems } from "@/db/sche
 import { jsonError, requireSetter } from "@/app/api/admin/authz";
 import { MAX_TEST_CASE_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 import { parseTestCasesFromText } from "@/app/api/admin/problems/import/parser";
+import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -121,15 +122,24 @@ export async function POST(
   }
 
   // Insert all test cases
-  await db.insert(problemTestCases).values(
-    toInsert.map((c) => ({
-      problemId: problem.id,
-      input: c.input,
-      expectedOutput: c.expectedOutput,
-      isSample: c.isSample,
-      position: c.position,
-    })),
-  );
+  await db.transaction(async (tx) => {
+    await tx.insert(problemTestCases).values(
+      toInsert.map((c) => ({
+        problemId: problem.id,
+        input: c.input,
+        expectedOutput: c.expectedOutput,
+        isSample: c.isSample,
+        position: c.position,
+      })),
+    );
+    await recordAdminAuditEvent(tx, {
+      actorId: grant.userId,
+      action: "problem.test_cases_imported",
+      entityType: "problem",
+      entityId: problem.id,
+      metadata: { count: toInsert.length },
+    });
+  });
 
   // Return updated test cases
   const allCases = await db
