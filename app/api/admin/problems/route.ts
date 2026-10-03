@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { problems, problemTestCases } from "@/db/schema";
 import { ensureUserRow, jsonError, requireSetter } from "@/app/api/admin/authz";
+import {
+  DEFAULT_OUTPUT_TOLERANCE,
+  parseOutputComparator,
+  parseOutputTolerance,
+} from "@/app/api/admin/problems/comparator";
+import { MAX_PROBLEM_AUTHORING_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,13 +36,9 @@ export async function POST(req: NextRequest) {
     return jsonError("user not found or could not be synced", 400);
   }
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return jsonError("invalid json", 400);
-  }
-  const b = body as Record<string, unknown>;
+  const parsed = await readBoundedJsonObject(req, MAX_PROBLEM_AUTHORING_BODY_BYTES, "invalid json");
+  if (!parsed.ok) return parsed.response;
+  const b = parsed.value;
 
   const title = b.title;
   const statement = b.statement;
@@ -47,6 +49,9 @@ export async function POST(req: NextRequest) {
   const tagsRaw = b.tags;
   const timeRaw = b.timeLimitMs ?? b.time_limit_ms ?? b.timeLimit ?? b.time;
   const memoryRaw = b.memoryLimitMb ?? b.memory_limit_mb ?? b.memoryLimit ?? b.memory;
+  const comparatorRaw = b.outputComparator ?? "exact";
+  const absoluteToleranceRaw = b.absoluteTolerance ?? DEFAULT_OUTPUT_TOLERANCE;
+  const relativeToleranceRaw = b.relativeTolerance ?? DEFAULT_OUTPUT_TOLERANCE;
   const statusRaw = b.status;
 
   if (typeof title !== "string" || title.trim().length === 0) {
@@ -112,6 +117,13 @@ export async function POST(req: NextRequest) {
   if (!Number.isInteger(memoryLimitMb) || memoryLimitMb < 16 || memoryLimitMb > 2048) {
     return jsonError("memoryLimitMb must be between 16 and 2048", 400);
   }
+
+  const outputComparator = parseOutputComparator(comparatorRaw);
+  if (!outputComparator) return jsonError("outputComparator must be exact or float", 400);
+  const absoluteTolerance = parseOutputTolerance(absoluteToleranceRaw);
+  if (absoluteTolerance === null) return jsonError("absoluteTolerance must be between 0 and 1", 400);
+  const relativeTolerance = parseOutputTolerance(relativeToleranceRaw);
+  if (relativeTolerance === null) return jsonError("relativeTolerance must be between 0 and 1", 400);
 
   const explanationRaw = b.explanation;
   let explanation: string | null = null;
@@ -187,6 +199,9 @@ export async function POST(req: NextRequest) {
         tags,
         timeLimitMs,
         memoryLimitMb,
+        outputComparator,
+        absoluteTolerance,
+        relativeTolerance,
         status: initialStatus,
       })
       .returning({ id: problems.id });

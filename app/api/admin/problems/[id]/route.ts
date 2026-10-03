@@ -9,6 +9,8 @@ import {
   submissions,
 } from "@/db/schema";
 import { jsonError, requireAdmin, requireSetter } from "@/app/api/admin/authz";
+import { parseOutputComparator, parseOutputTolerance } from "@/app/api/admin/problems/comparator";
+import { MAX_PROBLEM_AUTHORING_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -71,6 +73,9 @@ export async function GET(
     tags: problem.tags,
     timeLimitMs: problem.timeLimitMs,
     memoryLimitMb: problem.memoryLimitMb,
+    outputComparator: problem.outputComparator,
+    absoluteTolerance: problem.absoluteTolerance,
+    relativeTolerance: problem.relativeTolerance,
     status: problem.status,
     testCases: cases.map((c) => ({
       id: c.id,
@@ -121,13 +126,9 @@ export async function PATCH(
     return jsonError("problem is locked while its contest is live (BR-08)", 403);
   }
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return jsonError("invalid json", 400);
-  }
-  const b = body as Record<string, unknown>;
+  const parsed = await readBoundedJsonObject(req, MAX_PROBLEM_AUTHORING_BODY_BYTES, "invalid json");
+  if (!parsed.ok) return parsed.response;
+  const b = parsed.value;
   const now = new Date();
   const patch: Partial<typeof problems.$inferInsert> = { updatedAt: now };
 
@@ -176,6 +177,22 @@ export async function PATCH(
     const n = parseBoundedInt(b.memoryLimitMb, 16, 2048);
     if (n === null) return jsonError("memoryLimitMb must be an integer 16..2048", 400);
     patch.memoryLimitMb = n;
+  }
+
+  if (b.outputComparator !== undefined) {
+    const comparator = parseOutputComparator(b.outputComparator);
+    if (!comparator) return jsonError("outputComparator must be exact or float", 400);
+    patch.outputComparator = comparator;
+  }
+  if (b.absoluteTolerance !== undefined) {
+    const tolerance = parseOutputTolerance(b.absoluteTolerance);
+    if (tolerance === null) return jsonError("absoluteTolerance must be between 0 and 1", 400);
+    patch.absoluteTolerance = tolerance;
+  }
+  if (b.relativeTolerance !== undefined) {
+    const tolerance = parseOutputTolerance(b.relativeTolerance);
+    if (tolerance === null) return jsonError("relativeTolerance must be between 0 and 1", 400);
+    patch.relativeTolerance = tolerance;
   }
 
   if (b.status !== undefined) {

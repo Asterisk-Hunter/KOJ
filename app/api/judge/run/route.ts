@@ -3,6 +3,8 @@ import { auth } from "@clerk/nextjs/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { users } from "@/db/schema";
+import { MAX_INTERACTIVE_RUN_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
+import { parseOutputComparator, parseOutputTolerance } from "@/app/api/admin/problems/comparator";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,6 +29,9 @@ interface SingleRunBody {
   cases?: Array<{ stdin: string; expectedOutput: string }>;
   timeLimitMs?: number;
   memoryMb?: number;
+  outputComparator?: unknown;
+  absoluteTolerance?: unknown;
+  relativeTolerance?: unknown;
 }
 
 // In-memory rate limiting map for interactive testing: user ID -> last run timestamp
@@ -73,14 +78,9 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return jsonError("invalid json", 400);
-  }
-
-  const b = body as Partial<SingleRunBody>;
+  const parsed = await readBoundedJsonObject(req, MAX_INTERACTIVE_RUN_BODY_BYTES, "invalid json");
+  if (!parsed.ok) return parsed.response;
+  const b = parsed.value as Partial<SingleRunBody>;
   const language = b.language;
   const code = b.code;
 
@@ -94,6 +94,13 @@ export async function POST(req: NextRequest) {
   if (typeof code !== "string" || code.trim().length === 0) {
     return jsonError("code must be non-empty", 400);
   }
+
+  const outputComparator = parseOutputComparator(b.outputComparator ?? "exact");
+  if (!outputComparator) return jsonError("outputComparator must be exact or float", 400);
+  const absoluteTolerance = parseOutputTolerance(b.absoluteTolerance ?? 0.000001);
+  if (absoluteTolerance === null) return jsonError("absoluteTolerance must be between 0 and 1", 400);
+  const relativeTolerance = parseOutputTolerance(b.relativeTolerance ?? 0.000001);
+  if (relativeTolerance === null) return jsonError("relativeTolerance must be between 0 and 1", 400);
 
   if (Buffer.byteLength(code, "utf8") > 100 * 1024) {
     return jsonError("code exceeds 100KB limit", 400);
@@ -167,6 +174,9 @@ export async function POST(req: NextRequest) {
         cases: judgeCases,
         time_limit_ms: timeLimitMs,
         memory_mb: memoryMb,
+        output_comparator: outputComparator,
+        absolute_tolerance: absoluteTolerance,
+        relative_tolerance: relativeTolerance,
       }),
       signal: AbortSignal.timeout(35000),
     });

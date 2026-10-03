@@ -1,5 +1,7 @@
 import {
   boolean,
+  check,
+  doublePrecision,
   index,
   integer,
   jsonb,
@@ -94,6 +96,9 @@ export const problems = pgTable("problems", {
     .default(sql`'{}'::text[]`),
   timeLimitMs: integer("time_limit_ms").notNull().default(1000),
   memoryLimitMb: integer("memory_limit_mb").notNull().default(256),
+  outputComparator: text("output_comparator").notNull().default("exact"),
+  absoluteTolerance: doublePrecision("absolute_tolerance").notNull().default(0.000001),
+  relativeTolerance: doublePrecision("relative_tolerance").notNull().default(0.000001),
   status: problemStatus("status").notNull().default("draft"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
@@ -101,7 +106,11 @@ export const problems = pgTable("problems", {
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
-});
+}, (table) => [
+  check("problems_output_comparator_check", sql`${table.outputComparator} IN ('exact', 'float')`),
+  check("problems_absolute_tolerance_check", sql`${table.absoluteTolerance} BETWEEN 0 AND 1`),
+  check("problems_relative_tolerance_check", sql`${table.relativeTolerance} BETWEEN 0 AND 1`),
+]);
 
 export const contests = pgTable("contests", {
   id: serial("id").primaryKey(),
