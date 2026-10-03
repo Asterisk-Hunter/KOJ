@@ -10,6 +10,8 @@ import {
 } from "@/db/schema";
 import { jsonError, requireAdmin, requireSetter } from "@/app/api/admin/authz";
 import { parseOutputComparator, parseOutputTolerance } from "@/app/api/admin/problems/comparator";
+import { parseCheckerCode } from "@/app/api/admin/problems/checker-code";
+import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
 import { MAX_PROBLEM_AUTHORING_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 
 export const runtime = "nodejs";
@@ -194,6 +196,13 @@ export async function PATCH(
     if (tolerance === null) return jsonError("relativeTolerance must be between 0 and 1", 400);
     patch.relativeTolerance = tolerance;
   }
+  if (b.checkerCode !== undefined) {
+    const checkerCode = parseCheckerCode(b.checkerCode);
+    if (!checkerCode.valid) {
+      return jsonError("checkerCode must be Python source no larger than 64 KiB", 400);
+    }
+    patch.checkerCode = checkerCode.checkerCode;
+  }
 
   if (b.status !== undefined) {
     if (typeof b.status !== "string") return jsonError("status must be a string", 400);
@@ -221,7 +230,16 @@ export async function PATCH(
     patch.status = to as "draft" | "published";
   }
 
-  await db.update(problems).set(patch).where(eq(problems.id, problem.id));
+  await db.transaction(async (tx) => {
+    await tx.update(problems).set(patch).where(eq(problems.id, problem.id));
+    await recordAdminAuditEvent(tx, {
+      actorId: grant.userId,
+      action: "problem.updated",
+      entityType: "problem",
+      entityId: problem.id,
+      metadata: { fields: Object.keys(patch).filter((field) => field !== "updatedAt").join(",") },
+    });
+  });
   return NextResponse.json({ id: problem.id, updated: true });
 }
 
@@ -252,7 +270,15 @@ export async function DELETE(
     return jsonError("cannot delete a problem with submissions", 409);
   }
 
-  await db.delete(problemTestCases).where(eq(problemTestCases.problemId, problem.id));
-  await db.delete(problems).where(eq(problems.id, problem.id));
+  await db.transaction(async (tx) => {
+    await tx.delete(problemTestCases).where(eq(problemTestCases.problemId, problem.id));
+    await tx.delete(problems).where(eq(problems.id, problem.id));
+    await recordAdminAuditEvent(tx, {
+      actorId: grant.userId,
+      action: "problem.deleted",
+      entityType: "problem",
+      entityId: problem.id,
+    });
+  });
   return NextResponse.json({ deleted: true });
 }

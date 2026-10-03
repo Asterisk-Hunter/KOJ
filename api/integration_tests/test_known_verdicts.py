@@ -76,3 +76,46 @@ def test_known_python_timeout_verdict():
     )
 
     assert response.status == "time_limit_exceeded"
+
+
+@pytest.mark.parametrize(
+    "solution,expected_status",
+    [("print(42)", "accepted"), ("print(41)", "wrong_answer")],
+)
+def test_python_special_checker_can_accept_multiple_answers(solution, expected_status):
+    checker_code = (
+        "import json, sys\n"
+        "case = json.load(sys.stdin)\n"
+        "answer = sum(map(int, case['input'].split()))\n"
+        "sys.exit(0 if case['actual_output'].strip() == str(answer) else 1)\n"
+    )
+    response = execute_judge(
+        JudgeRequest(
+            language="python",
+            code=solution,
+            cases=[JudgeCase(stdin="19 23\n", expected_stdout="not the answer", is_sample=True)],
+            time_limit_ms=2000,
+            memory_mb=256,
+            checker_code=checker_code,
+        )
+    )
+
+    assert response.status == expected_status
+    assert response.cases[0].passed is (expected_status == "accepted")
+
+
+def test_special_checker_failure_is_reported_as_infrastructure_error():
+    response = execute_judge(
+        JudgeRequest(
+            language="python",
+            code="print(42)",
+            cases=[JudgeCase(stdin="", expected_stdout="42\n", is_sample=False)],
+            time_limit_ms=2000,
+            memory_mb=256,
+            checker_code="raise RuntimeError('broken checker')",
+        )
+    )
+
+    assert response.status == "runtime_error"
+    assert response.infra_error is True
+    assert response.cases[0].stderr == ""
