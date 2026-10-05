@@ -444,6 +444,8 @@ export default function ProblemManagerSection({
                 type="number"
                 className={inputCls}
                 value={formData.memoryLimitMb ?? 256}
+                min={16}
+                max={1024}
                 onChange={(e) => handleProblemChange("memoryLimitMb", e.target.value)}
               />
             </div>

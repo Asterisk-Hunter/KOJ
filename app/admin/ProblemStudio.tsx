@@ -1033,6 +1033,8 @@ export default function ProblemStudio({ onProblemCreated, onCancel }: ProblemStu
                     <label className="block text-[11px] text-kjtext-muted uppercase mb-1">Memory Limit (MB)</label>
                     <input
                       type="number"
+                      min={16}
+                      max={1024}
                       value={form.memoryLimitMb}
                       onChange={(e) => setForm({ ...form, memoryLimitMb: e.target.value })}
                       className="w-full bg-kjbg border border-kjborder rounded px-3 py-2 text-sm text-kjtext focus:border-kjprimary focus:outline-none"

@@ -1,16 +1,19 @@
 import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contests, problemTestCases, problems } from "@/db/schema";
 import { jsonError, requireSetter } from "@/app/api/admin/authz";
 import { readBoundedJsonObject, MAX_TEST_CASE_BODY_BYTES } from "@/app/api/body-guard";
 import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
+import {
+  MAX_TEST_CASE_FILE_BYTES,
+  testCaseLimitMessage,
+  testCaseLimitViolation,
+} from "@/app/api/admin/problems/limits";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const MAX_FILE_BYTES = 10 * 1024 * 1024; // REQ-PROB-03
 
 async function findCase(problemId: number, caseIdRaw: string) {
   const caseId = Number(caseIdRaw);
@@ -96,7 +99,7 @@ async function handlePATCH(
     if (typeof b.input !== "string" || b.input.length === 0) {
       return jsonError("input must be non-empty", 400);
     }
-    if (Buffer.byteLength(b.input, "utf8") > MAX_FILE_BYTES) {
+    if (Buffer.byteLength(b.input, "utf8") > MAX_TEST_CASE_FILE_BYTES) {
       return jsonError("input exceeds 10MB (REQ-PROB-03)", 400);
     }
     patch.input = b.input;
@@ -105,7 +108,7 @@ async function handlePATCH(
     if (typeof b.expectedOutput !== "string" || b.expectedOutput.length === 0) {
       return jsonError("expectedOutput must be non-empty", 400);
     }
-    if (Buffer.byteLength(b.expectedOutput, "utf8") > MAX_FILE_BYTES) {
+    if (Buffer.byteLength(b.expectedOutput, "utf8") > MAX_TEST_CASE_FILE_BYTES) {
       return jsonError("expectedOutput exceeds 10MB (REQ-PROB-03)", 400);
     }
     patch.expectedOutput = b.expectedOutput;
@@ -121,8 +124,43 @@ async function handlePATCH(
     patch.position = b.position;
   }
 
-  await db.transaction(async (tx) => {
-    await tx.update(problemTestCases).set(patch).where(eq(problemTestCases.id, g.testCase.id));
+  const result = await db.transaction(async (tx) => {
+    const [lockedProblem] = await tx
+      .select({ id: problems.id })
+      .from(problems)
+      .where(and(eq(problems.id, g.problem?.id ?? -1), eq(problems.organizationId, grant.context.organizationId)))
+      .for("update");
+    if (!lockedProblem) return { ok: false as const, error: "problem not found", status: 404 as const };
+    const [currentCase] = await tx
+      .select({ input: problemTestCases.input, expectedOutput: problemTestCases.expectedOutput })
+      .from(problemTestCases)
+      .where(and(eq(problemTestCases.id, g.testCase.id), eq(problemTestCases.problemId, lockedProblem.id)))
+      .for("update");
+    if (!currentCase) return { ok: false as const, error: "test case not found", status: 404 as const };
+    if (patch.input !== undefined || patch.expectedOutput !== undefined) {
+      const [usage] = await tx
+        .select({
+          count: sql<number>`count(*)`.mapWith(Number),
+          bytes: sql<number>`COALESCE(sum(octet_length(${problemTestCases.input}) + octet_length(${problemTestCases.expectedOutput})), 0)`.mapWith(Number),
+        })
+        .from(problemTestCases)
+        .where(eq(problemTestCases.problemId, lockedProblem.id));
+      const replacement = {
+        input: patch.input ?? currentCase.input,
+        expectedOutput: patch.expectedOutput ?? currentCase.expectedOutput,
+      };
+      const violation = testCaseLimitViolation(
+        usage?.count ?? 0,
+        usage?.bytes ?? 0,
+        [replacement],
+        [currentCase],
+      );
+      if (violation) return { ok: false as const, error: testCaseLimitMessage(violation), status: 400 as const };
+    }
+    await tx.update(problemTestCases).set(patch).where(and(
+      eq(problemTestCases.id, g.testCase.id),
+      eq(problemTestCases.problemId, lockedProblem.id),
+    ));
     await recordAdminAuditEvent(tx, {
       organizationId: grant.context.organizationId,
       actorId: grant.userId,
@@ -131,7 +169,9 @@ async function handlePATCH(
       entityId: g.problem?.id,
       metadata: { fields: Object.keys(patch).join(",") },
     });
+    return { ok: true as const };
   });
+  if (!result.ok) return jsonError(result.error, result.status);
   return NextResponse.json({ id: g.testCase.id, updated: true });
 }
 
