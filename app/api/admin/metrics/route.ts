@@ -1,3 +1,4 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextResponse } from "next/server";
 import { and, asc, desc, eq, gte, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
@@ -11,7 +12,7 @@ export const dynamic = "force-dynamic";
  * Admin: judge + submission observability — verdict distribution
  * (all-time + last 24h), average judge latency, recent failures.
  */
-export async function GET() {
+async function handleGET() {
   const grant = await requireAdmin();
   if (!grant.ok) return grant.response;
 
@@ -195,3 +196,5 @@ export async function GET() {
     })),
   });
 }
+
+export const GET = withApiGuard(handleGET);

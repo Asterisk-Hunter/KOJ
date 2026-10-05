@@ -1,3 +1,4 @@
+import { withApiGuard } from "@/app/api/guard";
 import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/app/api/admin/authz";
@@ -67,10 +68,14 @@ async function handleRecovery(req: NextRequest, allowBody: boolean) {
   return NextResponse.json(result);
 }
 
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
+  if (!cronAuthorized(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   return handleRecovery(req, false);
 }
 
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   return handleRecovery(req, true);
 }
+
+export const GET = withApiGuard(handleGET);
+export const POST = withApiGuard(handlePOST);

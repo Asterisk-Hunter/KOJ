@@ -1,4 +1,4 @@
-import { and, eq, inArray, lte, not } from "drizzle-orm";
+import { and, asc, eq, inArray, lte, not } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contests, problems, type Contest } from "@/db/schema";
 
@@ -153,30 +153,31 @@ export async function revertLinkedProblems(
  *
  * @returns number of contests transitioned
  */
-export async function settleExpiredContests(now: Date = new Date()): Promise<number> {
+export async function settleExpiredContests(organizationId: number, now: Date = new Date()): Promise<number> {
   return db.transaction(async (tx) => {
     const expired = await tx
+      .select({ id: contests.id })
+      .from(contests)
+      .where(and(
+        eq(contests.organizationId, organizationId),
+        eq(contests.status, "live"),
+        lte(contests.endsAt, now),
+      ))
+      .orderBy(asc(contests.endsAt), asc(contests.id))
+      .limit(100)
+      .for("update", { skipLocked: true });
+    if (expired.length === 0) return 0;
+    const expiredIds = expired.map((contest) => contest.id);
+    const updated = await tx
       .update(contests)
       .set({ status: "ended", updatedAt: now })
-      .where(and(eq(contests.status, "live"), lte(contests.endsAt, now)))
+      .where(and(
+        eq(contests.organizationId, organizationId),
+        eq(contests.status, "live"),
+        inArray(contests.id, expiredIds),
+      ))
       .returning({ id: contests.id });
-    if (expired.length === 0) return 0;
-    const links = await tx
-      .select({ problemId: contestProblems.problemId })
-      .from(contestProblems)
-      .where(
-        inArray(
-          contestProblems.contestId,
-          expired.map((e) => e.id),
-        ),
-      );
-    const ids = [...new Set(links.map((l) => l.problemId))];
-    if (ids.length > 0) {
-      await tx
-        .update(problems)
-        .set({ status: "published", updatedAt: now })
-        .where(and(inArray(problems.id, ids), eq(problems.status, "contest_active")));
-    }
-    return expired.length;
+    await releaseLinkedProblems(updated.map((contest) => contest.id), now, tx);
+    return updated.length;
   });
 }

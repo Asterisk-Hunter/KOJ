@@ -1,5 +1,6 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import {
   contestProblems,
@@ -8,7 +9,7 @@ import {
   problems,
   submissions,
 } from "@/db/schema";
-import { jsonError, requireAdmin, requireSetter } from "@/app/api/admin/authz";
+import { jsonError, requireOrganizationAdmin, requireSetter } from "@/app/api/admin/authz";
 import { parseOutputComparator, parseOutputTolerance } from "@/app/api/admin/problems/comparator";
 import { parseCheckerCode } from "@/app/api/admin/problems/checker-code";
 import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
@@ -17,33 +18,42 @@ import { MAX_PROBLEM_AUTHORING_BODY_BYTES, readBoundedJsonObject } from "@/app/a
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-async function findProblem(idRaw: string) {
+async function findProblem(idRaw: string, organizationId: number) {
   const numeric = Number(idRaw);
   if (!Number.isInteger(numeric) || numeric <= 0) return null;
-  const rows = await db.select().from(problems).where(eq(problems.id, numeric)).limit(1);
+  const rows = await db.select().from(problems).where(and(
+    eq(problems.id, numeric),
+    eq(problems.organizationId, organizationId),
+  )).limit(1);
   return rows.length > 0 ? rows[0] : null;
 }
 
 /** True when the problem is locked: `contest_active` with a `live` contest running. */
-async function isLockedByLiveContest(problemId: number): Promise<boolean> {
+async function isLockedByLiveContest(problemId: number, organizationId: number): Promise<boolean> {
   const links = await db
     .select({ status: contests.status })
     .from(contestProblems)
     .innerJoin(contests, eq(contestProblems.contestId, contests.id))
-    .where(eq(contestProblems.problemId, problemId));
+    .where(and(
+      eq(contestProblems.problemId, problemId),
+      eq(contestProblems.organizationId, organizationId),
+    ));
   return links.some((l) => l.status === "live");
 }
 
-async function linkedContestCount(problemId: number): Promise<number> {
+async function linkedContestCount(problemId: number, organizationId: number): Promise<number> {
   const links = await db
     .select({ contestId: contestProblems.contestId })
     .from(contestProblems)
-    .where(eq(contestProblems.problemId, problemId));
+    .where(and(
+      eq(contestProblems.problemId, problemId),
+      eq(contestProblems.organizationId, organizationId),
+    ));
   return links.length;
 }
 
 /** Setter+: full problem with ordered test cases (for edit UIs). */
-export async function GET(
+async function handleGET(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
@@ -51,7 +61,7 @@ export async function GET(
   if (!grant.ok) return grant.response;
 
   const { id: idRaw } = await ctx.params;
-  const problem = await findProblem(idRaw);
+  const problem = await findProblem(idRaw, grant.context.organizationId);
   if (!problem) return jsonError("problem not found", 404);
   if (grant.dbRole !== "admin" && problem.authorId !== grant.userId) {
     return jsonError("forbidden", 403);
@@ -110,7 +120,7 @@ function parseBoundedInt(v: unknown, min: number, max: number): number | null {
  * Status may move draft<->published directly; `contest_active` is owned
  * by the contest lifecycle.
  */
-export async function PATCH(
+async function handlePATCH(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
@@ -118,13 +128,13 @@ export async function PATCH(
   if (!grant.ok) return grant.response;
 
   const { id: idRaw } = await ctx.params;
-  const problem = await findProblem(idRaw);
+  const problem = await findProblem(idRaw, grant.context.organizationId);
   if (!problem) return jsonError("problem not found", 404);
   if (grant.dbRole !== "admin" && problem.authorId !== grant.userId) {
     return jsonError("forbidden", 403);
   }
 
-  if (problem.status === "contest_active" && (await isLockedByLiveContest(problem.id))) {
+  if (problem.status === "contest_active" && (await isLockedByLiveContest(problem.id, grant.context.organizationId))) {
     return jsonError("problem is locked while its contest is live (BR-08)", 403);
   }
 
@@ -231,8 +241,12 @@ export async function PATCH(
   }
 
   await db.transaction(async (tx) => {
-    await tx.update(problems).set(patch).where(eq(problems.id, problem.id));
+    await tx.update(problems).set(patch).where(and(
+      eq(problems.id, problem.id),
+      eq(problems.organizationId, grant.context.organizationId),
+    ));
     await recordAdminAuditEvent(tx, {
+      organizationId: grant.context.organizationId,
       actorId: grant.userId,
       action: "problem.updated",
       entityType: "problem",
@@ -247,18 +261,18 @@ export async function PATCH(
  * Admin: delete a problem. Refused when the problem is linked to any
  * contest or has any submissions (preserves standings/history).
  */
-export async function DELETE(
+async function handleDELETE(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
-  const grant = await requireAdmin();
+  const grant = await requireOrganizationAdmin();
   if (!grant.ok) return grant.response;
 
   const { id: idRaw } = await ctx.params;
-  const problem = await findProblem(idRaw);
+  const problem = await findProblem(idRaw, grant.context.organizationId);
   if (!problem) return jsonError("problem not found", 404);
 
-  if ((await linkedContestCount(problem.id)) > 0) {
+  if ((await linkedContestCount(problem.id, grant.context.organizationId)) > 0) {
     return jsonError("cannot delete a problem linked to a contest", 409);
   }
   const subRows = await db
@@ -272,8 +286,12 @@ export async function DELETE(
 
   await db.transaction(async (tx) => {
     await tx.delete(problemTestCases).where(eq(problemTestCases.problemId, problem.id));
-    await tx.delete(problems).where(eq(problems.id, problem.id));
+    await tx.delete(problems).where(and(
+      eq(problems.id, problem.id),
+      eq(problems.organizationId, grant.context.organizationId),
+    ));
     await recordAdminAuditEvent(tx, {
+      organizationId: grant.context.organizationId,
       actorId: grant.userId,
       action: "problem.deleted",
       entityType: "problem",
@@ -282,3 +300,7 @@ export async function DELETE(
   });
   return NextResponse.json({ deleted: true });
 }
+
+export const GET = withApiGuard(handleGET);
+export const PATCH = withApiGuard(handlePATCH);
+export const DELETE = withApiGuard(handleDELETE);

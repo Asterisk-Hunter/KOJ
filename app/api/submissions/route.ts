@@ -1,6 +1,7 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
 import { auth, clerkClient } from "@clerk/nextjs/server";
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   contestProblems,
@@ -16,6 +17,8 @@ import {
 import { settleExpiredContests } from "@/app/api/contests/lifecycle";
 import { isVirtualAttemptActive } from "@/app/api/contests/participation-policy";
 import { readBoundedJsonObject, MAX_SUBMISSION_BODY_BYTES } from "@/app/api/body-guard";
+import { resolveOrganizationContext } from "@/lib/organizations";
+import { getQueueAdmissionDenial } from "@/app/api/submissions/queue-admission";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,11 +44,18 @@ class RateLimited {
 
 class VirtualParticipationExpired {}
 
-export async function POST(req: NextRequest) {
+class QueueAdmissionLimited {
+  constructor(readonly scope: "global" | "organization" | "user", readonly status: 429 | 503, readonly retryAfter: number) {}
+}
+
+async function handlePOST(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) {
     return jsonError("unauthorized", 401);
   }
+  const organization = await resolveOrganizationContext(userId);
+  if (!organization) return jsonError("organization not found", 404);
+  if (organization.suspended) return jsonError("account suspended", 403);
 
   // Bounded body: 413 before parsing when the payload exceeds the cap
   // (code limit is 100KB; the cap leaves room for JSON overhead).
@@ -108,13 +118,13 @@ export async function POST(req: NextRequest) {
   let virtualEndsAt: Date | null = null;
 
   // Settle past-due live contests before enforcing contest windows.
-  await settleExpiredContests();
+  await settleExpiredContests(organization.organizationId);
 
   // Load problem
   const problemRows = await db
     .select()
     .from(problems)
-    .where(eq(problems.id, problemId))
+    .where(and(eq(problems.id, problemId), eq(problems.organizationId, organization.organizationId)))
     .limit(1);
   if (problemRows.length === 0) {
     return jsonError("problem not found", 404);
@@ -126,7 +136,7 @@ export async function POST(req: NextRequest) {
     const contestRows = await db
       .select()
       .from(contests)
-      .where(eq(contests.id, effectiveContestId))
+      .where(and(eq(contests.id, effectiveContestId), eq(contests.organizationId, organization.organizationId)))
       .limit(1);
     if (contestRows.length === 0) {
       return jsonError("contest not found", 403);
@@ -240,6 +250,17 @@ export async function POST(req: NextRequest) {
   }
   try {
     submissionId = await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('koj:queue-admission'), 0)`);
+      const [activeCounts] = await tx
+        .select({
+          globalActive: sql<number>`count(*) FILTER (WHERE ${inArray(judgeJobs.status, ["queued", "leased"])})`.mapWith(Number),
+          organizationActive: sql<number>`count(*) FILTER (WHERE ${inArray(judgeJobs.status, ["queued", "leased"])} AND ${eq(submissions.organizationId, organization.organizationId)})`.mapWith(Number),
+          userActive: sql<number>`count(*) FILTER (WHERE ${inArray(judgeJobs.status, ["queued", "leased"])} AND ${eq(submissions.userId, userId)})`.mapWith(Number),
+        })
+        .from(judgeJobs)
+        .innerJoin(submissions, eq(judgeJobs.submissionId, submissions.id));
+      const denial = getQueueAdmissionDenial(activeCounts, 1);
+      if (denial) throw new QueueAdmissionLimited(denial.scope, denial.status, denial.retryAfter);
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${userId}), ${problemId})`);
       const recentRows = await tx
         .select({ submittedAt: submissions.submittedAt })
@@ -259,6 +280,7 @@ export async function POST(req: NextRequest) {
       const inserted = await tx
         .insert(submissions)
         .values({
+          organizationId: organization.organizationId,
           userId,
           problemId,
           contestId: effectiveContestId,
@@ -281,6 +303,17 @@ export async function POST(req: NextRequest) {
         { status: 429, headers: { "Retry-After": String(e.retryAfter) } },
       );
     }
+    if (e instanceof QueueAdmissionLimited) {
+      const message = e.scope === "global"
+        ? "judge queue is at capacity; try again shortly"
+        : e.scope === "organization"
+          ? "organization judge queue is at capacity; try again shortly"
+          : "you already have the maximum number of active submissions";
+      return NextResponse.json(
+        { error: message },
+        { status: e.status, headers: { "Retry-After": String(e.retryAfter) } },
+      );
+    }
     if (e instanceof VirtualParticipationExpired) {
       return jsonError("virtual participation time expired", 403);
     }
@@ -293,11 +326,14 @@ export async function POST(req: NextRequest) {
   );
 }
 
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) {
     return jsonError("unauthorized", 401);
   }
+  const organization = await resolveOrganizationContext(userId);
+  if (!organization) return jsonError("organization not found", 404);
+  if (organization.suspended) return jsonError("account suspended", 403);
 
   const url = req.nextUrl;
   const problemIdRaw = url.searchParams.get("problemId");
@@ -321,7 +357,10 @@ export async function GET(req: NextRequest) {
     contestId = cid;
   }
 
-  const conditions = [eq(submissions.userId, userId)];
+  const conditions = [
+    eq(submissions.organizationId, organization.organizationId),
+    eq(submissions.userId, userId),
+  ];
   if (problemId !== undefined) {
     conditions.push(eq(submissions.problemId, problemId));
   }
@@ -363,3 +402,6 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json(result);
 }
+
+export const POST = withApiGuard(handlePOST);
+export const GET = withApiGuard(handleGET);

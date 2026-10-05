@@ -1,10 +1,7 @@
 import { auth } from "@clerk/nextjs/server";
-import { eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import ProblemCreateClient from "@/app/problems/create/ProblemCreateClient";
-import { ensureUserRow } from "@/app/api/admin/authz";
-import { db } from "@/db";
-import { users } from "@/db/schema";
+import { requireOrganizationRole } from "@/lib/organizations";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,24 +12,8 @@ export default async function ProblemCreatePage() {
     redirect(`/sign-in?redirect_url=${encodeURIComponent("/problems/create")}`);
   }
 
-  let user = await db
-    .select({ role: users.role, suspended: users.suspended })
-    .from(users)
-    .where(eq(users.clerkId, userId))
-    .limit(1)
-    .then((rows) => rows[0] ?? null);
-
-  if (user === null) {
-    await ensureUserRow(userId);
-    user = await db
-      .select({ role: users.role, suspended: users.suspended })
-      .from(users)
-      .where(eq(users.clerkId, userId))
-      .limit(1)
-      .then((rows) => rows[0] ?? null);
-  }
-
-  if (user?.suspended || (user?.role !== "admin" && user?.role !== "setter")) {
+  const grant = await requireOrganizationRole(["admin", "setter"]);
+  if (!grant.ok) {
     return (
       <main className="mx-auto max-w-3xl px-4 py-16 text-center font-mono">
         <p className="text-red-300">403 · authoring access required</p>

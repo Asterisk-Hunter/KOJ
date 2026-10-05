@@ -1,3 +1,4 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
@@ -29,6 +30,7 @@ async function guard(
   caseIdRaw: string,
   userId: string,
   dbRole: string | null,
+  organizationId: number,
 ) {
   const problemId = Number(problemIdRaw);
   if (!Number.isInteger(problemId) || problemId <= 0) {
@@ -37,7 +39,10 @@ async function guard(
   const problemRows = await db
     .select()
     .from(problems)
-    .where(eq(problems.id, problemId))
+    .where(and(
+      eq(problems.id, problemId),
+      eq(problems.organizationId, organizationId),
+    ))
     .limit(1);
   if (problemRows.length === 0) {
     return { error: jsonError("problem not found", 404), problem: null, testCase: null };
@@ -54,7 +59,10 @@ async function guard(
     .select({ status: contests.status })
     .from(contestProblems)
     .innerJoin(contests, eq(contestProblems.contestId, contests.id))
-    .where(eq(contestProblems.problemId, problem.id));
+    .where(and(
+      eq(contestProblems.problemId, problem.id),
+      eq(contestProblems.organizationId, organizationId),
+    ));
   if (links.some((l) => l.status === "live")) {
     return {
       error: jsonError("test cases are locked while the contest is live", 403),
@@ -66,7 +74,7 @@ async function guard(
 }
 
 /** Setter+: edit one test case. */
-export async function PATCH(
+async function handlePATCH(
   req: NextRequest,
   ctx: { params: Promise<{ id: string; caseId: string }> },
 ) {
@@ -74,7 +82,7 @@ export async function PATCH(
   if (!grant.ok) return grant.response;
 
   const { id: idRaw, caseId: caseIdRaw } = await ctx.params;
-  const g = await guard(idRaw, caseIdRaw, grant.userId, grant.dbRole);
+  const g = await guard(idRaw, caseIdRaw, grant.userId, grant.dbRole, grant.context.organizationId);
   if (g.error || !g.testCase) return g.error ?? jsonError("test case not found", 404);
 
   // Bounded body: 413 before parsing (fields cap at 10MB each; the cap
@@ -116,6 +124,7 @@ export async function PATCH(
   await db.transaction(async (tx) => {
     await tx.update(problemTestCases).set(patch).where(eq(problemTestCases.id, g.testCase.id));
     await recordAdminAuditEvent(tx, {
+      organizationId: grant.context.organizationId,
       actorId: grant.userId,
       action: "problem.test_case_updated",
       entityType: "problem",
@@ -127,7 +136,7 @@ export async function PATCH(
 }
 
 /** Setter+: delete one test case. */
-export async function DELETE(
+async function handleDELETE(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string; caseId: string }> },
 ) {
@@ -135,12 +144,13 @@ export async function DELETE(
   if (!grant.ok) return grant.response;
 
   const { id: idRaw, caseId: caseIdRaw } = await ctx.params;
-  const g = await guard(idRaw, caseIdRaw, grant.userId, grant.dbRole);
+  const g = await guard(idRaw, caseIdRaw, grant.userId, grant.dbRole, grant.context.organizationId);
   if (g.error || !g.testCase) return g.error ?? jsonError("test case not found", 404);
 
   await db.transaction(async (tx) => {
     await tx.delete(problemTestCases).where(eq(problemTestCases.id, g.testCase.id));
     await recordAdminAuditEvent(tx, {
+      organizationId: grant.context.organizationId,
       actorId: grant.userId,
       action: "problem.test_case_deleted",
       entityType: "problem",
@@ -149,3 +159,6 @@ export async function DELETE(
   });
   return NextResponse.json({ deleted: true });
 }
+
+export const PATCH = withApiGuard(handlePATCH);
+export const DELETE = withApiGuard(handleDELETE);

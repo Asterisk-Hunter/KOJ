@@ -1,3 +1,4 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
@@ -5,6 +6,8 @@ import { contestProblems, contestTeams, contestVirtualRegistrations, contests, p
 import { getRedis } from "@/lib/redis";
 import { countWrongBefore, penaltyMinutesForSolve } from "@/lib/scoring";
 import { getScoreboardFreezeAt, selectRevealedSubmissionIds } from "@/app/api/contests/scoreboard-policy";
+import { auth } from "@clerk/nextjs/server";
+import { resolveOrganizationContext } from "@/lib/organizations";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,6 +17,7 @@ function jsonError(message: string, status: number) {
 }
 
 const STANDINGS_CACHE_TTL = 8; // seconds — short enough for live contests
+const MAX_STANDINGS_ROWS = 50_000;
 
 // Standard ICPC / DOMjudge balloon color palette
 export const BALLOON_PALETTE = [
@@ -50,7 +54,10 @@ type StandingRow = {
   perProblem: PerProblemStanding[];
 };
 
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
+  const { userId } = await auth();
+  const organization = await resolveOrganizationContext(userId);
+  if (!organization) return jsonError("organization not found", 404);
   const contestIdRaw = req.nextUrl.searchParams.get("contestId");
   if (!contestIdRaw) {
     return jsonError("contestId is required", 400);
@@ -66,7 +73,7 @@ export async function GET(req: NextRequest) {
   const contestRows = await db
     .select()
     .from(contests)
-    .where(eq(contests.id, contestId))
+    .where(and(eq(contests.id, contestId), eq(contests.organizationId, organization.organizationId)))
     .limit(1);
   if (contestRows.length === 0) {
     return jsonError("contest not found", 404);
@@ -81,7 +88,7 @@ export async function GET(req: NextRequest) {
   }
 
   const redis = getRedis();
-  const cacheKey = `standings:${contestId}:${virtual ? "virtual" : "official"}`;
+  const cacheKey = `standings:${organization.organizationId}:${contestId}:${virtual ? "virtual" : "official"}`;
   if (redis) {
     try {
       const cached = await redis.get(cacheKey);
@@ -100,7 +107,7 @@ export async function GET(req: NextRequest) {
     })
     .from(contestProblems)
     .innerJoin(problems, eq(contestProblems.problemId, problems.id))
-    .where(eq(contestProblems.contestId, contestId))
+    .where(and(eq(contestProblems.contestId, contestId), eq(contestProblems.organizationId, organization.organizationId)))
     .orderBy(asc(contestProblems.position));
 
   if (cpRows.length === 0) {
@@ -124,13 +131,33 @@ export async function GET(req: NextRequest) {
 
   const virtualRegistrations = virtual
     ? await db.select({ userId: contestVirtualRegistrations.userId, startedAt: contestVirtualRegistrations.startedAt })
-      .from(contestVirtualRegistrations).where(eq(contestVirtualRegistrations.contestId, contestId))
+      .from(contestVirtualRegistrations).where(eq(contestVirtualRegistrations.contestId, contestId)).limit(MAX_STANDINGS_ROWS + 1)
     : [];
+  if (virtualRegistrations.length > MAX_STANDINGS_ROWS) {
+    return NextResponse.json({ error: "standings exceed the supported contest size" }, { status: 503 });
+  }
   const virtualStartByUser = new Map(virtualRegistrations.map((registration) => [registration.userId, registration.startedAt.getTime()]));
-  const allSubmissionRows = await db
-    .select()
+  const boundedSubmissionRows = await db
+    .select({
+      id: submissions.id,
+      userId: submissions.userId,
+      problemId: submissions.problemId,
+      teamId: submissions.teamId,
+      status: submissions.status,
+      submittedAt: submissions.submittedAt,
+    })
     .from(submissions)
-    .where(and(eq(submissions.contestId, contestId), eq(submissions.mode, "submit"), eq(submissions.participation, virtual ? "virtual" : "official")));
+    .where(and(
+      eq(submissions.organizationId, organization.organizationId),
+      eq(submissions.contestId, contestId),
+      eq(submissions.mode, "submit"),
+      eq(submissions.participation, virtual ? "virtual" : "official"),
+    ))
+    .limit(MAX_STANDINGS_ROWS + 1);
+  if (boundedSubmissionRows.length > MAX_STANDINGS_ROWS) {
+    return NextResponse.json({ error: "standings exceed the supported contest size" }, { status: 503 });
+  }
+  const allSubmissionRows = boundedSubmissionRows;
 
   const freezeAt = getScoreboardFreezeAt(
     contest.scoreboardFreezeMode,
@@ -159,7 +186,7 @@ export async function GET(req: NextRequest) {
   const userMap = new Map<string, string>();
   if (submittedUserIds.length > 0) {
     const userRows = await db
-      .select()
+      .select({ clerkId: users.clerkId, username: users.username })
       .from(users)
       .where(inArray(users.clerkId, submittedUserIds));
     for (const u of userRows) {
@@ -409,7 +436,6 @@ export async function GET(req: NextRequest) {
     summary: problemSummary,
     rows: standings.map((r) => ({
       rank: r.rank,
-      userId: r.userId,
       username: r.username,
       solvedCount: r.solvedCount,
       penalty: r.penalty,
@@ -437,3 +463,5 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json(responsePayload);
 }
+
+export const GET = withApiGuard(handleGET);

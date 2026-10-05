@@ -1,8 +1,9 @@
+import { withApiGuard } from "@/app/api/guard";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { problems, submissions, users } from "@/db/schema";
-import { requireAdmin } from "@/app/api/admin/authz";
+import { requireOrganizationAdmin } from "@/app/api/admin/authz";
 import { findSimilarSubmissions, type SimilarityDocument } from "./similarity";
 
 export const runtime = "nodejs";
@@ -11,8 +12,8 @@ export const dynamic = "force-dynamic";
 const MAX_CANDIDATES = 120;
 const MAX_CODE_CHARS = 50_000;
 
-export async function GET(request: NextRequest) {
-  const grant = await requireAdmin();
+async function handleGET(request: NextRequest) {
+  const grant = await requireOrganizationAdmin();
   if (!grant.ok) return grant.response;
 
   const problemIdText = request.nextUrl.searchParams.get("problemId");
@@ -24,7 +25,10 @@ export async function GET(request: NextRequest) {
   const problemRows = await db
     .select({ id: problems.id, title: problems.title })
     .from(problems)
-    .where(eq(problems.id, problemId))
+    .where(and(
+      eq(problems.id, problemId),
+      eq(problems.organizationId, grant.context.organizationId),
+    ))
     .limit(1);
   const problem = problemRows[0];
   if (!problem) return NextResponse.json({ error: "problem not found" }, { status: 404 });
@@ -40,7 +44,11 @@ export async function GET(request: NextRequest) {
     })
     .from(submissions)
     .leftJoin(users, eq(submissions.userId, users.clerkId))
-    .where(and(eq(submissions.problemId, problemId), sql`${submissions.status} <> 'pending' AND ${submissions.status} <> 'running'`))
+    .where(and(
+      eq(submissions.organizationId, grant.context.organizationId),
+      eq(submissions.problemId, problemId),
+      sql`${submissions.status} <> 'pending' AND ${submissions.status} <> 'running'`,
+    ))
     .orderBy(desc(submissions.submittedAt))
     .limit(MAX_CANDIDATES);
 
@@ -69,3 +77,5 @@ export async function GET(request: NextRequest) {
     advisory: "Similarity is a review lead, not proof of misconduct. Inspect work and context before taking action.",
   });
 }
+
+export const GET = withApiGuard(handleGET);

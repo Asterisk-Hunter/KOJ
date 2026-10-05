@@ -1,5 +1,6 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { contests, contestAnnouncements } from "@/db/schema";
 import { ensureUserRow, jsonError, requireContestManager } from "@/app/api/admin/authz";
@@ -9,12 +10,15 @@ import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+async function handlePOST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const grant = await requireContestManager();
   if (!grant.ok) return grant.response;
   const id = Number((await ctx.params).id);
   if (!Number.isInteger(id) || id <= 0) return jsonError("invalid contest id", 400);
-  const [contest] = await db.select({ id: contests.id }).from(contests).where(eq(contests.id, id)).limit(1);
+  const [contest] = await db.select({ id: contests.id }).from(contests).where(and(
+    eq(contests.id, id),
+    eq(contests.organizationId, grant.context.organizationId),
+  )).limit(1);
   if (!contest) return jsonError("contest not found", 404);
   const parsed = await readBoundedJsonObject(req, MAX_CONTEST_REGISTRATION_BODY_BYTES);
   if (!parsed.ok) return parsed.response;
@@ -25,6 +29,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const [announcement] = await tx.insert(contestAnnouncements).values({ contestId: id, authorId: grant.userId, body: body.trim() })
       .returning({ id: contestAnnouncements.id });
     await recordAdminAuditEvent(tx, {
+      organizationId: grant.context.organizationId,
       actorId: grant.userId,
       action: "contest.announcement_created",
       entityType: "contest_announcement",
@@ -35,3 +40,5 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   });
   return NextResponse.json({ id: created.id }, { status: 201 });
 }
+
+export const POST = withApiGuard(handlePOST);

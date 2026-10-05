@@ -1,10 +1,12 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { contestProblems, contestRegistrations, contests, problems, users } from "@/db/schema";
+import { contestProblems, contestRegistrations, contests, problems } from "@/db/schema";
 import { MAX_INTERACTIVE_RUN_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 import { parseOutputComparator, parseOutputTolerance } from "@/app/api/admin/problems/comparator";
+import { resolveOrganizationContext } from "@/lib/organizations";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,22 +46,16 @@ function jsonError(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
 }
 
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) {
     return jsonError("unauthorized", 401);
   }
+  const organization = await resolveOrganizationContext(userId);
+  if (!organization) return jsonError("organization not found", 404);
+  if (organization.suspended) return jsonError("account suspended", 403);
 
   // Security check: Verify account is not suspended
-  const suspensionRows = await db
-    .select({ suspended: users.suspended })
-    .from(users)
-    .where(eq(users.clerkId, userId))
-    .limit(1);
-  if (suspensionRows.length > 0 && suspensionRows[0].suspended) {
-    return jsonError("account suspended", 403);
-  }
-
   // Rate limiting check
   const now = Date.now();
   const lastRun = recentRuns.get(userId);
@@ -118,7 +114,10 @@ export async function POST(req: NextRequest) {
         checkerCode: problems.checkerCode,
       })
       .from(problems)
-      .where(eq(problems.id, b.problemId))
+      .where(and(
+        eq(problems.id, b.problemId),
+        eq(problems.organizationId, organization.organizationId),
+      ))
       .limit(1);
     const problem = problemRows[0];
     if (!problem || problem.status === "draft") return jsonError("problem not found", 404);
@@ -127,15 +126,19 @@ export async function POST(req: NextRequest) {
         return jsonError("contestId is required for contest problems", 400);
       }
       const contestRows = await db
-        .select({ status: contests.status, startsAt: contests.startsAt })
+        .select({ status: contests.status, startsAt: contests.startsAt, endsAt: contests.endsAt })
         .from(contests)
-        .where(eq(contests.id, b.contestId))
+        .where(and(
+          eq(contests.id, b.contestId),
+          eq(contests.organizationId, organization.organizationId),
+        ))
         .limit(1);
       const contest = contestRows[0];
       if (
         !contest ||
         contest.status !== "live" ||
-        Date.now() < new Date(contest.startsAt).getTime()
+        Date.now() < new Date(contest.startsAt).getTime() ||
+        Date.now() >= contest.endsAt.getTime()
       ) {
         return jsonError("contest is not available", 403);
       }
@@ -157,6 +160,7 @@ export async function POST(req: NextRequest) {
           and(
             eq(contestProblems.contestId, b.contestId),
             eq(contestProblems.problemId, b.problemId),
+            eq(contestProblems.organizationId, organization.organizationId),
           ),
         )
         .limit(1);
@@ -249,8 +253,7 @@ export async function POST(req: NextRequest) {
     });
 
     if (!res.ok) {
-      const errText = await res.text().catch(() => "");
-      return jsonError(`Judge error (${res.status}): ${errText.slice(0, 200)}`, 502);
+      return jsonError("judge execution failed", 502);
     }
 
     type FastApiCaseResult = {
@@ -263,6 +266,7 @@ export async function POST(req: NextRequest) {
     };
 
     type FastApiJudgeResponse = {
+      infra_error?: boolean;
       status: string;
       passed_tests: number;
       total_tests: number;
@@ -273,6 +277,7 @@ export async function POST(req: NextRequest) {
     };
 
     const judgeData = (await res.json()) as FastApiJudgeResponse;
+    if (judgeData.infra_error) return jsonError("judge service temporarily unavailable", 503);
 
     // If this was a custom single run without an expected output specified,
     // don't treat non-matching output as wrong_answer:
@@ -313,8 +318,9 @@ export async function POST(req: NextRequest) {
       errorMessage: judgeData.error_message ?? null,
       cases: formattedCases,
     });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "judge execution failed";
-    return jsonError(`Judge service unavailable: ${msg}`, 502);
+  } catch {
+    return jsonError("judge service unavailable", 502);
   }
 }
+
+export const POST = withApiGuard(handlePOST);

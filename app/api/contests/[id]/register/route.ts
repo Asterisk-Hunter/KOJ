@@ -1,3 +1,4 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
 import { auth, clerkClient } from "@clerk/nextjs/server";
 import { randomBytes } from "node:crypto";
@@ -8,6 +9,7 @@ import { settleExpiredContests, isRegistrationOpen, contestRequiresInvite } from
 import { hashInviteCode, verifyInviteCode } from "@/app/api/contests/invite-code";
 import { teamHasCapacity } from "@/app/api/contests/participation-policy";
 import { MAX_CONTEST_REGISTRATION_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
+import { resolveOrganizationContext } from "@/lib/organizations";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,30 +18,39 @@ function jsonError(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
 }
 
-async function findContest(idRaw: string) {
+async function findContest(idRaw: string, organizationId: number) {
   const numeric = Number(idRaw);
   const isNumeric = Number.isInteger(numeric) && numeric > 0 && String(numeric) === idRaw;
   if (isNumeric) {
-    const rows = await db.select().from(contests).where(eq(contests.id, numeric)).limit(1);
+    const rows = await db.select().from(contests).where(and(
+      eq(contests.id, numeric),
+      eq(contests.organizationId, organizationId),
+    )).limit(1);
     if (rows.length > 0) return rows[0];
   }
-  const slugRows = await db.select().from(contests).where(eq(contests.slug, idRaw)).limit(1);
+  const slugRows = await db.select().from(contests).where(and(
+    eq(contests.slug, idRaw),
+    eq(contests.organizationId, organizationId),
+  )).limit(1);
   if (slugRows.length > 0) return slugRows[0];
   return null;
 }
 
-export async function POST(
+async function handlePOST(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
   const { userId } = await auth();
   if (!userId) return jsonError("unauthorized", 401);
+  const organization = await resolveOrganizationContext(userId);
+  if (!organization) return jsonError("organization not found", 404);
+  if (organization.suspended) return jsonError("account suspended", 403);
 
   const { id: idRaw } = await ctx.params;
   if (!idRaw || typeof idRaw !== "string") return jsonError("invalid id", 400);
 
-  await settleExpiredContests();
-  const contest = await findContest(idRaw);
+  await settleExpiredContests(organization.organizationId);
+  const contest = await findContest(idRaw, organization.organizationId);
   if (!contest) return jsonError("contest not found", 404);
   const parsed = await readBoundedJsonObject(req, MAX_CONTEST_REGISTRATION_BODY_BYTES);
   if (!parsed.ok) return parsed.response;
@@ -116,8 +127,6 @@ export async function POST(
       return jsonError("failed to resolve user", 500);
     }
   }
-  const [actor] = await db.select({ suspended: users.suspended }).from(users).where(eq(users.clerkId, userId)).limit(1);
-  if (actor?.suspended) return jsonError("account suspended", 403);
 
   // Check already registered
   const existingReg = await db
@@ -170,3 +179,5 @@ export async function POST(
 
   return NextResponse.json({ registered: true, teamId });
 }
+
+export const POST = withApiGuard(handlePOST);

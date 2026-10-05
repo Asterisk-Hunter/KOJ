@@ -1,34 +1,27 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextResponse } from "next/server";
-import { desc, eq, sql } from "drizzle-orm";
-import { clerkClient } from "@clerk/nextjs/server";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { contests, problems, submissions, users } from "@/db/schema";
-import { requireStaff } from "@/app/api/admin/authz";
+import { contests, organizationMemberships, problems, submissions } from "@/db/schema";
+import { requireAdmin, requireStaff } from "@/app/api/admin/authz";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+async function handleGET() {
   const grant = await requireStaff();
   if (!grant.ok) return grant.response;
+  const platformGrant = await requireAdmin();
 
-  // TOTAL USERS counts Clerk signups (same source as Role management).
-  // Falls back to synced Neon rows when Clerk is unreachable.
-  let usersCount: number | null = null;
-  try {
-    const client = await clerkClient();
-    const page = await client.users.getUserList({ limit: 1 });
-    usersCount = page.totalCount;
-  } catch {
-    usersCount = null;
-  }
-  if (usersCount === null) {
-    const [row] = await db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(users);
-    usersCount = row?.count ?? 0;
-  }
-  const [problemsCountRow] = await db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(problems);
-  const [contestsCountRow] = await db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(contests);
-  const [submissionsCountRow] = await db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(submissions);
+  const organizationId = grant.context.organizationId;
+  const [usersCountRow] = await db.select({ count: sql<number>`count(*)`.mapWith(Number) })
+    .from(organizationMemberships).where(eq(organizationMemberships.organizationId, organizationId));
+  const [problemsCountRow] = await db.select({ count: sql<number>`count(*)`.mapWith(Number) })
+    .from(problems).where(eq(problems.organizationId, organizationId));
+  const [contestsCountRow] = await db.select({ count: sql<number>`count(*)`.mapWith(Number) })
+    .from(contests).where(eq(contests.organizationId, organizationId));
+  const [submissionsCountRow] = await db.select({ count: sql<number>`count(*)`.mapWith(Number) })
+    .from(submissions).where(eq(submissions.organizationId, organizationId));
 
   const problemQuery = db
     .select({
@@ -42,16 +35,20 @@ export async function GET() {
 
   const recentProblems = await (
     grant.role === "setter"
-      ? problemQuery.where(eq(problems.authorId, grant.userId))
-      : problemQuery
+      ? problemQuery.where(and(
+          eq(problems.authorId, grant.userId),
+          eq(problems.organizationId, organizationId),
+        ))
+      : problemQuery.where(eq(problems.organizationId, organizationId))
   )
     .orderBy(desc(problems.createdAt))
     .limit(10);
 
   return NextResponse.json({
     role: grant.role,
+    isPlatformAdmin: platformGrant.ok,
     counts: {
-      users: usersCount,
+      users: usersCountRow?.count ?? 0,
       problems: problemsCountRow?.count ?? 0,
       contests: contestsCountRow?.count ?? 0,
       submissions: submissionsCountRow?.count ?? 0,
@@ -65,3 +62,5 @@ export async function GET() {
     })),
   });
 }
+
+export const GET = withApiGuard(handleGET);

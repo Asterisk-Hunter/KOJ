@@ -1,3 +1,4 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextResponse } from "next/server";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
@@ -5,7 +6,7 @@ import { db } from "@/db";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export async function GET() {
+async function handleGET() {
   const started = Date.now();
   try {
     await db.execute(sql`select 1 as ok`);
@@ -14,15 +15,17 @@ export async function GET() {
       db: true,
       latencyMs: Date.now() - started,
     });
-  } catch (err) {
+  } catch {
     return NextResponse.json(
       {
         status: "degraded",
         db: false,
-        error: err instanceof Error ? err.message : "unknown",
+        error: "database check failed",
         latencyMs: Date.now() - started,
       },
       { status: 200 },
     );
   }
 }
+
+export const GET = withApiGuard(handleGET);

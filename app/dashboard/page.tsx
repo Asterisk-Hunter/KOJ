@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { auth } from "@clerk/nextjs/server";
-import { asc, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, sql } from "drizzle-orm";
+import { notFound } from "next/navigation";
+import { resolveOrganizationContext } from "@/lib/organizations";
 import { db } from "@/db";
 import {
   contestProblems,
@@ -8,7 +10,7 @@ import {
   contests,
   problems,
   submissions,
-  users,
+  organizationMemberships,
 } from "@/db/schema";
 import Navigation from "@/app/components/Navigation";
 import StatCard from "@/app/components/StatCard";
@@ -34,6 +36,9 @@ export default async function DashboardPage() {
     // resource-based auth (see AGENTS.md — createRouteMatcher is deprecated).
     return <Navigation />;
   }
+  const organization = await resolveOrganizationContext(userId);
+  if (!organization || organization.suspended) notFound();
+  const organizationId = organization.organizationId;
 
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
@@ -43,16 +48,16 @@ export default async function DashboardPage() {
       db
         .select({ count: sql<number>`count(*)`.mapWith(Number) })
         .from(problems)
-        .where(eq(problems.status, "published")),
+        .where(and(eq(problems.status, "published"), eq(problems.organizationId, organizationId))),
       db
         .select({ count: sql<number>`count(*)`.mapWith(Number) })
         .from(contests)
-        .where(eq(contests.status, "live")),
-      db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(users),
+        .where(and(eq(contests.status, "live"), eq(contests.organizationId, organizationId))),
+      db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(organizationMemberships).where(eq(organizationMemberships.organizationId, organizationId)),
       db
         .select({ count: sql<number>`count(*)`.mapWith(Number) })
         .from(submissions)
-        .where(gte(submissions.submittedAt, startOfToday)),
+        .where(and(gte(submissions.submittedAt, startOfToday), eq(submissions.organizationId, organizationId))),
     ]);
 
   const publishedProblemsCount = publishedProblemsRows[0]?.count ?? 0;
@@ -73,17 +78,17 @@ export default async function DashboardPage() {
       })
       .from(submissions)
       .leftJoin(problems, eq(submissions.problemId, problems.id))
-      .where(eq(submissions.userId, userId))
+      .where(and(eq(submissions.userId, userId), eq(submissions.organizationId, organizationId)))
       .orderBy(sql`${submissions.submittedAt} DESC`)
       .limit(6),
     db
-      .select({
+      .selectDistinct({
         problemId: submissions.problemId,
         difficulty: problems.difficulty,
       })
       .from(submissions)
       .leftJoin(problems, eq(submissions.problemId, problems.id))
-      .where(sql`${submissions.userId} = ${userId} AND ${submissions.status} = 'accepted'`),
+      .where(and(eq(submissions.userId, userId), eq(submissions.status, "accepted"), eq(submissions.organizationId, organizationId))),
   ]);
 
   const solvedProblemMap = new Map<number, string>();
@@ -106,7 +111,7 @@ export default async function DashboardPage() {
   const liveContests = await db
     .select()
     .from(contests)
-    .where(eq(contests.status, "live"))
+    .where(and(eq(contests.status, "live"), eq(contests.organizationId, organizationId)))
     .orderBy(asc(contests.endsAt))
     .limit(3);
 

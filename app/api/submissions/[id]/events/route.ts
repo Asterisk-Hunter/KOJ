@@ -1,9 +1,10 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { submissions } from "@/db/schema";
-import { requireAdmin } from "@/app/api/admin/authz";
+import { resolveOrganizationContext } from "@/lib/organizations";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,7 +23,7 @@ function jsonError(message: string, status: number) {
  * Sends a final `done` event when a terminal verdict is reached, then closes.
  * Client reconnects automatically via EventSource if the stream ends early.
  */
-export async function GET(
+async function handleGET(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
@@ -30,6 +31,9 @@ export async function GET(
   if (!userId) {
     return jsonError("unauthorized", 401);
   }
+  const organization = await resolveOrganizationContext(userId);
+  if (!organization) return jsonError("organization not found", 404);
+  if (organization.suspended) return jsonError("account suspended", 403);
 
   const { id: idRaw } = await ctx.params;
   const submissionId = Number(idRaw);
@@ -42,6 +46,7 @@ export async function GET(
     .select({
       id: submissions.id,
       userId: submissions.userId,
+      organizationId: submissions.organizationId,
       status: submissions.status,
       passedTests: submissions.passedTests,
       totalTests: submissions.totalTests,
@@ -50,7 +55,10 @@ export async function GET(
       errorMessage: submissions.errorMessage,
     })
     .from(submissions)
-    .where(eq(submissions.id, submissionId))
+    .where(and(
+      eq(submissions.id, submissionId),
+      eq(submissions.organizationId, organization.organizationId),
+    ))
     .limit(1);
 
   if (rows.length === 0) {
@@ -58,15 +66,13 @@ export async function GET(
   }
 
   if (rows[0].userId !== userId) {
-    const adminCheck = await requireAdmin();
-    if (!adminCheck.ok) {
-      return jsonError("forbidden", 403);
-    }
+    if (organization.role !== "admin") return jsonError("forbidden", 403);
   }
 
   const encoder = new TextEncoder();
   let ticks = 0;
   let closed = false;
+  let tickInFlight = false;
   let timer: NodeJS.Timeout | null = null;
 
   const stream = new ReadableStream<Uint8Array>({
@@ -90,7 +96,10 @@ export async function GET(
             errorMessage: submissions.errorMessage,
           })
           .from(submissions)
-          .where(eq(submissions.id, submissionId))
+          .where(and(
+            eq(submissions.id, submissionId),
+            eq(submissions.organizationId, organization.organizationId),
+          ))
           .limit(1);
 
         if (current.length === 0) {
@@ -126,7 +135,9 @@ export async function GET(
         }
 
         timer = setInterval(() => {
+          if (closed || tickInFlight) return;
           void (async () => {
+            tickInFlight = true;
             ticks += 1;
             try {
               const done = await fetchAndSend();
@@ -143,6 +154,8 @@ export async function GET(
                 closed = true;
                 controller.close();
               }
+            } finally {
+              tickInFlight = false;
             }
           })();
         }, TICK_MS);
@@ -171,3 +184,5 @@ export async function GET(
     },
   });
 }
+
+export const GET = withApiGuard(handleGET);

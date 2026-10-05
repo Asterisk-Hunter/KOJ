@@ -1,3 +1,4 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
@@ -9,15 +10,18 @@ import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-async function findContest(idRaw: string) {
+async function findContest(idRaw: string, organizationId: number) {
   const numeric = Number(idRaw);
   if (!Number.isInteger(numeric) || numeric <= 0) return null;
-  const rows = await db.select().from(contests).where(eq(contests.id, numeric)).limit(1);
+  const rows = await db.select().from(contests).where(and(
+    eq(contests.id, numeric),
+    eq(contests.organizationId, organizationId),
+  )).limit(1);
   return rows.length > 0 ? rows[0] : null;
 }
 
 /** Admin: add an existing draft problem to a draft contest (BR-04). */
-export async function POST(
+async function handlePOST(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
@@ -25,7 +29,7 @@ export async function POST(
   if (!grant.ok) return grant.response;
 
   const { id: idRaw } = await ctx.params;
-  const contest = await findContest(idRaw);
+  const contest = await findContest(idRaw, grant.context.organizationId);
   if (!contest) return jsonError("contest not found", 404);
   if (contest.status !== "draft") {
     return jsonError("problems can only be added to draft contests", 400);
@@ -42,7 +46,10 @@ export async function POST(
   const problemRows = await db
     .select({ id: problems.id, status: problems.status })
     .from(problems)
-    .where(eq(problems.id, problemId))
+    .where(and(
+      eq(problems.id, problemId),
+      eq(problems.organizationId, grant.context.organizationId),
+    ))
     .limit(1);
   if (problemRows.length === 0) return jsonError("problem not found", 404);
   if (problemRows[0].status !== "draft") {
@@ -56,6 +63,7 @@ export async function POST(
       and(
         eq(contestProblems.contestId, contest.id),
         eq(contestProblems.problemId, problemId),
+        eq(contestProblems.organizationId, grant.context.organizationId),
       ),
     )
     .limit(1);
@@ -66,7 +74,10 @@ export async function POST(
     const [row] = await db
       .select({ max: sql<number | null>`max(${contestProblems.position})`.mapWith(Number) })
       .from(contestProblems)
-      .where(eq(contestProblems.contestId, contest.id));
+      .where(and(
+        eq(contestProblems.contestId, contest.id),
+        eq(contestProblems.organizationId, grant.context.organizationId),
+      ));
     position = (row?.max ?? -1) + 1;
   }
   if (typeof position !== "number" || !Number.isInteger(position) || position < 0) {
@@ -74,8 +85,14 @@ export async function POST(
   }
 
   await db.transaction(async (tx) => {
-    await tx.insert(contestProblems).values({ contestId: contest.id, problemId, position });
+    await tx.insert(contestProblems).values({
+      organizationId: grant.context.organizationId,
+      contestId: contest.id,
+      problemId,
+      position,
+    });
     await recordAdminAuditEvent(tx, {
+      organizationId: grant.context.organizationId,
       actorId: grant.userId,
       action: "contest.problem_linked",
       entityType: "contest",
@@ -87,7 +104,7 @@ export async function POST(
 }
 
 /** Admin: remove a problem from a draft contest. */
-export async function DELETE(
+async function handleDELETE(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
@@ -95,7 +112,7 @@ export async function DELETE(
   if (!grant.ok) return grant.response;
 
   const { id: idRaw } = await ctx.params;
-  const contest = await findContest(idRaw);
+  const contest = await findContest(idRaw, grant.context.organizationId);
   if (!contest) return jsonError("contest not found", 404);
   if (contest.status !== "draft") {
     return jsonError("problems can only be removed from draft contests", 400);
@@ -114,6 +131,7 @@ export async function DELETE(
         and(
           eq(contestProblems.contestId, contest.id),
           eq(contestProblems.problemId, problemId),
+          eq(contestProblems.organizationId, grant.context.organizationId),
         ),
       )
       .returning({ problemId: contestProblems.problemId });
@@ -122,7 +140,10 @@ export async function DELETE(
     const remaining = await tx
       .select({ problemId: contestProblems.problemId })
       .from(contestProblems)
-      .where(eq(contestProblems.contestId, contest.id))
+      .where(and(
+        eq(contestProblems.contestId, contest.id),
+        eq(contestProblems.organizationId, grant.context.organizationId),
+      ))
       .orderBy(asc(contestProblems.position));
     for (let i = 0; i < remaining.length; i++) {
       await tx
@@ -132,10 +153,12 @@ export async function DELETE(
           and(
             eq(contestProblems.contestId, contest.id),
             eq(contestProblems.problemId, remaining[i].problemId),
+            eq(contestProblems.organizationId, grant.context.organizationId),
           ),
         );
     }
     await recordAdminAuditEvent(tx, {
+      organizationId: grant.context.organizationId,
       actorId: grant.userId,
       action: "contest.problem_unlinked",
       entityType: "contest",
@@ -148,3 +171,6 @@ export async function DELETE(
 
   return NextResponse.json({ removed: true });
 }
+
+export const POST = withApiGuard(handlePOST);
+export const DELETE = withApiGuard(handleDELETE);

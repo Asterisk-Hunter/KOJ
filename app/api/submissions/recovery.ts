@@ -1,6 +1,7 @@
 import { and, asc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { judgeJobs, submissions } from "@/db/schema";
+import { QUEUE_ADMISSION_LIMITS } from "@/app/api/submissions/queue-admission";
 
 export const STALE_RUNNING_AFTER_MS = 10 * 60 * 1000;
 const RECOVERY_BATCH_LIMIT = 100;
@@ -11,7 +12,14 @@ export async function recoverStaleRunningSubmissions(
 ): Promise<{ recovered: number }> {
   const cutoff = new Date(now.getTime() - staleAfterMs);
   return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('koj:queue-admission'), 0)`);
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('koj-stale-recovery'))`);
+    const [active] = await tx
+      .select({ count: sql<number>`count(*)`.mapWith(Number) })
+      .from(judgeJobs)
+      .where(inArray(judgeJobs.status, ["queued", "leased"]));
+    const remainingCapacity = Math.max(0, QUEUE_ADMISSION_LIMITS.global - active.count);
+    if (remainingCapacity === 0) return { recovered: 0 };
     const orphaned = await tx
       .select({ id: submissions.id })
       .from(submissions)
@@ -24,7 +32,7 @@ export async function recoverStaleRunningSubmissions(
         ),
       )
       .orderBy(asc(submissions.submittedAt))
-      .limit(RECOVERY_BATCH_LIMIT);
+      .limit(Math.min(RECOVERY_BATCH_LIMIT, remainingCapacity));
     if (orphaned.length === 0) return { recovered: 0 };
 
     const ids = orphaned.map((submission) => submission.id);

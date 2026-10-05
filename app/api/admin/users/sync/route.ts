@@ -1,3 +1,4 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextResponse } from "next/server";
 import { clerkClient } from "@clerk/nextjs/server";
 import { db } from "@/db";
@@ -14,7 +15,7 @@ export const dynamic = "force-dynamic";
  * preserved) — same outcome as the `user.deleted` webhook, for events it
  * missed. Never creates rows: signups sync lazily on first activity.
  */
-export async function POST() {
+async function handlePOST() {
   const grant = await requireAdmin();
   if (!grant.ok) return grant.response;
 
@@ -50,3 +51,5 @@ export async function POST() {
 
   return NextResponse.json({ checked: neonRows.length, removed, anonymized });
 }
+
+export const POST = withApiGuard(handlePOST);

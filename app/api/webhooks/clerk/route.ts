@@ -1,3 +1,4 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
@@ -92,7 +93,7 @@ export async function handleUserDeleted(clerkId: string): Promise<"deleted" | "a
  * `user.created`, `user.updated`, `user.deleted`, and set
  * `CLERK_WEBHOOK_SECRET` (the `whsec_…` signing secret) on the Next app.
  */
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const secret = process.env.CLERK_WEBHOOK_SECRET;
   if (!secret) return jsonError("webhook not configured", 500);
 
@@ -145,6 +146,9 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ received: true, type });
 }
 
-export async function GET() {
+async function handleGET() {
   return jsonError("method not allowed", 405);
 }
+
+export const POST = withApiGuard(handlePOST);
+export const GET = withApiGuard(handleGET);

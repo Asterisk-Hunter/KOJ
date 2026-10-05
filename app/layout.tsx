@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "KOJ | Kottayam Online Judge",
-  description: "Self-hosted contest hosting platform for IIIT Kottayam",
+  description: "Multi-organization programming contests and online judging",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

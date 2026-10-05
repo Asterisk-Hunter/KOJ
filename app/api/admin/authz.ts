@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { users } from "@/db/schema";
 import { decideStaffAccess, type AccessRole, type StaffAccess } from "./access-policy";
+import { requireOrganizationRole, type OrganizationContext } from "@/lib/organizations";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,6 +14,10 @@ export function jsonError(message: string, status: number) {
 }
 
 export type AdminGrant = { ok: true; userId: string } | { ok: false; response: NextResponse };
+
+export type OrganizationStaffGrant =
+  | { ok: true; userId: string; context: OrganizationContext }
+  | { ok: false; response: NextResponse };
 
 async function checkStaffAccess(
   userId: string,
@@ -42,7 +47,8 @@ async function checkStaffAccess(
 
 /** Admin-only gate: `ADMIN_CLERK_IDS` env allowlist OR `users.role == "admin"` in Neon. */
 export async function requireAdmin(): Promise<AdminGrant> {
-  const { userId } = await auth();
+  const session = await auth();
+  const userId = session.isAuthenticated ? session.userId : null;
   if (!userId) return { ok: false, response: jsonError("unauthorized", 401) };
 
   const allowedAdminIds = (process.env.ADMIN_CLERK_IDS ?? "")
@@ -56,7 +62,7 @@ export async function requireAdmin(): Promise<AdminGrant> {
 }
 
 export type SetterGrant =
-  | { ok: true; userId: string; dbRole: string | null }
+  | { ok: true; userId: string; dbRole: string | null; context: OrganizationContext }
   | { ok: false; response: NextResponse };
 
 /**
@@ -65,49 +71,45 @@ export type SetterGrant =
  * Problem management stays on requireSetter; user/role management stays on
  * requireAdmin (BR-03).
  */
-export async function requireContestManager(): Promise<AdminGrant> {
-  const { userId } = await auth();
-  if (!userId) return { ok: false, response: jsonError("unauthorized", 401) };
-  const result = await checkStaffAccess(userId, "contestManager");
-  return result.response
-    ? { ok: false, response: result.response }
-    : { ok: true, userId };
+export async function requireContestManager(): Promise<OrganizationStaffGrant> {
+  const grant = await requireOrganizationRole(["admin", "setter"]);
+  return grant.ok
+    ? { ok: true, userId: grant.userId, context: grant.context }
+    : grant;
+}
+
+export async function requireOrganizationAdmin(): Promise<OrganizationStaffGrant> {
+  const grant = await requireOrganizationRole(["admin"]);
+  return grant.ok
+    ? { ok: true, userId: grant.userId, context: grant.context }
+    : grant;
 }
 
 /**
  * Problem-setter gate: Neon `users.role` must hold `admin` or `setter`.
  */
 export async function requireSetter(): Promise<SetterGrant> {
-  const { userId } = await auth();
-  if (!userId) return { ok: false, response: jsonError("unauthorized", 401) };
-  const result = await checkStaffAccess(userId, "contestManager");
-  if (result.response) return { ok: false, response: result.response };
-  const dbRole = result.role;
-  if (dbRole === "admin" || dbRole === "setter") {
-    return { ok: true, userId, dbRole };
-  }
-  return { ok: false, response: jsonError("forbidden", 403) };
+  const grant = await requireOrganizationRole(["admin", "setter"]);
+  return grant.ok
+    ? { ok: true, userId: grant.userId, dbRole: grant.context.role, context: grant.context }
+    : grant;
 }
 
 export type StaffRole = "admin" | "setter";
 
 export type StaffGrant =
-  | { ok: true; userId: string; role: StaffRole }
+  | { ok: true; userId: string; role: StaffRole; context: OrganizationContext }
   | { ok: false; response: NextResponse };
 
 /**
  * Staff gate: admin or setter (DB role only).
  */
 export async function requireStaff(): Promise<StaffGrant> {
-  const { userId } = await auth();
-  if (!userId) return { ok: false, response: jsonError("unauthorized", 401) };
-  const result = await checkStaffAccess(userId, "contestManager");
-  if (result.response) return { ok: false, response: result.response };
-  const r = result.role;
-  if (r === "admin" || r === "setter") {
-    return { ok: true, userId, role: r };
-  }
-  return { ok: false, response: jsonError("forbidden", 403) };
+  const grant = await requireOrganizationRole(["admin", "setter"]);
+  if (!grant.ok) return grant;
+  const role = grant.context.role;
+  if (role !== "admin" && role !== "setter") return { ok: false, response: jsonError("forbidden", 403) };
+  return { ok: true, userId: grant.userId, role, context: grant.context };
 }
 
 /**

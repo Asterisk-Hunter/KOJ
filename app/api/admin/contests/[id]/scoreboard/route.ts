@@ -1,3 +1,4 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest } from "next/server";
 import { and, eq, gte, sql } from "drizzle-orm";
 import { db } from "@/db";
@@ -11,16 +12,19 @@ import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+async function handlePOST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const grant = await requireContestManager();
   if (!grant.ok) return grant.response;
-  await settleExpiredContests();
+  await settleExpiredContests(grant.context.organizationId);
   const contestId = Number((await ctx.params).id);
   if (!Number.isInteger(contestId) || contestId <= 0) return jsonError("invalid contest id", 400);
   const parsed = await readBoundedJsonObject(req, MAX_CONTEST_REGISTRATION_BODY_BYTES);
   if (!parsed.ok) return parsed.response;
   const action = parsed.value.action;
-  const [contest] = await db.select().from(contests).where(eq(contests.id, contestId)).limit(1);
+  const [contest] = await db.select().from(contests).where(and(
+    eq(contests.id, contestId),
+    eq(contests.organizationId, grant.context.organizationId),
+  )).limit(1);
   if (!contest) return jsonError("contest not found", 404);
   const now = new Date();
   if (action === "freeze" || action === "unfreeze") {
@@ -32,8 +36,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         scoreboardFrozenAt: action === "freeze" ? now : null,
         ...(action === "freeze" ? { scoreboardRevealCount: 0 } : {}),
         updatedAt: now,
-      }).where(eq(contests.id, contestId));
+      }).where(and(
+        eq(contests.id, contestId),
+        eq(contests.organizationId, grant.context.organizationId),
+      ));
       await recordAdminAuditEvent(tx, {
+        organizationId: grant.context.organizationId,
         actorId: grant.userId,
         action: action === "freeze" ? "contest.scoreboard_frozen" : "contest.scoreboard_unfrozen",
         entityType: "contest",
@@ -48,9 +56,19 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (action === "reveal-all") {
       await db.transaction(async (tx) => {
         const [{ count }] = await tx.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(submissions)
-          .where(and(eq(submissions.contestId, contestId), eq(submissions.mode, "submit"), eq(submissions.participation, "official"), gte(submissions.submittedAt, frozenAt)));
-        await tx.update(contests).set({ scoreboardRevealCount: count, updatedAt: now }).where(eq(contests.id, contestId));
+          .where(and(
+            eq(submissions.organizationId, grant.context.organizationId),
+            eq(submissions.contestId, contestId),
+            eq(submissions.mode, "submit"),
+            eq(submissions.participation, "official"),
+            gte(submissions.submittedAt, frozenAt),
+          ));
+        await tx.update(contests).set({ scoreboardRevealCount: count, updatedAt: now }).where(and(
+          eq(contests.id, contestId),
+          eq(contests.organizationId, grant.context.organizationId),
+        ));
         await recordAdminAuditEvent(tx, {
+          organizationId: grant.context.organizationId,
           actorId: grant.userId,
           action: "contest.scoreboard_reveal_all",
           entityType: "contest",
@@ -62,9 +80,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       await db.transaction(async (tx) => {
         const [updated] = await tx.update(contests)
           .set({ scoreboardRevealCount: sql`${contests.scoreboardRevealCount} + 1`, updatedAt: now })
-          .where(eq(contests.id, contestId))
+          .where(and(
+            eq(contests.id, contestId),
+            eq(contests.organizationId, grant.context.organizationId),
+          ))
           .returning({ count: contests.scoreboardRevealCount });
         await recordAdminAuditEvent(tx, {
+          organizationId: grant.context.organizationId,
           actorId: grant.userId,
           action: "contest.scoreboard_reveal_next",
           entityType: "contest",
@@ -82,3 +104,5 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
   return Response.json({ ok: true });
 }
+
+export const POST = withApiGuard(handlePOST);

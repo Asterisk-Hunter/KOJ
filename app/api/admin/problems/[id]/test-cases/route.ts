@@ -1,5 +1,6 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
-import { asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contests, problemTestCases, problems } from "@/db/schema";
 import { jsonError, requireSetter } from "@/app/api/admin/authz";
@@ -12,19 +13,25 @@ export const dynamic = "force-dynamic";
 const MAX_FILE_BYTES = 10 * 1024 * 1024; // REQ-PROB-03
 const MAX_CASES = 100;
 
-async function findProblem(idRaw: string) {
+async function findProblem(idRaw: string, organizationId: number) {
   const numeric = Number(idRaw);
   if (!Number.isInteger(numeric) || numeric <= 0) return null;
-  const rows = await db.select().from(problems).where(eq(problems.id, numeric)).limit(1);
+  const rows = await db.select().from(problems).where(and(
+    eq(problems.id, numeric),
+    eq(problems.organizationId, organizationId),
+  )).limit(1);
   return rows.length > 0 ? rows[0] : null;
 }
 
-async function isLockedByLiveContest(problemId: number): Promise<boolean> {
+async function isLockedByLiveContest(problemId: number, organizationId: number): Promise<boolean> {
   const links = await db
     .select({ status: contests.status })
     .from(contestProblems)
     .innerJoin(contests, eq(contestProblems.contestId, contests.id))
-    .where(eq(contestProblems.problemId, problemId));
+    .where(and(
+      eq(contestProblems.problemId, problemId),
+      eq(contestProblems.organizationId, organizationId),
+    ));
   return links.some((l) => l.status === "live");
 }
 
@@ -37,7 +44,7 @@ function checkFileSize(v: unknown, field: string): string | NextResponse {
 }
 
 /** Setter+: list test cases for a problem (ownership-checked). */
-export async function GET(
+async function handleGET(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
@@ -45,7 +52,7 @@ export async function GET(
   if (!grant.ok) return grant.response;
 
   const { id: idRaw } = await ctx.params;
-  const problem = await findProblem(idRaw);
+  const problem = await findProblem(idRaw, grant.context.organizationId);
   if (!problem) return jsonError("problem not found", 404);
   if (grant.dbRole !== "admin" && problem.authorId !== grant.userId) {
     return jsonError("forbidden", 403);
@@ -69,7 +76,7 @@ export async function GET(
 }
 
 /** Setter+: add a test case (blocked while a linked contest is live). */
-export async function POST(
+async function handlePOST(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
@@ -77,12 +84,12 @@ export async function POST(
   if (!grant.ok) return grant.response;
 
   const { id: idRaw } = await ctx.params;
-  const problem = await findProblem(idRaw);
+  const problem = await findProblem(idRaw, grant.context.organizationId);
   if (!problem) return jsonError("problem not found", 404);
   if (grant.dbRole !== "admin" && problem.authorId !== grant.userId) {
     return jsonError("forbidden", 403);
   }
-  if (await isLockedByLiveContest(problem.id)) {
+  if (await isLockedByLiveContest(problem.id, grant.context.organizationId)) {
     return jsonError("test cases are locked while the contest is live", 403);
   }
 
@@ -126,6 +133,7 @@ export async function POST(
       .values({ problemId: problem.id, input, expectedOutput, isSample, position })
       .returning({ id: problemTestCases.id });
     await recordAdminAuditEvent(tx, {
+      organizationId: grant.context.organizationId,
       actorId: grant.userId,
       action: "problem.test_case_added",
       entityType: "problem",
@@ -137,3 +145,6 @@ export async function POST(
 
   return NextResponse.json({ id: inserted[0].id }, { status: 201 });
 }
+
+export const GET = withApiGuard(handleGET);
+export const POST = withApiGuard(handlePOST);
