@@ -66,8 +66,11 @@ uvicorn app.main:app --reload --port 8000
 Then open:
 
 - <http://127.0.0.1:8000/>             — service index
-- <http://127.0.0.1:8000/health>       — liveness + DB readiness
-- <http://127.0.0.1:8000/docs>         — interactive Swagger UI
+- <http://127.0.0.1:8000/health>       — cheap liveness check
+
+`GET /ready` checks the database and selected sandbox backend with the
+`X-Judge-Secret` header. Swagger/ReDoc/OpenAPI routes are disabled by default;
+set `API_EXPOSE_DOCS=true` for local development only.
 
 ## Notes
 
@@ -77,42 +80,29 @@ Then open:
   (explicit methods/headers, no credentials, never `*`, no self-origin).
 - Never commit `api/.env`; only `.env.example` is tracked.
 
-## Judge sandbox (Docker-only, fail-closed)
+## Judge sandbox
 
-Compilation and execution both run in per-case `docker run` containers
-with fixed flags: `--network none`, `--read-only`, non-root
-`--user 65534:65534`, `--cap-drop ALL`, `no-new-privileges`,
-repo-managed seccomp profile
-(`--security-opt seccomp=/etc/koj/seccomp-koj.json`, provisioned from
-`api/seccomp-koj.json`; missing/invalid profile fails closed),
-`--pids-limit`, `--memory`/`--memory-swap`, `--cpus`, file-write ulimit,
-read-only source mount (`/sandbox:ro`) plus a writable exec tmpfs at
-`/scratch` for build artifacts (C/C++ binaries, Java classes) and a
-noexec `/tmp`, per-run timeout with forced `docker rm -f` cleanup on
-every timeout/exception path, `--rm`, `--pull never`, full-UUID
-container names, and bounded stdout/stderr. C/C++ add
-stack-protector/FORTIFY hardening; Java requires `class Solution`
-(comment/string aware) with classes separated to `/scratch`. Exit
-137/-9 maps to `memory_limit_exceeded`. No request field can set
-images, mounts, or flags — images come only from
-`JUDGE_DOCKER_IMAGE_*` env vars (see `api/.env.example`).
+**Public Cloud Run judging is blocked.** A zero-secret verification Job with
+Cloud Run's Preview `--sandbox-launcher` succeeded with the default rootfs,
+but its sandbox could see the parent image filesystem. Live probes could not
+start a separate toolchain rootfs (`FetchSpec failed`), bind-mount it, or
+chroot into it (`Operation not permitted`). The `cloudrun` backend in this
+repository remains experimental and fails closed when its required private
+rootfs cannot launch. Do not deploy a Cloud Run worker or direct `/judge`
+endpoint to execute public submissions using `rlimit` or the default
+Cloud Run sandbox root.
 
-Concurrency is bounded (`JUDGE_MAX_CONCURRENT`, default 4):
-saturated `/judge`/`/judge-async` callers get `503` + `Retry-After`
-instead of queueing. `/judge-async` accepts an optional
-`Idempotency-Key` header and dedupes by submission ID under a
-non-blocking advisory lock (duplicate after completion replays the
-stored status). Hidden test cases (`is_sample=false`, the default)
-get redacted stdout/stderr; infra failures persist as retryable
-`pending` + `judge_infra_error=true` (never a false contestant
-`runtime_error`; see `JudgeResponse.infra_error`). Full host,
-provisioning, and evidence matrix: `api/DEPLOYMENT_CONTRACT.md`.
+For public submissions, use a dedicated Linux judge host with the `docker`
+backend, verified namespaces, cgroups, seccomp, no network, and separate
+least-privilege database credentials. The Cloud Run HTTP service may host
+non-executing compatibility/control endpoints, but direct `/judge` requests
+must be disabled or delegated to the isolated host. The queue worker belongs
+on the isolated host. Run the adversarial sandbox suite on that host before
+opening submissions. No configuration guarantees zero vulnerabilities.
 
-The Docker host must have the daemon running, the seccomp profile
-provisioned, and all three images pre-pulled (`docker pull
-python:3.11-slim gcc:13-bookworm eclipse-temurin:17-jdk-jammy`, or
-your configured overrides). Without Docker, every judgment returns an
-infra-flagged error ("judge sandbox unavailable") — including on
-Cloud Run, which cannot run a Docker daemon. Production judging needs
-a VM/GCE host with Docker (or an equivalent container-isolated
-runner), not Cloud Run.
+`rlimit` is an explicit local trusted-development
+mode and must not handle public submissions. `auto` fails closed if neither
+Docker nor the Cloud Run launcher is available. The authenticated `/judge`
+compatibility endpoint runs at most one Cloud Run sandbox judgment at a time; normal
+submissions enter the durable Postgres queue. Hidden case output is redacted
+from responses. See `api/DEPLOYMENT_CONTRACT.md` for the deployment contract.

@@ -16,6 +16,12 @@ logger = logging.getLogger(__name__)
 _pool: ConnectionPool | None = None
 
 
+def _tls_kwargs() -> dict[str, str]:
+    if settings.DATABASE_TLS_VERIFY:
+        return {"sslmode": "verify-full", "sslrootcert": "/etc/ssl/certs/ca-certificates.crt"}
+    return {}
+
+
 def init_pool() -> None:
     """Create the shared pool and verify readiness with `SELECT 1`.
 
@@ -30,7 +36,7 @@ def init_pool() -> None:
         conninfo=dsn,
         min_size=1,
         max_size=10,
-        kwargs={"autocommit": True},
+        kwargs={"autocommit": True, **_tls_kwargs()},
         timeout=5.0,
         open=True,
         # Neon free tier suspends/kills idle connections (~500 s).
@@ -126,7 +132,7 @@ def get_connection() -> Generator[psycopg.Connection, None, None]:
             _release_conn(conn)
         return
     dsn: str = str(settings.DATABASE_URL)
-    conn = psycopg.connect(dsn, autocommit=True)
+    conn = psycopg.connect(dsn, autocommit=True, **_tls_kwargs())
     try:
         yield conn
     finally:

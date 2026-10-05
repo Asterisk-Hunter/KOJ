@@ -2,18 +2,17 @@
 
 Supported v1 languages: python, c, c++, java (SRS REQ-JUDGE-02).
 
-Two backends, selected by JUDGE_SANDBOX_MODE (see api/DEPLOYMENT_CONTRACT.md):
+Backends selected by JUDGE_SANDBOX_MODE (see api/DEPLOYMENT_CONTRACT.md):
 
 * `docker` — container sandbox. Requires a Docker daemon on the judge host;
   without it judging fails closed with `runtime_error` + `infra_error=True`
   so callers never blame the contestant.
-* `rlimit` — host-toolchain sandbox using `resource.setrlimit` CPU/AS/NPROC/
-  FSIZE caps, a wall-clock timeout, and a fresh process session per run. This
-  is the isolation level the SRS sanctions (§2.5 constraint 3) and the only
-  backend available on serverless hosts, which cannot run containers.
-* `auto` (default) — docker when the CLI is present, otherwise rlimit.
+* `cloudrun` — Cloud Run Preview sandbox launcher with a separate toolchain
+  rootfs, default-denied egress, and no inherited parent credentials.
+* `rlimit` — host-toolchain process limits for trusted local development only.
+* `auto` (default) — Docker or Cloud Run launcher, otherwise fails closed.
 
-Sandbox (fixed server-side flags, never user-controlled):
+Docker sandbox (fixed server-side flags, never user-controlled):
 network none, read-only root, non-root user, cap-drop ALL,
 no-new-privileges, repo-managed seccomp profile
 (`api/seccomp-koj.json` provisioned to the daemon host path in
@@ -40,19 +39,22 @@ import shutil
 import signal
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, MAX_EMAX, MIN_EMIN, localcontext
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .config import settings
+from .host_lock import HostExecutionLockError, host_execution_lock
 
 try:
     import resource  # POSIX only; the rlimit backend is unavailable without it
@@ -77,6 +79,7 @@ SUPPORTED_LANGUAGES: tuple[str, ...] = (
 _LARGE_ADDRESS_SPACE_LANGUAGES: tuple[str, ...] = ("java", "go", "javascript")
 
 COMPILE_TIMEOUT_S = 30.0
+_JUDGE_WALL_BUDGET_S = 60.0
 
 # Hardening constants (fixed, not user-controlled).
 _DOCKER_TMPFS_TMP = "rw,noexec,nosuid,size=64m"
@@ -124,6 +127,12 @@ _CXX_HARDEN_FLAGS = [
 # in _java_has_solution_class so `// class Solution` cannot spoof it).
 _JAVA_SOLUTION_CLASS_RE = re.compile(r"\bclass\s+Solution\b")
 _SPECIAL_CHECKER_TIMEOUT_S = 2.0
+_CLOUDRUN_CLI = Path("/usr/local/gcp/bin/sandbox")
+_CLOUDRUN_ROOTFS = Path("/opt/koj-sandbox-root")
+_CLOUDRUN_TAR_MAX_BYTES = 512 * 1024 * 1024
+_CLOUDRUN_JUDGE_LOCK = threading.Lock()
+_DOCKER_ARTIFACT_VOLUME_BYTES = 256 * 1024 * 1024
+_INFRASTRUCTURE_PUBLIC_MESSAGE = "Judge infrastructure temporarily unavailable."
 
 Verdict = Literal[
     "accepted",
@@ -148,13 +157,24 @@ class JudgeCase(BaseModel):
 class JudgeRequest(BaseModel):
     language: str
     code: str
-    cases: list[JudgeCase]
-    time_limit_ms: int = Field(ge=1)
-    memory_mb: int = Field(ge=1)
+    cases: list[JudgeCase] = Field(max_length=100)
+    time_limit_ms: int = Field(ge=1, le=10_000)
+    memory_mb: int = Field(ge=1, le=1024)
     output_comparator: Literal["exact", "float"] = "exact"
     absolute_tolerance: float = Field(default=0.000001, ge=0, le=1, allow_inf_nan=False)
     relative_tolerance: float = Field(default=0.000001, ge=0, le=1, allow_inf_nan=False)
     checker_code: str | None = Field(default=None, max_length=65_536)
+
+    @field_validator("code")
+    @classmethod
+    def code_must_fit_utf8_limit(cls, code: str) -> str:
+        try:
+            code_size = len(code.encode("utf-8"))
+        except UnicodeEncodeError as error:
+            raise ValueError("code must be valid UTF-8") from error
+        if code_size > 100 * 1024:
+            raise ValueError("code exceeds the 100 KiB limit")
+        return code
 
 
 class CaseResult(BaseModel):
@@ -430,9 +450,9 @@ def _ce_response(message: str, total: int, is_sample_list: list[bool] | None = N
     )
 
 
-def _sandbox_unavailable_response(message: str, total: int) -> JudgeResponse:
+def _sandbox_unavailable_response(_message: str, total: int) -> JudgeResponse:
     """Fail-closed verdict when Docker cannot run. Always runtime_error + infra_error."""
-    msg = _truncate(f"judge sandbox unavailable: {message}", 2048)
+    msg = _INFRASTRUCTURE_PUBLIC_MESSAGE
     cases = [
         CaseResult(
             index=idx,
@@ -490,7 +510,7 @@ def _visible_case(
 
 
 def _cleanup_container(container_name: str) -> None:
-    """Best-effort `docker rm -f`. Never raises; logs failures only."""
+    """Force-remove a lingering container before its artifact volume is removed."""
     try:
         proc = subprocess.run(
             ["docker", "rm", "-f", container_name],
@@ -498,14 +518,10 @@ def _cleanup_container(container_name: str) -> None:
             text=True,
             timeout=_DOCKER_KILL_TIMEOUT_S,
         )
-        if proc.returncode != 0:
-            logger.warning(
-                "judge cleanup rm -f %s failed: %s",
-                container_name,
-                _truncate((proc.stderr or "").strip(), 500),
-            )
-    except Exception as e:  # noqa: BLE001 — cleanup must never mask the original error
-        logger.warning("judge cleanup rm -f %s error: %s", container_name, _truncate(str(e), 500))
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise SandboxUnavailable("failed to stop Docker sandbox container") from error
+    if proc.returncode != 0 and "no such container" not in (proc.stderr or "").lower():
+        raise SandboxUnavailable("failed to stop Docker sandbox container")
 
 
 def _image_for(language: str) -> str:
@@ -559,6 +575,8 @@ def _docker_base_argv(
     container_name: str,
     memory_mb: int,
     fsize_bytes: int,
+    artifact_volume: str | None = None,
+    artifact_volume_read_only: bool = False,
 ) -> list[str]:
     """Fixed sandbox flags. No caller/user input beyond image/workdir/limits.
 
@@ -601,8 +619,16 @@ def _docker_base_argv(
         _DOCKER_NOFILE_ULIMIT,
         "--tmpfs",
         f"/tmp:{_DOCKER_TMPFS_TMP}",
-        "--tmpfs",
-        f"/scratch:{_DOCKER_TMPFS_SCRATCH}",
+        *(
+            ["-v", f"{artifact_volume}:/scratch:rw"]
+            if artifact_volume is not None and not artifact_volume_read_only
+            else ["--tmpfs", f"/scratch:{_DOCKER_TMPFS_SCRATCH}"]
+        ),
+        *(
+            ["-v", f"{artifact_volume}:/artifacts:ro"]
+            if artifact_volume is not None and artifact_volume_read_only
+            else []
+        ),
         "--env",
         "PYTHONUNBUFFERED=1",
         "--env",
@@ -619,6 +645,54 @@ def _docker_base_argv(
     ]
 
 
+def _create_docker_artifact_volume() -> str:
+    if shutil.which("docker") is None:
+        raise SandboxUnavailable("docker binary not found on judge host")
+    volume_name = f"koj-artifacts-{uuid.uuid4().hex}"
+    try:
+        result = subprocess.run(
+            [
+                "docker", "volume", "create", "--driver", "local",
+                "--opt", "type=tmpfs", "--opt", "device=tmpfs",
+                "--opt", f"o=size={_DOCKER_ARTIFACT_VOLUME_BYTES},uid=65534,gid=65534,mode=0700",
+                volume_name,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=_DOCKER_KILL_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise SandboxUnavailable("failed to create bounded Docker artifact volume") from error
+    if result.returncode != 0 or result.stdout.strip() != volume_name:
+        raise SandboxUnavailable("failed to create bounded Docker artifact volume")
+    return volume_name
+
+
+def _remove_docker_artifact_volume(volume_name: str) -> None:
+    try:
+        result = subprocess.run(
+            ["docker", "volume", "rm", "--force", volume_name],
+            capture_output=True,
+            text=True,
+            timeout=_DOCKER_KILL_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise SandboxUnavailable("failed to remove Docker artifact volume") from error
+    if result.returncode != 0:
+        raise SandboxUnavailable("failed to remove Docker artifact volume")
+
+
+@contextmanager
+def _docker_artifact_volume():
+    volume_name = _create_docker_artifact_volume()
+    try:
+        yield volume_name
+    finally:
+        _remove_docker_artifact_volume(volume_name)
+
+
 def _run_docker(
     image: str,
     host_workdir: Path,
@@ -628,6 +702,8 @@ def _run_docker(
     stdin_text: str | None = None,
     *,
     fsize_bytes: int = _RUN_FSIZE_LIMIT_BYTES,
+    artifact_volume: str | None = None,
+    artifact_volume_read_only: bool = False,
 ) -> ProcessResult:
     """Run one sandboxed command. Raises SandboxUnavailable on infra failure."""
     if shutil.which("docker") is None:
@@ -635,7 +711,13 @@ def _run_docker(
     # Full UUID: unique container names for reliable timeout cleanup.
     container_name = f"koj-judge-{uuid.uuid4().hex}"
     argv = _docker_base_argv(
-        image, host_workdir, container_name, memory_mb, fsize_bytes
+        image,
+        host_workdir,
+        container_name,
+        memory_mb,
+        fsize_bytes,
+        artifact_volume,
+        artifact_volume_read_only,
     ) + inner_cmd
     try:
         proc = _run_bounded_process(argv, timeout_s, stdin_text)
@@ -666,13 +748,116 @@ def _run_docker(
     return proc
 
 
+def _cloudrun_source_tar(workdir: Path) -> Path:
+    source_files = [entry for entry in workdir.iterdir() if entry.is_file()]
+    if len(source_files) != 1:
+        raise SandboxUnavailable("expected exactly one submission source file")
+    archive = workdir / "koj-source.tar"
+    with tarfile.open(archive, "w") as output:
+        output.add(source_files[0], arcname=f"work/{source_files[0].name}", recursive=False)
+    return archive
+
+
+def _validate_cloudrun_tar(archive: Path) -> None:
+    if not archive.is_file() or archive.stat().st_size > _CLOUDRUN_TAR_MAX_BYTES:
+        raise SandboxUnavailable("sandbox artifact archive missing or oversized")
+    try:
+        with tarfile.open(archive, "r") as source:
+            total_size = 0
+            for index, member in enumerate(source):
+                path = PurePosixPath(member.name)
+                parts = tuple(part for part in path.parts if part != ".")
+                if (
+                    index >= 10_000
+                    or (parts and parts[0] != "work")
+                    or (not parts and not member.isdir())
+                    or ".." in parts
+                    or path.is_absolute()
+                    or not (member.isfile() or member.isdir())
+                ):
+                    raise SandboxUnavailable("unsafe sandbox artifact archive")
+                total_size += member.size
+                if total_size > _CLOUDRUN_TAR_MAX_BYTES:
+                    raise SandboxUnavailable("sandbox artifact archive oversized")
+    except (OSError, tarfile.TarError) as error:
+        raise SandboxUnavailable("invalid sandbox artifact archive") from error
+
+
+def _cleanup_cloudrun_sandbox(name: str) -> None:
+    try:
+        subprocess.run(
+            [str(_CLOUDRUN_CLI), "delete", name, "--force"],
+            capture_output=True,
+            timeout=_DOCKER_KILL_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        logger.warning("sandbox cleanup failed name=%s", name)
+
+
+def _run_cloudrun(
+    _image: str | None,
+    host_workdir: Path,
+    inner_cmd: list[str],
+    memory_mb: int,
+    timeout_s: float,
+    stdin_text: str | None = None,
+    *,
+    fsize_bytes: int = _RUN_FSIZE_LIMIT_BYTES,
+    export_state: bool = False,
+) -> ProcessResult:
+    if not _CLOUDRUN_CLI.is_file() or not _CLOUDRUN_ROOTFS.is_dir():
+        raise SandboxUnavailable("Cloud Run sandbox launcher or rootfs unavailable")
+    name = f"koj-{uuid.uuid4().hex}"
+    marker = f"KOJ_SANDBOX_STARTED_{uuid.uuid4().hex}"
+    argv = [
+        str(_CLOUDRUN_CLI), "do", "--sandbox-name", name,
+        "--rootfs", str(_CLOUDRUN_ROOTFS), "--write",
+        "--env", "HOME=/work", "--env", "TMPDIR=/work",
+        "--workdir", "/work",
+    ]
+    state_tar = host_workdir / "koj-state.tar"
+    source_tar = host_workdir / "koj-source.tar"
+    if state_tar.is_file():
+        _validate_cloudrun_tar(state_tar)
+        argv.extend(["--import-tar", str(state_tar)])
+    elif source_tar.is_file():
+        argv.extend(["--import-tar", str(source_tar)])
+    if export_state:
+        argv.extend(["--export-tar", str(state_tar)])
+    argv.extend([
+        "--", "/usr/local/bin/python3", "-I", "/usr/local/bin/koj-sandbox-exec.py",
+        "--cpu-seconds", str(max(1, math.ceil(timeout_s))),
+        "--memory-mb", str(memory_mb), "--file-bytes", str(fsize_bytes),
+        "--nproc", "128" if export_state else "64",
+        "--marker", marker, "--", *inner_cmd,
+    ])
+    def limit_export_size() -> None:
+        if resource is not None:
+            resource.setrlimit(resource.RLIMIT_FSIZE, (_CLOUDRUN_TAR_MAX_BYTES, _CLOUDRUN_TAR_MAX_BYTES))
+
+    try:
+        result = _run_bounded_process(
+            argv, timeout_s, stdin_text, preexec_fn=limit_export_size, spawn_lock=_FORK_LOCK,
+        )
+        if marker not in result.stderr:
+            raise SandboxUnavailable("Cloud Run sandbox command did not start")
+        stderr = result.stderr.replace(f"{marker}\n", "", 1)
+        if export_state and result.returncode == 0:
+            _validate_cloudrun_tar(state_tar)
+        return ProcessResult(result.returncode, result.stdout, stderr, result.output_limit_exceeded)
+    except OSError as error:
+        raise SandboxUnavailable("failed to start Cloud Run sandbox") from error
+    finally:
+        _cleanup_cloudrun_sandbox(name)
+
+
 # ---------------------------------------------------------------------------
 # rlimit backend (host toolchain)
 #
 # SRS §2.5 constraint 3: process-level isolation via resource.setrlimit instead
-# of containers, sufficient for a trusted college user base. Used when
-# JUDGE_SANDBOX_MODE=auto and no Docker CLI is present (Cloud Run cannot run
-# containers) or when forced with JUDGE_SANDBOX_MODE=rlimit.
+# of containers, sufficient only for trusted local development. Never use this
+# mode to execute arbitrary public submissions.
 #
 # Enforced per run: RLIMIT_CPU (soft = wall budget, hard = soft + 1s so a CPU
 # hog receives SIGXCPU and reports as TLE instead of a generic exit), RLIMIT_AS,
@@ -715,13 +900,17 @@ _nproc_cache: tuple[float, int] | None = None
 
 
 def resolve_sandbox_backend() -> str:
-    """Return the active sandbox backend: `docker` or `rlimit`."""
+    """Return the selected backend, failing closed when auto has none."""
     mode = settings.JUDGE_SANDBOX_MODE
     if mode == "docker":
         return "docker"
+    if mode == "cloudrun":
+        return "cloudrun"
     if mode == "rlimit":
         return "rlimit"
-    return "docker" if shutil.which("docker") else "rlimit"
+    if shutil.which("docker"):
+        return "docker"
+    return "cloudrun" if _CLOUDRUN_CLI.is_file() else "unavailable"
 
 
 def _host_task_count() -> int:
@@ -919,7 +1108,7 @@ def _local_run(
 
 
 def _local_compile(
-    language: str, host_workdir: Path, memory_mb: int
+    language: str, host_workdir: Path, memory_mb: int, timeout_s: float = COMPILE_TIMEOUT_S
 ) -> tuple[list[str], str | None]:
     """Compile on the host toolchain. Returns (run_cmd, compile_error).
 
@@ -948,7 +1137,7 @@ def _local_compile(
                 host_workdir,
                 cmd,
                 mem,
-                COMPILE_TIMEOUT_S,
+                timeout_s,
                 fsize_bytes=_LOCAL_COMPILE_FSIZE_BYTES,
             )
         except subprocess.TimeoutExpired:
@@ -1045,8 +1234,67 @@ def _local_compile(
     return [], f"Unsupported language: {language}"
 
 
+def _cloudrun_compile(
+    language: str, host_workdir: Path, memory_mb: int, timeout_s: float = COMPILE_TIMEOUT_S
+) -> tuple[list[str], str | None]:
+    _cloudrun_source_tar(host_workdir)
+    memory = (
+        0 if language in ("java", "go", "rust", "javascript")
+        else max(_LOCAL_COMPILE_MIN_MB, _clamp_memory_mb(memory_mb))
+    )
+
+    def compile_command(command: list[str]) -> str | None:
+        try:
+            result = _run_cloudrun(
+                None, host_workdir, command, memory, timeout_s,
+                fsize_bytes=_LOCAL_COMPILE_FSIZE_BYTES, export_state=True,
+            )
+        except subprocess.TimeoutExpired:
+            return "compilation timed out"
+        if result.output_limit_exceeded:
+            return "compiler output exceeded the 1 MiB limit"
+        if result.returncode != 0:
+            return result.stderr.strip() or f"compilation failed (exit {result.returncode})"
+        return None
+
+    if language == "python":
+        error = compile_command(["python3", "-m", "py_compile", "solution.py"])
+        return (["python3", "solution.py"], None) if error is None else ([], error)
+    if language == "c":
+        error = compile_command(["gcc", *_C_HARDEN_FLAGS, "-o", "solution", "solution.c"])
+        return (["./solution"], None) if error is None else ([], error)
+    if language == "c++":
+        error = compile_command(["g++", *_CXX_HARDEN_FLAGS, "-o", "solution", "solution.cpp"])
+        return (["./solution"], None) if error is None else ([], error)
+    if language == "java":
+        error = compile_command(["javac", "-d", ".", "Solution.java"])
+        if error is not None:
+            return [], error
+        heap_mb = max(128, _clamp_memory_mb(memory_mb) * 3 // 4)
+        return ["java", f"-Xmx{heap_mb}M", "-Xss256k", "-XX:ReservedCodeCacheSize=64M", "-XX:MaxMetaspaceSize=96M", "-cp", ".", "Solution"], None
+    if language == "go":
+        error = compile_command(["env", "GOCACHE=/work/gocache", "GOTMPDIR=/work", "go", "build", "-o", "solution", "solution.go"])
+        if error is not None:
+            return [], error
+        return ["env", f"GOMEMLIMIT={_clamp_memory_mb(memory_mb)}MiB", "./solution"], None
+    if language == "rust":
+        error = compile_command(["rustc", "--edition", "2021", "-O", "-o", "solution", "solution.rs"])
+        return (["./solution"], None) if error is None else ([], error)
+    if language == "javascript":
+        error = compile_command(["node", "--check", "solution.js"])
+        if error is not None:
+            return [], error
+        heap_mb = max(64, _clamp_memory_mb(memory_mb) * 3 // 4)
+        return ["node", f"--max-old-space-size={heap_mb}", "solution.js"], None
+    return [], f"Unsupported language: {language}"
+
+
 def _docker_compile(
-    language: str, host_workdir: Path, memory_mb: int
+    language: str,
+    host_workdir: Path,
+    memory_mb: int,
+    timeout_s: float = COMPILE_TIMEOUT_S,
+    artifact_volume: str | None = None,
 ) -> tuple[list[str], str | None]:
     """Compile inside the sandbox. Returns (run_cmd, compile_error).
 
@@ -1063,8 +1311,9 @@ def _docker_compile(
                 host_workdir,
                 cmd,
                 mem,
-                COMPILE_TIMEOUT_S,
+                timeout_s,
                 fsize_bytes=_COMPILE_FSIZE_LIMIT_BYTES,
+                artifact_volume=artifact_volume,
             )
         except subprocess.TimeoutExpired:
             return "compilation timed out"
@@ -1093,7 +1342,7 @@ def _docker_compile(
         )
         if err is not None:
             return [], err
-        return ["/scratch/solution"], None
+        return ["/artifacts/solution"], None
 
     if language == "c++":
         err = _compile_cmd(
@@ -1101,7 +1350,7 @@ def _docker_compile(
         )
         if err is not None:
             return [], err
-        return ["/scratch/solution"], None
+        return ["/artifacts/solution"], None
 
     if language == "java":
         # Compiled output (-d /scratch) is separated from read-only sources.
@@ -1117,7 +1366,7 @@ def _docker_compile(
             "-XX:ReservedCodeCacheSize=64M",
             "-XX:MaxMetaspaceSize=96M",
             "-cp",
-            "/scratch",
+            "/artifacts",
             "Solution",
         ], None
 
@@ -1139,7 +1388,7 @@ def _docker_compile(
             return [], err
         # Under Docker the cgroup memory limit is the real ceiling, so the
         # runtime floor is unnecessary here.
-        return ["/scratch/solution"], None
+        return ["/artifacts/solution"], None
 
     if language == "rust":
         err = _compile_cmd(
@@ -1155,7 +1404,7 @@ def _docker_compile(
         )
         if err is not None:
             return [], err
-        return ["/scratch/solution"], None
+        return ["/artifacts/solution"], None
 
     if language == "javascript":
         err = _compile_cmd(["node", "--check", "/sandbox/solution.js"])
@@ -1291,32 +1540,71 @@ def _is_cpu_limit_kill(returncode: int | None) -> bool:
     return returncode is not None and sigxcpu is not None and returncode == -sigxcpu
 
 
-def execute_judge(req: JudgeRequest) -> JudgeResponse:
+def execute_judge(req: JudgeRequest, *, lock_wait_seconds: float = 0.0) -> JudgeResponse:
+    backend = resolve_sandbox_backend()
+    if backend == "unavailable":
+        return _sandbox_unavailable_response("no isolated backend configured", len(req.cases))
+    try:
+        with host_execution_lock(settings.JUDGE_HOST_EXECUTION_LOCK, lock_wait_seconds):
+            if backend == "docker":
+                with _docker_artifact_volume() as volume_name:
+                    return _execute_judge(req, backend, volume_name)
+            if backend == "cloudrun":
+                with _CLOUDRUN_JUDGE_LOCK:
+                    return _execute_judge(req, backend)
+            return _execute_judge(req, backend)
+    except HostExecutionLockError as error:
+        return _sandbox_unavailable_response(str(error), len(req.cases))
+    except SandboxUnavailable as error:
+        return _sandbox_unavailable_response(str(error), len(req.cases))
+
+
+def _budget_exceeded_response(total: int) -> JudgeResponse:
+    return _sandbox_unavailable_response("60-second aggregate wall budget exceeded", total)
+
+
+def _execute_judge(
+    req: JudgeRequest, backend: str, artifact_volume: str | None = None
+) -> JudgeResponse:
     if req.language not in SUPPORTED_LANGUAGES:
         # Caller should have already returned 422, but keep as safety
         raise ValueError("Unsupported language")
 
+    deadline = time.monotonic() + _JUDGE_WALL_BUDGET_S
     with (
         tempfile.TemporaryDirectory(prefix="koj-judge-") as tmp,
         tempfile.TemporaryDirectory(prefix="koj-checker-") as checker_tmp,
     ):
         workdir = Path(tmp)
         checker_workdir = Path(checker_tmp)
+        if backend == "docker":
+            workdir.chmod(0o755)
+            checker_workdir.chmod(0o755)
         sample_flags = [bool(c.is_sample) for c in req.cases]
         try:
             _prepare(req.language, req.code, workdir)
+            if backend == "docker":
+                for source_file in workdir.iterdir():
+                    source_file.chmod(0o444)
         except ValueError as e:
             return _ce_response(str(e), len(req.cases), sample_flags)
 
-        backend = resolve_sandbox_backend()
         logger.info(
             "judge start backend=%s language=%s cases=%d",
             backend,
             req.language,
             len(req.cases),
         )
-        compile_fn = _docker_compile if backend == "docker" else _local_compile
-        run_fn = _run_docker if backend == "docker" else _local_run
+        compile_fn = (
+            _docker_compile if backend == "docker"
+            else _cloudrun_compile if backend == "cloudrun"
+            else _local_compile
+        )
+        run_fn = (
+            _run_docker if backend == "docker"
+            else _run_cloudrun if backend == "cloudrun"
+            else _local_run
+        )
         checker_image = _image_for("python") if backend == "docker" else None
         checker_cmd = (
             ["python3", "-I", "-S", "-c", req.checker_code or ""]
@@ -1326,9 +1614,22 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
 
         try:
             image = _image_for(req.language)
-            run_cmd, compile_error = compile_fn(req.language, workdir, req.memory_mb)
+            compile_kwargs = (
+                {"artifact_volume": artifact_volume}
+                if backend == "docker"
+                else {}
+            )
+            run_cmd, compile_error = compile_fn(
+                req.language,
+                workdir,
+                req.memory_mb,
+                min(COMPILE_TIMEOUT_S, max(0.001, deadline - time.monotonic())),
+                **compile_kwargs,
+            )
         except SandboxUnavailable as e:
             return _sandbox_unavailable_response(str(e), len(req.cases))
+        if time.monotonic() >= deadline:
+            return _budget_exceeded_response(len(req.cases))
         if compile_error is not None:
             return _ce_response(compile_error, len(req.cases), sample_flags)
 
@@ -1355,7 +1656,19 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
             start = time.monotonic()
             checker_phase = False
             try:
-                proc = run_fn(image, workdir, run_cmd, mem, wall_timeout, stdin_text=case.stdin)
+                remaining_budget = deadline - time.monotonic()
+                if remaining_budget <= 0:
+                    return _budget_exceeded_response(len(req.cases))
+                case_timeout = min(wall_timeout, remaining_budget)
+                run_kwargs = {"stdin_text": case.stdin}
+                if backend == "docker":
+                    run_kwargs.update(
+                        artifact_volume=artifact_volume,
+                        artifact_volume_read_only=True,
+                    )
+                proc = run_fn(image, workdir, run_cmd, mem, case_timeout, **run_kwargs)
+                if time.monotonic() >= deadline:
+                    return _budget_exceeded_response(len(req.cases))
                 elapsed_ms = int((time.monotonic() - start) * 1000)
                 stdout_raw = proc.stdout or ""
                 stderr_raw = proc.stderr or ""
@@ -1453,6 +1766,10 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
                         _SPECIAL_CHECKER_TIMEOUT_S,
                         max(0.1, req.time_limit_ms / 1000),
                     )
+                    checker_remaining = deadline - time.monotonic()
+                    if checker_remaining <= 0:
+                        return _budget_exceeded_response(len(req.cases))
+                    checker_timeout = min(checker_timeout, checker_remaining)
                     checker_phase = True
                     checker_proc = run_fn(
                         checker_image,
@@ -1460,9 +1777,19 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
                         checker_cmd,
                         checker_mem,
                         checker_timeout,
-                        stdin_text=checker_payload,
+                        **(
+                            {
+                                "stdin_text": checker_payload,
+                                "artifact_volume": artifact_volume,
+                                "artifact_volume_read_only": True,
+                            }
+                            if backend == "docker"
+                            else {"stdin_text": checker_payload}
+                        ),
                     )
                     checker_phase = False
+                    if time.monotonic() >= deadline:
+                        return _budget_exceeded_response(len(req.cases))
                     checker_passed = _special_checker_passed(
                         checker_proc.returncode,
                         checker_proc.output_limit_exceeded,
@@ -1549,6 +1876,8 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
                     )
 
             except subprocess.TimeoutExpired as e:
+                if time.monotonic() >= deadline:
+                    return _budget_exceeded_response(len(req.cases))
                 elapsed_ms = int((time.monotonic() - start) * 1000)
                 if elapsed_ms > max_runtime:
                     max_runtime = elapsed_ms
@@ -1557,7 +1886,7 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
                 verdict: Verdict = "runtime_error" if checker_phase else "time_limit_exceeded"
                 if first_error is None:
                     first_error = (
-                        "special checker timed out"
+                        _INFRASTRUCTURE_PUBLIC_MESSAGE
                         if checker_phase
                         else f"time limit exceeded ({req.time_limit_ms}ms)"
                     )
@@ -1570,8 +1899,8 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
                         passed=False,
                         verdict=verdict,
                         runtime_ms=elapsed_ms,
-                        stdout=stdout_raw,
-                        stderr="special checker timed out" if checker_phase else stderr_raw,
+                        stdout="" if checker_phase else stdout_raw,
+                        stderr=_INFRASTRUCTURE_PUBLIC_MESSAGE if checker_phase else stderr_raw,
                         is_sample=is_sample,
                     )
                 )
@@ -1579,7 +1908,8 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
                 elapsed_ms = int((time.monotonic() - start) * 1000)
                 if elapsed_ms > max_runtime:
                     max_runtime = elapsed_ms
-                msg = _truncate(f"judge sandbox unavailable: {e}", 2048)
+                logger.error("judge sandbox stage failed type=%s", type(e).__name__)
+                msg = _INFRASTRUCTURE_PUBLIC_MESSAGE
                 if first_error is None:
                     first_error = msg
                     aggregate = "runtime_error"
@@ -1598,7 +1928,8 @@ def execute_judge(req: JudgeRequest) -> JudgeResponse:
                 elapsed_ms = int((time.monotonic() - start) * 1000)
                 if elapsed_ms > max_runtime:
                     max_runtime = elapsed_ms
-                msg = _truncate(str(e), 2048)
+                logger.error("judge sandbox stage failed type=%s", type(e).__name__)
+                msg = _INFRASTRUCTURE_PUBLIC_MESSAGE
                 if first_error is None:
                     first_error = msg
                     aggregate = "runtime_error"

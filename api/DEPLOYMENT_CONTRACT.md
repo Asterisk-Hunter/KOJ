@@ -10,41 +10,48 @@ match. Workers heartbeat their leases; expired leases are eligible for another
 attempt. Infrastructure errors use exponential backoff (5 seconds to 5
 minutes) and stop after `max_attempts`.
 
-Deploy the API image as two Cloud Run deployables:
+The current trusted-college configuration described below must not accept
+arbitrary public submissions. For public judging, the intended split is:
 
-- **HTTP service:** `uvicorn app.main:app`; retained for health checks and the
-  authenticated compatibility endpoints.
-- **Worker pool:** `python -m app.worker`; pulls the durable Postgres queue and
-  needs no public URL. Set the instance count explicitly and scale after
-  measuring queue latency and resource use.
+- **Cloud Run HTTP service:** `uvicorn app.main:app` for health and
+  non-executing authenticated compatibility/control endpoints. Direct
+  `/judge` execution stays disabled until it delegates to the isolated host.
+- **Dedicated Linux judge host:** `python -m app.worker` with
+  `JUDGE_SANDBOX_MODE=docker`, verified Docker daemon, cgroups, seccomp, and
+  network-disabled per-run containers. It pulls the Postgres queue and needs
+  no public URL.
 
-Both deployables need the Neon `DATABASE_URL`. Use the same pinned image and
-set `JUDGE_SANDBOX_MODE=rlimit` in Cloud Run. The image runs both processes as
-non-root UID/GID `10001`, reducing container privileges. This does not add
-filesystem or network namespaces or change the trusted-college security
-boundary. Keep `JUDGE_INTERNAL_SECRET`
-random and private for the compatibility HTTP endpoints. The normal Next.js
-submission flow does not need `FASTAPI_URL` or that secret.
+Use separate least-privilege Neon roles and identities for the API and judge
+host. Keep `JUDGE_INTERNAL_SECRET` random and private for compatibility
+endpoints. Normal Next.js submissions insert queue jobs directly and do not
+need `FASTAPI_URL` or that secret. The direct `/judge` endpoint still executes
+code in the API process if called; configure it to fail closed on Cloud Run
+until delegation is implemented.
 
 ## Sandbox modes
 
 | Mode | Behaviour | Use |
 |---|---|---|
-| `rlimit` | Host toolchain with CPU/address-space/process/file-size/open-file limits, bounded stdout/stderr, wall timeout, and process-group kill. | Cloud Run and local fallback. No filesystem or network namespace. Trusted-college audience only. |
+| `cloudrun` | Experimental Cloud Run Preview launcher that requires a private toolchain rootfs; fails closed when it cannot start. | Not deployable for public judging in the tested environment. |
+| `rlimit` | Host toolchain with CPU/address-space/process/file-size/open-file limits, bounded stdout/stderr, wall timeout, and process-group kill. | Explicit local trusted-development mode only. Never use for public submissions. |
 | `docker` | Per-run container with no network, read-only root/source, dropped capabilities, seccomp, and configured cgroup/resource limits. Fails closed if Docker is unavailable. | Dedicated Linux host with Docker daemon and verified cgroups/seccomp. |
-| `auto` | Docker if the CLI exists, otherwise `rlimit`. | Development only; production should select explicitly. |
+| `auto` | Docker if available, then Cloud Run launcher; otherwise fails closed. | Development only; production should select explicitly. |
 
-Cloud Run `rlimit` is not a hardened boundary for arbitrary public submissions.
-The image runs as non-root UID/GID `10001`, but `rlimit` does not isolate
-filesystem or network access. A hostile program can probe
-files visible to the worker OS user and attempt outbound connections. Child
-processes get a minimal environment to avoid inheriting application secrets,
-but environment filtering does not replace OS isolation. See
+The Cloud Run Preview prototype uses a private rootfs built before application
+code is copied, tar-only source handoff, and default-denied egress. Live
+verification showed the default sandbox root can read parent image files, while
+launching the private rootfs fails with `FetchSpec failed: loading container:
+file does not exist`. Root bind mounting failed; chroot was denied with
+`Operation not permitted`. Do not switch the backend to the default root.
+Cloud Run's sandbox CLI has no documented per-sandbox aggregate CPU, memory,
+or PID quota flags, and sandboxes share instance resources. `rlimit` lacks
+filesystem, process, metadata, and network isolation. Neither mode currently
+meets the public hostile-code threat model in this deployment. See
 [`docs/threat-model.md`](../docs/threat-model.md).
 
-Do not run this configuration as a public multi-tenant judge. For arbitrary
-hostile code, use a dedicated Linux host with Docker or a namespace/cgroup
-sandbox, and isolate judging credentials from the web application.
+Do not enable public submissions until the dedicated judge host has passed
+deployed adversarial, language, resource, and secret-isolation probes. There
+is no zero-vulnerability guarantee.
 
 ## Runtime limits and verdict behavior
 
@@ -53,8 +60,9 @@ sandbox, and isolate judging credentials from the web application.
 - Each stdout/stderr stream retains at most 1 MiB; exceeding the bound kills
   the process and returns `runtime_error` (or `compilation_error` for compiler
   output).
-- Runtime file growth is limited to 1 MiB in `rlimit`; compile output files
-  have a 64 MiB cap. Docker uses equivalent per-phase `fsize` ulimits.
+- Runtime file growth is limited to 1 MiB in `rlimit` and `cloudrun`;
+  compile output files have a 64 MiB cap. Docker uses equivalent per-phase
+  `fsize` ulimits. Cloud Run also caps exported archives at 512 MiB.
 - Open file descriptors are capped at 256. Process count, CPU, memory, and wall
   timeout limits are backend-dependent; see `api/app/judge.py`.
 - Verdicts are decided in test-case order. A non-zero exit, timeout, output
@@ -71,15 +79,22 @@ count controls queue parallelism.
 | Variable | Required by | Purpose |
 |---|---|---|
 | `DATABASE_URL` | API and worker | Neon pooled connection string with TLS |
-| `JUDGE_SANDBOX_MODE` | API and worker | Set `rlimit` explicitly on Cloud Run |
+| `JUDGE_SANDBOX_MODE` | API and worker | `docker` on the dedicated host; Cloud Run direct execution remains disabled |
 | `JUDGE_INTERNAL_SECRET` | HTTP API | Shared secret for internal compatibility judge routes |
 | `FASTAPI_HOST` / `PORT` | HTTP API | Bind address / Cloud Run port |
 | `JUDGE_LEASE_SECONDS` | Worker | Lease lifetime; 120 seconds by default |
 | `JUDGE_WORKER_POLL_SECONDS` | Worker | Idle queue poll interval; 1 second by default |
 | `JUDGE_MAX_CONCURRENT` | HTTP API | Direct judge request limit; not the worker count |
 
-Store database credentials in Secret Manager. Give the Cloud Run runtime
-identity the minimum required permissions and no unrelated project roles.
+Store database credentials in Secret Manager. The database client defaults to
+`sslmode=verify-full` with the system CA bundle even when the DSN says
+`sslmode=require`; `DATABASE_TLS_VERIFY=false` is only for local development.
+Use separate least-privilege database roles and dedicated
+identities for the API and worker. Give each identity access only to its own
+database secret and no unrelated project roles. Public `/health` is a
+cheap liveness response; `/ready` checks DB and backend only with
+`X-Judge-Secret`. The OpenAPI, Swagger, and ReDoc routes are disabled unless
+`API_EXPOSE_DOCS=true` is explicitly set for local development.
 Never log settings objects, DSNs, source code, stdin, or expected output.
 
 ## Operational checks
@@ -88,12 +103,13 @@ Never log settings objects, DSNs, source code, stdin, or expected output.
    Historical migrations were previously only partially represented in the
    Drizzle journal. Empty-database CI validates the checked-in migration chain;
    inspect the live Neon schema and migration ledger before applying it there.
-2. Deploy one worker-pool instance and submit a sample problem. Confirm the
+2. Deploy one Docker worker on the dedicated Linux host and submit a sample
+   problem. Confirm the
    admin queue shows one active worker and the submission reaches a verdict.
 3. Stop a worker during a long job; confirm lease expiry makes the job
    claimable again and only one attempt can commit the verdict.
-4. Confirm Cloud Run explicitly reports the `rlimit` backend and that outbound
-   network/filesystem access is treated as a documented residual risk.
+4. Verify Docker denies filesystem escape, network access, privilege gain,
+   process/memory abuse, and cross-submission reads on the deployed host.
 5. Measure queue p50/p95, throughput, infra-failure rate, and worker resource
    use before increasing worker instances or scheduling a real contest.
 

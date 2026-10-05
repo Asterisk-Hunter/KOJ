@@ -44,6 +44,19 @@ class Settings(BaseSettings):
         description="Shared secret for internal /judge calls. Empty = judge disabled (returns 500).",
     )
 
+    JUDGE_UPSTREAM_URL: str = Field(
+        default="",
+        description="Trusted judge VM origin for forwarding /judge requests; never supplied by a caller.",
+    )
+    JUDGE_HTTP_EXECUTION_ENABLED: bool = Field(
+        default=False,
+        description="Allow direct HTTP execution outside Cloud Run. Keep disabled on the control API.",
+    )
+    JUDGE_HOST_EXECUTION_LOCK: str = Field(
+        default="",
+        description="Optional flock path shared by judge processes on one host; empty disables host-wide serialization.",
+    )
+
     FRONTEND_URL: str = Field(
         default="",
         description="Production frontend origin for CORS (e.g. https://koj.vercel.app). Empty = localhost-only in dev.",
@@ -104,6 +117,14 @@ class Settings(BaseSettings):
         le=32,
         description="Max concurrent direct HTTP judgements per API process. Saturated requests get 503 + Retry-After.",
     )
+    DATABASE_TLS_VERIFY: bool = Field(
+        default=True,
+        description="Require Postgres certificate and hostname verification; disable only for local development.",
+    )
+    API_EXPOSE_DOCS: bool = Field(
+        default=False,
+        description="Enable FastAPI documentation endpoints for local development only.",
+    )
     JUDGE_LEASE_SECONDS: int = Field(
         default=120,
         ge=30,
@@ -121,13 +142,14 @@ class Settings(BaseSettings):
         description="Docker daemon host path to the repo-managed seccomp profile (api/seccomp-koj.json provisioned to this path). Always passed as --security-opt seccomp=...; missing/invalid profile fails closed.",
     )
 
-    JUDGE_SANDBOX_MODE: Literal["auto", "docker", "rlimit"] = Field(
+    JUDGE_SANDBOX_MODE: Literal["auto", "docker", "cloudrun", "rlimit"] = Field(
         default="auto",
         description=(
             "Sandbox backend. 'docker' = container backend only (fails closed without "
             "a Docker daemon, see api/DEPLOYMENT_CONTRACT.md). 'rlimit' = host-toolchain "
-            "backend with resource.setrlimit CPU/AS/NPROC/FSIZE limits (SRS §2.5 constraint 3). "
-            "'auto' = Docker when the CLI is present, else rlimit (Cloud Run)."
+            "backend with resource.setrlimit CPU/AS/NPROC/FSIZE limits (development only). "
+            "'cloudrun' = Cloud Run sandbox launcher. 'auto' = Docker or Cloud Run "
+            "when available, otherwise fail closed."
         ),
     )
 
