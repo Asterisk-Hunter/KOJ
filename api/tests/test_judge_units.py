@@ -32,6 +32,7 @@ from app.judge import (
     _visible_case,
     _whitespace_only_diff,
 )
+from app.host_lock import HostExecutionLockError
 
 
 def test_process_output_is_capped_and_terminates_the_child():
@@ -53,6 +54,141 @@ def test_local_child_environment_does_not_inherit_service_secrets(monkeypatch, t
     assert "DATABASE_URL" not in child_environment
     assert "CLERK_SECRET_KEY" not in child_environment
     assert child_environment["HOME"] == str(tmp_path)
+
+
+def test_docker_artifact_volume_uses_bounded_tmpfs_and_is_removed(monkeypatch):
+    from types import SimpleNamespace
+    from app import judge
+
+    calls = []
+    monkeypatch.setattr(judge.shutil, "which", lambda _name: "docker")
+    monkeypatch.setattr(judge.uuid, "uuid4", lambda: SimpleNamespace(hex="fixed"))
+    monkeypatch.setattr(
+        judge.subprocess,
+        "run",
+        lambda argv, **kwargs: calls.append((argv, kwargs))
+        or SimpleNamespace(returncode=0, stdout="koj-artifacts-fixed\n", stderr=""),
+    )
+
+    with judge._docker_artifact_volume() as volume:
+        assert volume == "koj-artifacts-fixed"
+
+    create_argv, create_options = calls[0]
+    remove_argv, remove_options = calls[1]
+    assert create_argv[:4] == ["docker", "volume", "create", "--driver"]
+    assert "type=tmpfs" in create_argv
+    assert "device=tmpfs" in create_argv
+    assert "o=size=268435456,uid=65534,gid=65534,mode=0700" in create_argv
+    assert create_options["timeout"] == judge._DOCKER_KILL_TIMEOUT_S
+    assert remove_argv == ["docker", "volume", "rm", "--force", volume]
+    assert remove_options["timeout"] == judge._DOCKER_KILL_TIMEOUT_S
+
+
+def test_docker_base_mounts_artifacts_rw_for_compile_and_ro_for_cases():
+    from pathlib import Path
+    from app import judge
+
+    compile_args = judge._docker_base_argv("image", Path("source"), "compile", 256, 4096, "vol")
+    case_args = judge._docker_base_argv(
+        "image", Path("source"), "case", 256, 4096, "vol", artifact_volume_read_only=True
+    )
+
+    assert "vol:/scratch:rw" in compile_args
+    assert "vol:/artifacts:ro" not in compile_args
+    assert "vol:/artifacts:ro" in case_args
+    assert "vol:/scratch:rw" not in case_args
+    assert "--read-only" in compile_args and "--read-only" in case_args
+    assert f"{Path('source')}:/sandbox:ro" in compile_args
+    assert f"{Path('source')}:/sandbox:ro" in case_args
+
+
+@pytest.mark.parametrize(
+    ("language", "expected_run_path"),
+    [("c", "/artifacts/solution"), ("java", "/artifacts")],
+)
+def test_docker_compile_writes_to_volume_and_runs_from_read_only_mount(
+    monkeypatch, language, expected_run_path
+):
+    from pathlib import Path
+    from app import judge
+
+    calls = []
+    monkeypatch.setattr(
+        judge,
+        "_run_docker",
+        lambda *args, **kwargs: calls.append((args, kwargs))
+        or ProcessResult(0, "", "", False),
+    )
+    if language == "java":
+        monkeypatch.setattr(judge, "_run_memory_mb", lambda *_args: 256)
+
+    command, error = judge._docker_compile(language, Path("source"), 256, artifact_volume="vol")
+
+    assert error is None
+    assert expected_run_path in command
+    assert calls[0][1]["artifact_volume"] == "vol"
+    assert calls[0][1].get("artifact_volume_read_only", False) is False
+
+
+def test_docker_judgement_shares_compile_volume_read_only_with_each_case(monkeypatch):
+    from contextlib import contextmanager
+    from unittest.mock import MagicMock
+    from app import judge
+
+    compile_volumes = []
+    run_volumes = []
+    workdir = MagicMock()
+    checker_workdir = MagicMock()
+    source_file = MagicMock()
+    workdir.__truediv__.return_value = source_file
+    workdir.iterdir.return_value = [source_file]
+    directories = iter(["source", "checker"])
+
+    @contextmanager
+    def temporary_directory(**_kwargs):
+        yield next(directories)
+
+    @contextmanager
+    def artifact_volume():
+        yield "judge-volume"
+
+    @contextmanager
+    def execution_lock(_path, _wait_seconds):
+        yield
+
+    def compile_solution(_language, _workdir, _memory, _timeout, *, artifact_volume):
+        compile_volumes.append(artifact_volume)
+        return ["/artifacts/solution"], None
+
+    def run_case(_image, _workdir, _command, _memory, _timeout, **kwargs):
+        run_volumes.append((kwargs["artifact_volume"], kwargs["artifact_volume_read_only"]))
+        return ProcessResult(0, "1\n", "", False)
+
+    monkeypatch.setattr(judge, "resolve_sandbox_backend", lambda: "docker")
+    monkeypatch.setattr(judge, "host_execution_lock", execution_lock)
+    monkeypatch.setattr(judge, "_docker_artifact_volume", artifact_volume)
+    monkeypatch.setattr(judge, "_image_for", lambda _language: "image")
+    monkeypatch.setattr(judge, "_docker_compile", compile_solution)
+    monkeypatch.setattr(judge, "_run_docker", run_case)
+    monkeypatch.setattr(judge.tempfile, "TemporaryDirectory", temporary_directory)
+    monkeypatch.setattr(judge, "Path", lambda name: workdir if name == "source" else checker_workdir)
+
+    response = judge.execute_judge(
+        judge.JudgeRequest(
+            language="c",
+            code="int main(void) { return 0; }",
+            cases=[judge.JudgeCase(stdin="", expected_stdout="1")],
+            time_limit_ms=1000,
+            memory_mb=256,
+        )
+    )
+
+    assert response.status == "accepted"
+    assert compile_volumes == ["judge-volume"]
+    assert run_volumes == [("judge-volume", True)]
+    workdir.chmod.assert_called_once_with(0o755)
+    checker_workdir.chmod.assert_called_once_with(0o755)
+    source_file.chmod.assert_called_once_with(0o444)
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +400,45 @@ class TestSpecialCheckerResult:
         assert response.cases[0].stderr == ""
 
 
+def test_judge_infrastructure_reason_never_reaches_response():
+    from app.judge import _sandbox_unavailable_response
+
+    secret_marker = "credential-marker hidden-input-marker"
+    response = _sandbox_unavailable_response(secret_marker, 1)
+
+    assert response.infra_error is True
+    assert secret_marker not in (response.error_message or "")
+    assert secret_marker not in response.cases[0].stdout
+    assert secret_marker not in response.cases[0].stderr
+
+
+def test_unexpected_sandbox_exception_does_not_leak_exception_reason(monkeypatch):
+    from app import judge
+
+    secret_marker = "credential-marker hidden-input-marker"
+    monkeypatch.setattr(judge, "resolve_sandbox_backend", lambda: "rlimit")
+    monkeypatch.setattr(judge, "_local_compile", lambda *_args: (["solution"], None))
+
+    def fail_with_sensitive_reason(*_args, **_kwargs):
+        raise RuntimeError(secret_marker)
+
+    monkeypatch.setattr(judge, "_local_run", fail_with_sensitive_reason)
+    response = judge.execute_judge(
+        judge.JudgeRequest(
+            language="python",
+            code="print(1)",
+            cases=[judge.JudgeCase(stdin="", expected_stdout="1", is_sample=True)],
+            time_limit_ms=1000,
+            memory_mb=256,
+        )
+    )
+
+    assert response.infra_error is True
+    assert secret_marker not in (response.error_message or "")
+    assert secret_marker not in response.cases[0].stdout
+    assert secret_marker not in response.cases[0].stderr
+
+
 # ---------------------------------------------------------------------------
 # _whitespace_only_diff
 # ---------------------------------------------------------------------------
@@ -358,7 +533,7 @@ class TestSandboxUnavailableResponse:
 
     def test_message_prefixed(self):
         r = _sandbox_unavailable_response("boom", 1)
-        assert r.error_message is not None and "judge sandbox unavailable" in r.error_message
+        assert r.error_message == "Judge infrastructure temporarily unavailable."
 
     def test_passed_zero(self):
         r = _sandbox_unavailable_response("x", 3)
@@ -586,3 +761,55 @@ class TestSupportedLanguages:
 
     def test_length_at_least_four(self):
         assert len(SUPPORTED_LANGUAGES) >= 4
+
+
+class TestJudgeRequestLimits:
+    @staticmethod
+    def make_request(**overrides):
+        from app.judge import JudgeCase, JudgeRequest
+
+        values = {
+            "language": "python",
+            "code": "print(1)",
+            "cases": [JudgeCase(stdin="", expected_stdout="1")],
+            "time_limit_ms": 10_000,
+            "memory_mb": 1024,
+        }
+        values.update(overrides)
+        return JudgeRequest(**values)
+
+    def test_accepts_limits_at_boundaries(self):
+        self.make_request(code="é" * (50 * 1024), cases=[])
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"cases": [None] * 101},
+            {"time_limit_ms": 10_001},
+            {"memory_mb": 1025},
+            {"code": "x" * (100 * 1024 + 1)},
+            {"code": "é" * (50 * 1024 + 1)},
+        ],
+    )
+    def test_rejects_requests_over_limits(self, overrides):
+        from app.judge import JudgeRequest
+
+        with pytest.raises(ValidationError):
+            self.make_request(**overrides)
+
+    def test_host_lock_contention_maps_to_infrastructure_error(self, monkeypatch):
+        from contextlib import contextmanager
+        from app import judge
+
+        @contextmanager
+        def unavailable(_path, _wait_seconds):
+            raise HostExecutionLockError("host execution lock is unavailable")
+            yield
+
+        monkeypatch.setattr(judge, "resolve_sandbox_backend", lambda: "rlimit")
+        monkeypatch.setattr(judge, "host_execution_lock", unavailable)
+        response = judge.execute_judge(self.make_request())
+
+        assert response.status == "runtime_error"
+        assert response.infra_error is True
+        assert response.passed_tests == 0

@@ -12,6 +12,13 @@ from .config import settings
 from .judge import CaseResult, JudgeCase, JudgeResponse
 
 logger = logging.getLogger("koj.queue")
+_MAX_CASE_COUNT = 100
+_MAX_CASE_BYTES = 16 * 1024 * 1024
+_INFRASTRUCTURE_ERROR_MESSAGE = "Judge infrastructure temporarily unavailable."
+
+
+class SubmissionConfigurationError(ValueError):
+    """A stored problem configuration exceeds supported judge limits."""
 
 
 @dataclass(frozen=True)
@@ -148,41 +155,58 @@ def claim_job(worker_id: str, lease_seconds: int) -> ClaimedJob | None:
 
 def load_submission(submission_id: int) -> SubmissionInput | None:
     with db.get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT s.problem_id, s.language, s.code, s.mode, p.time_limit_ms, "
-                "p.memory_limit_mb, p.output_comparator, p.absolute_tolerance, "
-                "p.relative_tolerance, p.checker_code, s.submitted_at "
-                "FROM submissions AS s JOIN problems AS p ON p.id = s.problem_id "
-                "WHERE s.id = %s AND s.status IN ('pending', 'running')",
-                (submission_id,),
-            )
-            row = cur.fetchone()
-            if row is None:
-                return None
-            (
-                problem_id,
-                language,
-                code,
-                mode,
-                time_limit_ms,
-                memory_limit_mb,
-                output_comparator,
-                absolute_tolerance,
-                relative_tolerance,
-                checker_code,
-                submitted_at,
-            ) = row
-            cur.execute(
-                "SELECT input, expected_output, is_sample FROM problem_test_cases "
-                "WHERE problem_id = %s AND (%s = 'submit' OR is_sample = true) "
-                "ORDER BY position",
-                (problem_id, mode),
-            )
-            cases = tuple(
-                JudgeCase(stdin=case[0], expected_stdout=case[1], is_sample=bool(case[2]))
-                for case in cur.fetchall()
-            )
+        with conn.transaction():
+            with conn.cursor() as cur:
+                cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                cur.execute(
+                    "SELECT s.problem_id, s.language, s.code, s.mode, p.time_limit_ms, "
+                    "p.memory_limit_mb, p.output_comparator, p.absolute_tolerance, "
+                    "p.relative_tolerance, p.checker_code, s.submitted_at "
+                    "FROM submissions AS s JOIN problems AS p ON p.id = s.problem_id "
+                    "WHERE s.id = %s AND s.status IN ('pending', 'running')",
+                    (submission_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    return None
+                (
+                    problem_id,
+                    language,
+                    code,
+                    mode,
+                    time_limit_ms,
+                    memory_limit_mb,
+                    output_comparator,
+                    absolute_tolerance,
+                    relative_tolerance,
+                    checker_code,
+                    submitted_at,
+                ) = row
+                cur.execute(
+                    "SELECT count(*), COALESCE(sum(octet_length(input) + "
+                    "octet_length(expected_output)), 0) FROM problem_test_cases "
+                    "WHERE problem_id = %s AND (%s = 'submit' OR is_sample = true)",
+                    (problem_id, mode),
+                )
+                case_count, case_bytes = cur.fetchone()
+                if case_count > _MAX_CASE_COUNT or case_bytes > _MAX_CASE_BYTES:
+                    raise SubmissionConfigurationError("problem test set exceeds judge limits")
+                cur.execute(
+                    "SELECT input, expected_output, is_sample FROM problem_test_cases "
+                    "WHERE problem_id = %s AND (%s = 'submit' OR is_sample = true) "
+                    "ORDER BY position LIMIT 101",
+                    (problem_id, mode),
+                )
+                case_rows = cur.fetchall()
+                if len(case_rows) > _MAX_CASE_COUNT or sum(
+                    len(case[0].encode("utf-8")) + len(case[1].encode("utf-8"))
+                    for case in case_rows
+                ) > _MAX_CASE_BYTES:
+                    raise SubmissionConfigurationError("problem test set exceeds judge limits")
+                cases = tuple(
+                    JudgeCase(stdin=case[0], expected_stdout=case[1], is_sample=bool(case[2]))
+                    for case in case_rows
+                )
     return SubmissionInput(
         submission_id=submission_id,
         problem_id=problem_id,
@@ -256,8 +280,7 @@ def complete_job(worker_id: str, job: ClaimedJob, result: JudgeResponse) -> bool
     return True
 
 
-def retry_job(worker_id: str, job: ClaimedJob, message: str, total_tests: int = 0) -> bool:
-    safe_message = message[:2048]
+def retry_job(worker_id: str, job: ClaimedJob, _message: str, total_tests: int = 0) -> bool:
     should_retry = job.attempt < job.max_attempts
     delay_seconds = retry_delay_seconds(job.attempt)
     next_status = "queued" if should_retry else "dead"
@@ -273,7 +296,7 @@ def retry_job(worker_id: str, job: ClaimedJob, message: str, total_tests: int = 
                         next_status,
                         delay_seconds,
                         None if should_retry else datetime.now(timezone.utc),
-                        safe_message,
+                        _INFRASTRUCTURE_ERROR_MESSAGE,
                         job.id,
                         worker_id,
                         job.attempt,
@@ -291,7 +314,7 @@ def retry_job(worker_id: str, job: ClaimedJob, message: str, total_tests: int = 
                     (
                         submission_status,
                         total_tests,
-                        safe_message,
+                        _INFRASTRUCTURE_ERROR_MESSAGE,
                         None if should_retry else datetime.now(timezone.utc),
                         job.submission_id,
                     ),
@@ -330,14 +353,15 @@ def finalize_exhausted_jobs() -> int:
                     "WITH exhausted AS ("
                     "  UPDATE judge_jobs SET status = 'dead', leased_by = NULL, lease_expires_at = NULL, "
                     "  completed_at = NOW(), updated_at = NOW(), "
-                    "  last_error = COALESCE(last_error, 'judge worker lease expired after final attempt') "
+                    "  last_error = 'Judge infrastructure temporarily unavailable.' "
                     "  WHERE attempts >= max_attempts AND ("
                     "    (status = 'queued' AND available_at <= NOW()) OR "
                     "    (status = 'leased' AND lease_expires_at <= NOW())"
-                    "  ) RETURNING submission_id, last_error"
+                    "  ) RETURNING submission_id"
                     ") "
                     "UPDATE submissions AS submission SET status = 'runtime_error', "
-                    "error_message = exhausted.last_error, judge_infra_error = true, completed_at = NOW() "
+                    "error_message = 'Judge infrastructure temporarily unavailable.', "
+                    "judge_infra_error = true, completed_at = NOW() "
                     "FROM exhausted WHERE submission.id = exhausted.submission_id "
                     "AND submission.status IN ('pending', 'running') RETURNING submission.id"
                 )

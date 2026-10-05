@@ -12,7 +12,8 @@ from datetime import datetime, timezone
 
 from . import db, queue
 from .config import settings
-from .judge import JudgeRequest, execute_judge, warm_go_cache
+from .judge import JudgeRequest, JudgeResponse, execute_judge, resolve_sandbox_backend, warm_go_cache
+from .cloudrun_jobs import JobConfig, JobOutcome, run_job
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,6 +39,23 @@ def _keep_lease_alive(
             logger.exception("job heartbeat failed job=%s attempt=%s", job.id, job.attempt)
 
 
+def _execute_local_submission(submission: queue.SubmissionInput) -> JudgeResponse:
+    return execute_judge(
+        JudgeRequest(
+            language=submission.language,
+            code=submission.code,
+            cases=list(submission.cases),
+            time_limit_ms=submission.time_limit_ms,
+            memory_mb=submission.memory_limit_mb,
+            output_comparator=submission.output_comparator,
+            absolute_tolerance=submission.absolute_tolerance,
+            relative_tolerance=submission.relative_tolerance,
+            checker_code=submission.checker_code,
+        ),
+        lock_wait_seconds=65,
+    )
+
+
 def _process_job(worker_id: str, job: queue.ClaimedJob) -> None:
     heartbeat_stop = threading.Event()
     lease_lost = threading.Event()
@@ -50,6 +68,9 @@ def _process_job(worker_id: str, job: queue.ClaimedJob) -> None:
     heartbeat.start()
     started = time.monotonic()
     try:
+        if _uses_cloudrun_job_dispatch():
+            _process_cloudrun_job(worker_id, job, lease_lost)
+            return
         submission = queue.load_submission(job.submission_id)
         if submission is None:
             queue.mark_job_unavailable(worker_id, job)
@@ -59,19 +80,7 @@ def _process_job(worker_id: str, job: queue.ClaimedJob) -> None:
             0,
             int((datetime.now(timezone.utc) - submission.submitted_at).total_seconds() * 1000),
         )
-        result = execute_judge(
-            JudgeRequest(
-                language=submission.language,
-                code=submission.code,
-                cases=list(submission.cases),
-                time_limit_ms=submission.time_limit_ms,
-                memory_mb=submission.memory_limit_mb,
-                output_comparator=submission.output_comparator,
-                absolute_tolerance=submission.absolute_tolerance,
-                relative_tolerance=submission.relative_tolerance,
-                checker_code=submission.checker_code,
-            )
-        )
+        result = _execute_local_submission(submission)
         if lease_lost.is_set():
             return
         if result.infra_error:
@@ -101,15 +110,44 @@ def _process_job(worker_id: str, job: queue.ClaimedJob) -> None:
             persisted,
         )
     except Exception as exc:
-        logger.exception("job execution failed job=%s submission=%s attempt=%s", job.id, job.submission_id, job.attempt)
+        logger.error("job execution failed job=%s submission=%s attempt=%s error_type=%s", job.id, job.submission_id, job.attempt, type(exc).__name__)
         if not lease_lost.is_set():
             try:
-                queue.retry_job(worker_id, job, f"judge worker error: {exc}")
+                queue.retry_job(worker_id, job, "judge worker execution failed")
             except Exception:
                 logger.exception("job retry persistence failed job=%s attempt=%s", job.id, job.attempt)
     finally:
         heartbeat_stop.set()
         heartbeat.join(timeout=2)
+
+
+def _uses_cloudrun_job_dispatch() -> bool:
+    return settings.JUDGE_SANDBOX_MODE == "cloudrun" or (
+        settings.JUDGE_SANDBOX_MODE == "auto" and resolve_sandbox_backend() == "cloudrun"
+    )
+
+
+def _process_cloudrun_job(
+    worker_id: str,
+    job: queue.ClaimedJob,
+    lease_lost: threading.Event,
+) -> None:
+    try:
+        config = JobConfig.from_environment()
+        outcome = run_job(config, worker_id, job)
+        if outcome == JobOutcome.FAILED and not lease_lost.is_set():
+            queue.retry_job(worker_id, job, "isolated judge task failed")
+        elif outcome == JobOutcome.AMBIGUOUS and not lease_lost.is_set():
+            queue.retry_job(worker_id, job, "isolated judge task outcome was ambiguous")
+        elif outcome == JobOutcome.SUCCEEDED:
+            queue.heartbeat_worker(worker_id, None, settings.JUDGE_LEASE_SECONDS)
+    except Exception:
+        logger.exception("Cloud Run job dispatch failed job=%s attempt=%s", job.id, job.attempt)
+        if not lease_lost.is_set():
+            try:
+                queue.retry_job(worker_id, job, "isolated judge task dispatch failed")
+            except Exception:
+                logger.exception("Cloud Run dispatch retry persistence failed job=%s", job.id)
 
 
 def run() -> None:
@@ -126,7 +164,8 @@ def run() -> None:
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
     queue.register_worker(worker_id, socket.gethostname())
-    warm_go_cache()
+    if not _uses_cloudrun_job_dispatch():
+        warm_go_cache()
     logger.info("worker ready id=%s sandbox=%s", worker_id, settings.JUDGE_SANDBOX_MODE)
 
     try:
