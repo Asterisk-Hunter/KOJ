@@ -1,4 +1,8 @@
 {
+  "regions": ["sin1"],
+  "functions": {
+    "app/api/**/*.ts": { "maxDuration": 60 }
+  },
   "crons": [
     {
       "path": "/api/admin/submissions/recover",

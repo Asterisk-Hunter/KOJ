@@ -1,5 +1,6 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import {
   contestProblems,
@@ -23,15 +24,18 @@ import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-async function findContest(idRaw: string) {
+async function findContest(idRaw: string, organizationId: number) {
   const numeric = Number(idRaw);
   if (!Number.isInteger(numeric) || numeric <= 0) return null;
-  const rows = await db.select().from(contests).where(eq(contests.id, numeric)).limit(1);
+  const rows = await db.select().from(contests).where(and(
+    eq(contests.id, numeric),
+    eq(contests.organizationId, organizationId),
+  )).limit(1);
   return rows.length > 0 ? rows[0] : null;
 }
 
 /** Admin: contest detail with ordered problems + registration count. */
-export async function GET(
+async function handleGET(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
@@ -39,7 +43,7 @@ export async function GET(
   if (!grant.ok) return grant.response;
 
   const { id: idRaw } = await ctx.params;
-  const contest = await findContest(idRaw);
+  const contest = await findContest(idRaw, grant.context.organizationId);
   if (!contest) return jsonError("contest not found", 404);
 
   const links = await db
@@ -52,7 +56,10 @@ export async function GET(
     })
     .from(contestProblems)
     .innerJoin(problems, eq(contestProblems.problemId, problems.id))
-    .where(eq(contestProblems.contestId, contest.id))
+    .where(and(
+      eq(contestProblems.contestId, contest.id),
+      eq(contestProblems.organizationId, grant.context.organizationId),
+    ))
     .orderBy(asc(contestProblems.position));
 
   const regs = await db
@@ -70,9 +77,6 @@ export async function GET(
     status: contest.status,
     scoreboardFreezeMode: contest.scoreboardFreezeMode,
     scoreboardRevealCount: contest.scoreboardRevealCount,
-    // Legacy plaintext only (migration visibility for unmigrated rows);
-    // hashed codes are never revealed. Prefer `hasInviteCode`.
-    inviteCode: contest.inviteCode,
     hasInviteCode: contestRequiresInvite(contest),
     problems: links,
     registrations: regs.length,
@@ -93,7 +97,7 @@ type PatchBody = {
  * draft->live (publish), live->draft (unpublish before start),
  * live->ended (end now), ended->archived, archived->ended.
  */
-export async function PATCH(
+async function handlePATCH(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
@@ -101,7 +105,7 @@ export async function PATCH(
   if (!grant.ok) return grant.response;
 
   const { id: idRaw } = await ctx.params;
-  const contest = await findContest(idRaw);
+  const contest = await findContest(idRaw, grant.context.organizationId);
   if (!contest) return jsonError("contest not found", 404);
 
   const parsed = await readBoundedJsonObject(req, MAX_CONTEST_BODY_BYTES, "invalid json");
@@ -122,12 +126,19 @@ export async function PATCH(
       const links = await db
         .select({ problemId: contestProblems.problemId })
         .from(contestProblems)
-        .where(eq(contestProblems.contestId, contest.id));
+        .where(and(
+          eq(contestProblems.contestId, contest.id),
+          eq(contestProblems.organizationId, grant.context.organizationId),
+        ));
       if (links.length === 0) return jsonError("cannot publish a contest with no problems", 400);
       await db.transaction(async (tx) => {
-        await tx.update(contests).set({ status: "live", updatedAt: now }).where(eq(contests.id, contest.id));
+        await tx.update(contests).set({ status: "live", updatedAt: now }).where(and(
+          eq(contests.id, contest.id),
+          eq(contests.organizationId, grant.context.organizationId),
+        ));
         await lockLinkedProblems(contest.id, now, tx);
         await recordAdminAuditEvent(tx, {
+          organizationId: grant.context.organizationId,
           actorId: grant.userId,
           action: "contest.status_changed",
           entityType: "contest",
@@ -143,9 +154,13 @@ export async function PATCH(
         return jsonError("cannot unpublish after the contest has started", 400);
       }
       await db.transaction(async (tx) => {
-        await tx.update(contests).set({ status: "draft", updatedAt: now }).where(eq(contests.id, contest.id));
+        await tx.update(contests).set({ status: "draft", updatedAt: now }).where(and(
+          eq(contests.id, contest.id),
+          eq(contests.organizationId, grant.context.organizationId),
+        ));
         await revertLinkedProblems(contest.id, now, tx);
         await recordAdminAuditEvent(tx, {
+          organizationId: grant.context.organizationId,
           actorId: grant.userId,
           action: "contest.status_changed",
           entityType: "contest",
@@ -159,9 +174,13 @@ export async function PATCH(
     if (current === "live" && target === "ended") {
       const endsAt = contest.endsAt.getTime() > now.getTime() ? now : contest.endsAt;
       await db.transaction(async (tx) => {
-        await tx.update(contests).set({ status: "ended", endsAt, updatedAt: now }).where(eq(contests.id, contest.id));
+        await tx.update(contests).set({ status: "ended", endsAt, updatedAt: now }).where(and(
+          eq(contests.id, contest.id),
+          eq(contests.organizationId, grant.context.organizationId),
+        ));
         await releaseLinkedProblems([contest.id], now, tx);
         await recordAdminAuditEvent(tx, {
+          organizationId: grant.context.organizationId,
           actorId: grant.userId,
           action: "contest.status_changed",
           entityType: "contest",
@@ -173,8 +192,12 @@ export async function PATCH(
     }
 
     await db.transaction(async (tx) => {
-      await tx.update(contests).set({ status: target, updatedAt: now }).where(eq(contests.id, contest.id));
+      await tx.update(contests).set({ status: target, updatedAt: now }).where(and(
+        eq(contests.id, contest.id),
+        eq(contests.organizationId, grant.context.organizationId),
+      ));
       await recordAdminAuditEvent(tx, {
+        organizationId: grant.context.organizationId,
         actorId: grant.userId,
         action: "contest.status_changed",
         entityType: "contest",
@@ -240,8 +263,12 @@ export async function PATCH(
   }
 
   await db.transaction(async (tx) => {
-    await tx.update(contests).set(patch).where(eq(contests.id, contest.id));
+    await tx.update(contests).set(patch).where(and(
+      eq(contests.id, contest.id),
+      eq(contests.organizationId, grant.context.organizationId),
+    ));
     await recordAdminAuditEvent(tx, {
+      organizationId: grant.context.organizationId,
       actorId: grant.userId,
       action: "contest.metadata_updated",
       entityType: "contest",
@@ -253,7 +280,7 @@ export async function PATCH(
 }
 
 /** Admin: delete a draft contest (links + registrations cascade). */
-export async function DELETE(
+async function handleDELETE(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
@@ -261,15 +288,19 @@ export async function DELETE(
   if (!grant.ok) return grant.response;
 
   const { id: idRaw } = await ctx.params;
-  const contest = await findContest(idRaw);
+  const contest = await findContest(idRaw, grant.context.organizationId);
   if (!contest) return jsonError("contest not found", 404);
   if (contest.status !== "draft") {
     return jsonError("only draft contests can be deleted", 400);
   }
 
   await db.transaction(async (tx) => {
-    await tx.delete(contests).where(eq(contests.id, contest.id));
+    await tx.delete(contests).where(and(
+      eq(contests.id, contest.id),
+      eq(contests.organizationId, grant.context.organizationId),
+    ));
     await recordAdminAuditEvent(tx, {
+      organizationId: grant.context.organizationId,
       actorId: grant.userId,
       action: "contest.deleted",
       entityType: "contest",
@@ -278,3 +309,7 @@ export async function DELETE(
   });
   return NextResponse.json({ deleted: true });
 }
+
+export const GET = withApiGuard(handleGET);
+export const PATCH = withApiGuard(handlePATCH);
+export const DELETE = withApiGuard(handleDELETE);

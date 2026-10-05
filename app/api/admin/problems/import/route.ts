@@ -1,3 +1,4 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { problems, problemTestCases } from "@/db/schema";
@@ -18,7 +19,7 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const grant = await requireSetter();
   if (!grant.ok) {
     return grant.response;
@@ -291,6 +292,7 @@ export async function POST(req: NextRequest) {
       const inserted = await tx
         .insert(problems)
         .values({
+          organizationId: grant.context.organizationId,
           authorId: userId,
           title: parsed.title.slice(0, 500),
           statement: parsed.statement,
@@ -321,6 +323,7 @@ export async function POST(req: NextRequest) {
       }
 
       await recordAdminAuditEvent(tx, {
+        organizationId: grant.context.organizationId,
         actorId: userId,
         action: "problem.imported",
         entityType: "problem",
@@ -348,3 +351,5 @@ export async function POST(req: NextRequest) {
     problem: parsed,
   });
 }
+
+export const POST = withApiGuard(handlePOST);

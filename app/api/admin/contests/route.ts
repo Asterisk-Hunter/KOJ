@@ -1,5 +1,6 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
-import { asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contestRegistrations, contests, problems } from "@/db/schema";
 import { ensureUserRow, jsonError, requireContestManager } from "@/app/api/admin/authz";
@@ -33,29 +34,33 @@ async function uniqueSlug(base: string): Promise<string> {
 }
 
 /** Admin: list every contest (including drafts) with problem/participant counts. */
-export async function GET() {
+async function handleGET() {
   const grant = await requireContestManager();
   if (!grant.ok) return grant.response;
 
   const contestRows = await db
     .select()
     .from(contests)
+    .where(eq(contests.organizationId, grant.context.organizationId))
     .orderBy(asc(contests.startsAt));
+  const contestIds = contestRows.map((contest) => contest.id);
 
-  const problemCounts = await db
+  const problemCounts = contestIds.length === 0 ? [] : await db
     .select({
       contestId: contestProblems.contestId,
       count: sql<number>`count(*)`.mapWith(Number),
     })
     .from(contestProblems)
+    .where(inArray(contestProblems.contestId, contestIds))
     .groupBy(contestProblems.contestId);
 
-  const registrationCounts = await db
+  const registrationCounts = contestIds.length === 0 ? [] : await db
     .select({
       contestId: contestRegistrations.contestId,
       count: sql<number>`count(*)`.mapWith(Number),
     })
     .from(contestRegistrations)
+    .where(inArray(contestRegistrations.contestId, contestIds))
     .groupBy(contestRegistrations.contestId);
 
   const problemCountMap = new Map(problemCounts.map((r) => [r.contestId, r.count]));
@@ -82,7 +87,7 @@ export async function GET() {
  * Admin: create a contest (always starts as `draft`; publish via PATCH).
  * Optionally links `problemIds` — each must exist and be `draft` (BR-04).
  */
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const grant = await requireContestManager();
   if (!grant.ok) return grant.response;
 
@@ -155,7 +160,10 @@ export async function POST(req: NextRequest) {
       const rows = await db
         .select({ id: problems.id, status: problems.status })
         .from(problems)
-        .where(inArray(problems.id, problemIds));
+        .where(and(
+          inArray(problems.id, problemIds),
+          eq(problems.organizationId, grant.context.organizationId),
+        ));
       if (rows.length !== problemIds.length) return jsonError("one or more problems not found", 404);
       for (const r of rows) {
         if (r.status !== "draft") return jsonError(`problem #${r.id} is not draft (BR-04)`, 400);
@@ -170,6 +178,7 @@ export async function POST(req: NextRequest) {
     const [inserted] = await tx
       .insert(contests)
       .values({
+        organizationId: grant.context.organizationId,
         createdBy: grant.userId,
         slug,
         title: title.trim(),
@@ -185,10 +194,16 @@ export async function POST(req: NextRequest) {
 
     if (problemIds.length > 0) {
       await tx.insert(contestProblems).values(
-        problemIds.map((problemId, i) => ({ contestId: inserted.id, problemId, position: i })),
+        problemIds.map((problemId, i) => ({
+          organizationId: grant.context.organizationId,
+          contestId: inserted.id,
+          problemId,
+          position: i,
+        })),
       );
     }
     await recordAdminAuditEvent(tx, {
+      organizationId: grant.context.organizationId,
       actorId: grant.userId,
       action: "contest.created",
       entityType: "contest",
@@ -200,3 +215,6 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ id: contestId, slug, status: "draft" }, { status: 201 });
 }
+
+export const GET = withApiGuard(handleGET);
+export const POST = withApiGuard(handlePOST);

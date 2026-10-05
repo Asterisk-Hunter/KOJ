@@ -1,5 +1,6 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
-import { asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contests, problemTestCases, problems } from "@/db/schema";
 import { jsonError, requireSetter } from "@/app/api/admin/authz";
@@ -13,23 +14,29 @@ export const dynamic = "force-dynamic";
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_CASES = 100;
 
-async function findProblem(idRaw: string) {
+async function findProblem(idRaw: string, organizationId: number) {
   const numeric = Number(idRaw);
   if (!Number.isInteger(numeric) || numeric <= 0) return null;
-  const rows = await db.select().from(problems).where(eq(problems.id, numeric)).limit(1);
+  const rows = await db.select().from(problems).where(and(
+    eq(problems.id, numeric),
+    eq(problems.organizationId, organizationId),
+  )).limit(1);
   return rows.length > 0 ? rows[0] : null;
 }
 
-async function isLockedByLiveContest(problemId: number): Promise<boolean> {
+async function isLockedByLiveContest(problemId: number, organizationId: number): Promise<boolean> {
   const links = await db
     .select({ status: contests.status })
     .from(contestProblems)
     .innerJoin(contests, eq(contestProblems.contestId, contests.id))
-    .where(eq(contestProblems.problemId, problemId));
+    .where(and(
+      eq(contestProblems.problemId, problemId),
+      eq(contestProblems.organizationId, organizationId),
+    ));
   return links.some((l) => l.status === "live");
 }
 
-export async function POST(
+async function handlePOST(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
@@ -37,12 +44,12 @@ export async function POST(
   if (!grant.ok) return grant.response;
 
   const { id: idRaw } = await ctx.params;
-  const problem = await findProblem(idRaw);
+  const problem = await findProblem(idRaw, grant.context.organizationId);
   if (!problem) return jsonError("problem not found", 404);
   if (grant.dbRole !== "admin" && problem.authorId !== grant.userId) {
     return jsonError("forbidden", 403);
   }
-  if (await isLockedByLiveContest(problem.id)) {
+  if (await isLockedByLiveContest(problem.id, grant.context.organizationId)) {
     return jsonError("test cases are locked while the contest is live", 403);
   }
 
@@ -133,6 +140,7 @@ export async function POST(
       })),
     );
     await recordAdminAuditEvent(tx, {
+      organizationId: grant.context.organizationId,
       actorId: grant.userId,
       action: "problem.test_cases_imported",
       entityType: "problem",
@@ -155,3 +163,5 @@ export async function POST(
     testCases: allCases,
   });
 }
+
+export const POST = withApiGuard(handlePOST);

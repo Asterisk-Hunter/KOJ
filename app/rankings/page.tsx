@@ -46,7 +46,6 @@ type PerProblemEntry = {
 
 type StandingRow = {
   rank: number;
-  userId: string;
   username: string;
   solvedCount: number;
   penalty: number;
@@ -411,7 +410,7 @@ export default function RankingsPage() {
                 )}
                 {filteredRows.map((row) => (
                   <tr
-                    key={row.userId}
+                    key={row.rank}
                     className="border-b border-kjborder/60 hover:bg-kjsurface/50 transition-colors"
                   >
                     {/* Rank — sticky */}

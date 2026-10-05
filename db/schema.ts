@@ -2,6 +2,7 @@ import {
   boolean,
   check,
   doublePrecision,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -11,6 +12,7 @@ import {
   serial,
   text,
   timestamp,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -91,8 +93,38 @@ export const users = pgTable(
   (table) => [index("users_role_idx").on(table.role)],
 );
 
+export const organizations = pgTable("organizations", {
+  id: serial("id").primaryKey(),
+  slug: text("slug").notNull().unique(),
+  name: text("name").notNull(),
+  isPublic: boolean("is_public").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const organizationMemberships = pgTable(
+  "organization_memberships",
+  {
+    organizationId: integer("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.clerkId, { onDelete: "cascade" }),
+    role: userRole("role").notNull().default("contestant"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.organizationId, table.userId] }),
+    index("organization_memberships_user_idx").on(table.userId),
+  ],
+);
+
 export const problems = pgTable("problems", {
   id: serial("id").primaryKey(),
+  organizationId: integer("organization_id")
+    .notNull()
+    .default(1)
+    .references(() => organizations.id),
   authorId: text("author_id")
     .notNull()
     .references(() => users.clerkId),
@@ -121,6 +153,7 @@ export const problems = pgTable("problems", {
     .notNull()
     .defaultNow(),
 }, (table) => [
+  uniqueIndex("problems_id_organization_id_unique").on(table.id, table.organizationId),
   check("problems_output_comparator_check", sql`${table.outputComparator} IN ('exact', 'float')`),
   check("problems_absolute_tolerance_check", sql`${table.absoluteTolerance} BETWEEN 0 AND 1`),
   check("problems_relative_tolerance_check", sql`${table.relativeTolerance} BETWEEN 0 AND 1`),
@@ -129,6 +162,10 @@ export const problems = pgTable("problems", {
 
 export const contests = pgTable("contests", {
   id: serial("id").primaryKey(),
+  organizationId: integer("organization_id")
+    .notNull()
+    .default(1)
+    .references(() => organizations.id),
   createdBy: text("created_by")
     .notNull()
     .references(() => users.clerkId),
@@ -152,6 +189,7 @@ export const contests = pgTable("contests", {
     .notNull()
     .defaultNow(),
 }, (table) => [
+  uniqueIndex("contests_id_organization_id_unique").on(table.id, table.organizationId),
   check("contests_scoreboard_reveal_count_check", sql`${table.scoreboardRevealCount} >= 0`),
   check("contests_scoreboard_freeze_state_check", sql`(${table.scoreboardFreezeMode} = 'frozen' AND ${table.scoreboardFrozenAt} IS NOT NULL) OR (${table.scoreboardFreezeMode} <> 'frozen' AND ${table.scoreboardFrozenAt} IS NULL)`),
 ]);
@@ -202,6 +240,10 @@ export const problemTestCases = pgTable(
 export const contestProblems = pgTable(
   "contest_problems",
   {
+    organizationId: integer("organization_id")
+      .notNull()
+      .default(1)
+      .references(() => organizations.id),
     contestId: integer("contest_id")
       .notNull()
       .references(() => contests.id, { onDelete: "cascade" }),
@@ -212,6 +254,16 @@ export const contestProblems = pgTable(
   },
   (table) => [
     primaryKey({ columns: [table.contestId, table.problemId] }),
+    foreignKey({
+      columns: [table.contestId, table.organizationId],
+      foreignColumns: [contests.id, contests.organizationId],
+      name: "contest_problems_contest_organization_fk",
+    }),
+    foreignKey({
+      columns: [table.problemId, table.organizationId],
+      foreignColumns: [problems.id, problems.organizationId],
+      name: "contest_problems_problem_organization_fk",
+    }),
     index("contest_problems_contest_position_idx").on(
       table.contestId,
       table.position,
@@ -255,18 +307,28 @@ export const contestVirtualRegistrations = pgTable("contest_virtual_registration
 
 export const adminAuditLogs = pgTable("admin_audit_logs", {
   id: serial("id").primaryKey(),
+  organizationId: integer("organization_id")
+    .default(1)
+    .references(() => organizations.id),
   actorId: text("actor_id").notNull(),
   action: text("action").notNull(),
   entityType: text("entity_type").notNull(),
   entityId: text("entity_id"),
   metadata: jsonb("metadata").$type<Record<string, string | number | boolean | null>>().notNull().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-}, (table) => [index("admin_audit_logs_created_at_idx").on(table.createdAt)]);
+}, (table) => [
+  index("admin_audit_logs_created_at_idx").on(table.createdAt),
+  index("admin_audit_logs_organization_created_at_idx").on(table.organizationId, table.createdAt),
+]);
 
 export const submissions = pgTable(
   "submissions",
   {
     id: serial("id").primaryKey(),
+    organizationId: integer("organization_id")
+      .notNull()
+      .default(1)
+      .references(() => organizations.id),
     userId: text("user_id")
       .notNull()
       .references(() => users.clerkId),
@@ -297,6 +359,16 @@ export const submissions = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }),
   },
   (table) => [
+    foreignKey({
+      columns: [table.problemId, table.organizationId],
+      foreignColumns: [problems.id, problems.organizationId],
+      name: "submissions_problem_organization_fk",
+    }),
+    foreignKey({
+      columns: [table.contestId, table.organizationId],
+      foreignColumns: [contests.id, contests.organizationId],
+      name: "submissions_contest_organization_fk",
+    }),
     index("submissions_user_problem_time_idx").on(
       table.userId,
       table.problemId,
@@ -376,8 +448,26 @@ export const notes = pgTable("notes", {
     .defaultNow(),
 });
 
+export const apiRateLimits = pgTable(
+  "api_rate_limits",
+  {
+    key: text("key").primaryKey(),
+    hits: integer("hits").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    check("api_rate_limits_hits_check", sql`${table.hits} >= 1`),
+    index("api_rate_limits_expires_at_idx").on(table.expiresAt),
+  ],
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
+
+export type Organization = typeof organizations.$inferSelect;
+export type NewOrganization = typeof organizations.$inferInsert;
+export type OrganizationMembership = typeof organizationMemberships.$inferSelect;
+export type NewOrganizationMembership = typeof organizationMemberships.$inferInsert;
 
 export type Problem = typeof problems.$inferSelect;
 export type NewProblem = typeof problems.$inferInsert;

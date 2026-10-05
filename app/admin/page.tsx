@@ -16,6 +16,7 @@ import AuditLogSection from "@/app/admin/AuditLogSection";
 
 type Summary = {
   role?: "admin" | "setter";
+  isPlatformAdmin?: boolean;
   counts: { users: number; problems: number; contests: number; submissions: number };
   recentProblems: Array<{ id: number; title: string; difficulty: string; status: string; createdAt: string }>;
 };
@@ -252,9 +253,9 @@ export default function AdminPage() {
         </div>
 
         {(data?.role === "admin" || data?.role === "setter") && <ContestsSection />}
-        {data?.role === "admin" && <UsersSection />}
+        {data?.isPlatformAdmin && <UsersSection />}
         {data?.role === "admin" && <SubmissionsSection canRejudge />}
-        {data?.role === "admin" && <ObservabilitySection />}
+        {data?.isPlatformAdmin && <ObservabilitySection />}
         {data?.role === "admin" && <AuditLogSection />}
       </main>
     </>

@@ -1,6 +1,7 @@
-import { desc } from "drizzle-orm";
+import { withApiGuard } from "@/app/api/guard";
+import { desc, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { requireAdmin } from "@/app/api/admin/authz";
+import { requireOrganizationAdmin } from "@/app/api/admin/authz";
 import { db } from "@/db";
 import { adminAuditLogs } from "@/db/schema";
 import { sanitizeAuditMetadata } from "./metadata";
@@ -9,8 +10,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const AUDIT_LOG_LIMIT = 100;
-export async function GET() {
-  const grant = await requireAdmin();
+async function handleGET() {
+  const grant = await requireOrganizationAdmin();
   if (!grant.ok) return grant.response;
 
   const rows = await db
@@ -24,6 +25,7 @@ export async function GET() {
       createdAt: adminAuditLogs.createdAt,
     })
     .from(adminAuditLogs)
+    .where(eq(adminAuditLogs.organizationId, grant.context.organizationId))
     .orderBy(desc(adminAuditLogs.createdAt))
     .limit(AUDIT_LOG_LIMIT);
 
@@ -40,3 +42,5 @@ export async function GET() {
     limit: AUDIT_LOG_LIMIT,
   });
 }
+
+export const GET = withApiGuard(handleGET);

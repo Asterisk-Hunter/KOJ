@@ -1,7 +1,9 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { and, asc, eq } from "drizzle-orm";
 import { db } from "@/db";
+import { resolveOrganizationContext } from "@/lib/organizations";
 import {
   contestProblems,
   contestRegistrations,
@@ -18,7 +20,7 @@ function jsonError(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
 }
 
-export async function GET(
+async function handleGET(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
@@ -27,6 +29,10 @@ export async function GET(
   if (!Number.isInteger(id) || id <= 0) {
     return jsonError("invalid problem id", 400);
   }
+
+  const { userId } = await auth();
+  const organization = await resolveOrganizationContext(userId);
+  if (!organization) return jsonError("organization not found", 404);
 
   const contestIdRaw = req.nextUrl.searchParams.get("contestId");
   let effectiveContestId: number | null = null;
@@ -38,7 +44,10 @@ export async function GET(
     // else treat as not provided (practice mode) — do not 400, per spec
   }
 
-  const rows = await db.select().from(problems).where(eq(problems.id, id)).limit(1);
+  const rows = await db.select().from(problems).where(and(
+    eq(problems.id, id),
+    eq(problems.organizationId, organization.organizationId),
+  )).limit(1);
   if (rows.length === 0) {
     return jsonError("not found", 404);
   }
@@ -49,8 +58,6 @@ export async function GET(
     return jsonError("not found", 404);
   }
 
-  const { userId } = await auth();
-
   let contestIdToReturn: number | null = null;
 
   if (problem.status === "published") {
@@ -59,7 +66,7 @@ export async function GET(
       const contestRows = await db
         .select()
         .from(contests)
-        .where(eq(contests.id, effectiveContestId))
+        .where(and(eq(contests.id, effectiveContestId), eq(contests.organizationId, organization.organizationId)))
         .limit(1);
       if (contestRows.length > 0) {
         const contest = contestRows[0];
@@ -82,6 +89,7 @@ export async function GET(
                 and(
                   eq(contestProblems.contestId, effectiveContestId),
                   eq(contestProblems.problemId, id),
+                  eq(contestProblems.organizationId, organization.organizationId),
                 ),
               )
               .limit(1);
@@ -93,7 +101,11 @@ export async function GET(
           const virtualRows = await db.select({ endsAt: contestVirtualRegistrations.endsAt }).from(contestVirtualRegistrations)
             .where(and(eq(contestVirtualRegistrations.contestId, effectiveContestId), eq(contestVirtualRegistrations.userId, userId))).limit(1);
           const cp = await db.select({ problemId: contestProblems.problemId }).from(contestProblems)
-            .where(and(eq(contestProblems.contestId, effectiveContestId), eq(contestProblems.problemId, id))).limit(1);
+            .where(and(
+              eq(contestProblems.contestId, effectiveContestId),
+              eq(contestProblems.problemId, id),
+              eq(contestProblems.organizationId, organization.organizationId),
+            )).limit(1);
           if (virtualRows.length > 0 && Date.now() < virtualRows[0].endsAt.getTime() && cp.length > 0) {
             contestIdToReturn = effectiveContestId;
           }
@@ -112,7 +124,7 @@ export async function GET(
       const contestRows = await db
         .select()
         .from(contests)
-        .where(eq(contests.id, effectiveContestId))
+        .where(and(eq(contests.id, effectiveContestId), eq(contests.organizationId, organization.organizationId)))
         .limit(1);
       if (contestRows.length === 0) return jsonError("contest not found", 403);
       const targetContest = contestRows[0];
@@ -134,6 +146,7 @@ export async function GET(
           and(
             eq(contestProblems.contestId, effectiveContestId),
             eq(contestProblems.problemId, id),
+            eq(contestProblems.organizationId, organization.organizationId),
           ),
         )
         .limit(1);
@@ -146,13 +159,16 @@ export async function GET(
       const liveContests = await db
         .select({ contestId: contestProblems.contestId })
         .from(contestProblems)
-        .where(eq(contestProblems.problemId, id));
+        .where(and(eq(contestProblems.problemId, id), eq(contestProblems.organizationId, organization.organizationId)));
 
       let found: number | null = null;
       for (const { contestId: cid } of liveContests) {
-        const contestRows = await db.select().from(contests).where(eq(contests.id, cid)).limit(1);
+        const contestRows = await db.select().from(contests).where(and(
+          eq(contests.id, cid),
+          eq(contests.organizationId, organization.organizationId),
+        )).limit(1);
         if (contestRows.length === 0 || contestRows[0].status !== "live") continue;
-        if (Date.now() < new Date(contestRows[0].startsAt).getTime()) continue;
+        if (Date.now() < new Date(contestRows[0].startsAt).getTime() || Date.now() >= contestRows[0].endsAt.getTime()) continue;
         const reg = await db
           .select()
           .from(contestRegistrations)
@@ -207,3 +223,5 @@ export async function GET(
 
   return NextResponse.json(response);
 }
+
+export const GET = withApiGuard(handleGET);

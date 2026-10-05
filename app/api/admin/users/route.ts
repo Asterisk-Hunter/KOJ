@@ -1,3 +1,4 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
 import { desc, eq, ilike, inArray, or } from "drizzle-orm";
 import { clerkClient } from "@clerk/nextjs/server";
@@ -46,7 +47,7 @@ function dirName(u: ClerkDirUser): string {
  * from Clerk and enriched with Neon role/suspended. `role` defaults to
  * `contestant` and `synced` is false until the row exists.
  */
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   const grant = await requireAdmin();
   if (!grant.ok) return grant.response;
 
@@ -150,7 +151,7 @@ export async function GET(req: NextRequest) {
  * Admin: change a user's role (REQ-AUTH-04 / BR-03) and/or suspended flag.
  * Refuses self-changes so an admin cannot lock themselves out.
  */
-export async function PATCH(req: NextRequest) {
+async function handlePATCH(req: NextRequest) {
   const grant = await requireAdmin();
   if (!grant.ok) return grant.response;
 
@@ -218,6 +219,7 @@ export async function PATCH(req: NextRequest) {
       });
     if (result[0]) {
       await recordAdminAuditEvent(tx, {
+        organizationId: null,
         actorId: grant.userId,
         action: "user.access_updated",
         entityType: "user",
@@ -231,3 +233,6 @@ export async function PATCH(req: NextRequest) {
 
   return NextResponse.json({ user: updated[0] });
 }
+
+export const GET = withApiGuard(handleGET);
+export const PATCH = withApiGuard(handlePATCH);

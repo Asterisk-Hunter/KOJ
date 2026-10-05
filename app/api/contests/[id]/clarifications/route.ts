@@ -1,31 +1,40 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { and, desc, eq, or } from "drizzle-orm";
 import { db } from "@/db";
-import { contestClarifications, contestAnnouncements, contestRegistrations, contests, users } from "@/db/schema";
+import { contestClarifications, contestAnnouncements, contestRegistrations, contests } from "@/db/schema";
 import { MAX_CONTEST_REGISTRATION_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 import { canManageContestCommunication, canReadClarification } from "@/app/api/contests/clarification-policy";
+import { resolveOrganizationContext } from "@/lib/organizations";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-async function findContest(idRaw: string) {
+async function findContest(idRaw: string, organizationId: number) {
   const numeric = Number(idRaw);
   const byId = Number.isInteger(numeric) && numeric > 0 && String(numeric) === idRaw
-    ? await db.select().from(contests).where(eq(contests.id, numeric)).limit(1)
+    ? await db.select().from(contests).where(and(
+        eq(contests.id, numeric),
+        eq(contests.organizationId, organizationId),
+      )).limit(1)
     : [];
   if (byId[0]) return byId[0];
-  const bySlug = await db.select().from(contests).where(eq(contests.slug, idRaw)).limit(1);
+  const bySlug = await db.select().from(contests).where(and(
+    eq(contests.slug, idRaw),
+    eq(contests.organizationId, organizationId),
+  )).limit(1);
   return bySlug[0] ?? null;
 }
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const contest = await findContest((await ctx.params).id);
+async function handleGET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { userId } = await auth();
+  const organization = await resolveOrganizationContext(userId);
+  if (!organization) return NextResponse.json({ error: "organization not found" }, { status: 404 });
+  const contest = await findContest((await ctx.params).id, organization.organizationId);
   if (!contest) return NextResponse.json({ error: "contest not found" }, { status: 404 });
   if (contest.status === "draft") return NextResponse.json({ error: "contest not found" }, { status: 404 });
-  const { userId } = await auth();
-  const [actor] = userId ? await db.select({ role: users.role, suspended: users.suspended }).from(users).where(eq(users.clerkId, userId)).limit(1) : [];
-  const viewer = { userId, role: actor?.role ?? null, suspended: actor?.suspended ?? false };
+  const viewer = { userId, role: organization.role, suspended: organization.suspended };
   const canManage = canManageContestCommunication(viewer);
   const publicQuestions = and(
     eq(contestClarifications.contestId, contest.id),
@@ -49,10 +58,13 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   return NextResponse.json({ announcements, clarifications: visibleClarifications, canManage });
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+async function handlePOST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  const contest = await findContest((await ctx.params).id);
+  const organization = await resolveOrganizationContext(userId);
+  if (!organization) return NextResponse.json({ error: "organization not found" }, { status: 404 });
+  if (organization.suspended) return NextResponse.json({ error: "account suspended" }, { status: 403 });
+  const contest = await findContest((await ctx.params).id, organization.organizationId);
   if (!contest) return NextResponse.json({ error: "contest not found" }, { status: 404 });
   if (contest.status !== "live" || Date.now() < contest.startsAt.getTime() || Date.now() >= contest.endsAt.getTime()) {
     return NextResponse.json({ error: "questions are accepted only during a live contest" }, { status: 403 });
@@ -60,8 +72,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const registration = await db.select({ userId: contestRegistrations.userId }).from(contestRegistrations)
     .where(and(eq(contestRegistrations.contestId, contest.id), eq(contestRegistrations.userId, userId))).limit(1);
   if (!registration.length) return NextResponse.json({ error: "contest registration required" }, { status: 403 });
-  const [actor] = await db.select({ suspended: users.suspended }).from(users).where(eq(users.clerkId, userId)).limit(1);
-  if (actor?.suspended) return NextResponse.json({ error: "account suspended" }, { status: 403 });
   const parsed = await readBoundedJsonObject(req, MAX_CONTEST_REGISTRATION_BODY_BYTES);
   if (!parsed.ok) return parsed.response;
   const question = parsed.value.question;
@@ -72,3 +82,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     .returning({ id: contestClarifications.id });
   return NextResponse.json({ id: created.id }, { status: 201 });
 }
+
+export const GET = withApiGuard(handleGET);
+export const POST = withApiGuard(handlePOST);

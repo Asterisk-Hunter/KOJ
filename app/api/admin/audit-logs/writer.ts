@@ -7,6 +7,7 @@ type AuditMetadata = Readonly<Record<string, AuditScalar>>;
 type AuditWriter = Pick<typeof db, "insert">;
 
 export type AdminAuditEvent = {
+  organizationId: number | null;
   actorId: string;
   action: string;
   entityType: string;
@@ -20,6 +21,7 @@ export async function recordAdminAuditEvent(
 ): Promise<void> {
   const metadata = sanitizeAuditEventMetadata(event.metadata);
   await writer.insert(adminAuditLogs).values({
+    organizationId: event.organizationId,
     actorId: event.actorId,
     action: event.action.slice(0, 100),
     entityType: event.entityType.slice(0, 100),
