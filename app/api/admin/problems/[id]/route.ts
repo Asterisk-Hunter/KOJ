@@ -12,6 +12,7 @@ import {
 import { jsonError, requireOrganizationAdmin, requireSetter } from "@/app/api/admin/authz";
 import { parseOutputComparator, parseOutputTolerance } from "@/app/api/admin/problems/comparator";
 import { parseCheckerCode } from "@/app/api/admin/problems/checker-code";
+import { MAX_PROBLEM_MEMORY_MB } from "@/app/api/admin/problems/limits";
 import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
 import { MAX_PROBLEM_AUTHORING_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 
@@ -186,8 +187,8 @@ async function handlePATCH(
     patch.timeLimitMs = n;
   }
   if (b.memoryLimitMb !== undefined) {
-    const n = parseBoundedInt(b.memoryLimitMb, 16, 2048);
-    if (n === null) return jsonError("memoryLimitMb must be an integer 16..2048", 400);
+    const n = parseBoundedInt(b.memoryLimitMb, 16, MAX_PROBLEM_MEMORY_MB);
+    if (n === null) return jsonError(`memoryLimitMb must be an integer 16..${MAX_PROBLEM_MEMORY_MB}`, 400);
     patch.memoryLimitMb = n;
   }
 

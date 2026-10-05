@@ -6,12 +6,14 @@ import { contestProblems, contests, problemTestCases, problems } from "@/db/sche
 import { jsonError, requireSetter } from "@/app/api/admin/authz";
 import { readBoundedJsonObject, MAX_TEST_CASE_BODY_BYTES } from "@/app/api/body-guard";
 import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
+import {
+  MAX_TEST_CASE_FILE_BYTES,
+  testCaseLimitMessage,
+  testCaseLimitViolation,
+} from "@/app/api/admin/problems/limits";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const MAX_FILE_BYTES = 10 * 1024 * 1024; // REQ-PROB-03
-const MAX_CASES = 100;
 
 async function findProblem(idRaw: string, organizationId: number) {
   const numeric = Number(idRaw);
@@ -37,7 +39,7 @@ async function isLockedByLiveContest(problemId: number, organizationId: number):
 
 function checkFileSize(v: unknown, field: string): string | NextResponse {
   if (typeof v !== "string" || v.length === 0) return jsonError(`${field} must be non-empty`, 400);
-  if (Buffer.byteLength(v, "utf8") > MAX_FILE_BYTES) {
+  if (Buffer.byteLength(v, "utf8") > MAX_TEST_CASE_FILE_BYTES) {
     return jsonError(`${field} exceeds 10MB (REQ-PROB-03)`, 400);
   }
   return v;
@@ -107,27 +109,29 @@ async function handlePOST(
   const isSample = b.isSample ?? false;
   if (typeof isSample !== "boolean") return jsonError("isSample must be a boolean", 400);
 
-  const [countRow] = await db
-    .select({ count: sql<number>`count(*)`.mapWith(Number) })
-    .from(problemTestCases)
-    .where(eq(problemTestCases.problemId, problem.id));
-  if ((countRow?.count ?? 0) >= MAX_CASES) {
-    return jsonError(`at most ${MAX_CASES} test cases per problem`, 400);
-  }
-
-  let position = b.position;
-  if (position === undefined) {
-    const [row] = await db
-      .select({ max: sql<number | null>`max(${problemTestCases.position})`.mapWith(Number) })
-      .from(problemTestCases)
-      .where(eq(problemTestCases.problemId, problem.id));
-    position = (row?.max ?? -1) + 1;
-  }
-  if (typeof position !== "number" || !Number.isInteger(position) || position < 0) {
+  const requestedPosition = b.position;
+  if (requestedPosition !== undefined && (typeof requestedPosition !== "number" || !Number.isInteger(requestedPosition) || requestedPosition < 0)) {
     return jsonError("position must be a non-negative integer", 400);
   }
 
-  const inserted = await db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
+    const [lockedProblem] = await tx
+      .select({ id: problems.id })
+      .from(problems)
+      .where(and(eq(problems.id, problem.id), eq(problems.organizationId, grant.context.organizationId)))
+      .for("update");
+    if (!lockedProblem) return { ok: false as const, error: "problem not found", status: 404 as const };
+    const [usage] = await tx
+      .select({
+        count: sql<number>`count(*)`.mapWith(Number),
+        bytes: sql<number>`COALESCE(sum(octet_length(${problemTestCases.input}) + octet_length(${problemTestCases.expectedOutput})), 0)`.mapWith(Number),
+        maxPosition: sql<number | null>`max(${problemTestCases.position})`.mapWith(Number),
+      })
+      .from(problemTestCases)
+      .where(eq(problemTestCases.problemId, problem.id));
+    const violation = testCaseLimitViolation(usage?.count ?? 0, usage?.bytes ?? 0, [{ input, expectedOutput }]);
+    if (violation) return { ok: false as const, error: testCaseLimitMessage(violation), status: 400 as const };
+    const position = typeof requestedPosition === "number" ? requestedPosition : (usage?.maxPosition ?? -1) + 1;
     const rows = await tx
       .insert(problemTestCases)
       .values({ problemId: problem.id, input, expectedOutput, isSample, position })
@@ -140,10 +144,11 @@ async function handlePOST(
       entityId: problem.id,
       metadata: { isSample },
     });
-    return rows;
+    return { ok: true as const, id: rows[0].id };
   });
 
-  return NextResponse.json({ id: inserted[0].id }, { status: 201 });
+  if (!result.ok) return jsonError(result.error, result.status);
+  return NextResponse.json(result, { status: 201 });
 }
 
 export const GET = withApiGuard(handleGET);

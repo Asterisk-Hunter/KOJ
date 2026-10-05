@@ -9,14 +9,18 @@ import {
   parseOutputTolerance,
 } from "@/app/api/admin/problems/comparator";
 import { parseCheckerCode } from "@/app/api/admin/problems/checker-code";
+import {
+  MAX_PROBLEM_MEMORY_MB,
+  MAX_TEST_CASES_PER_PROBLEM,
+  MAX_TEST_CASE_FILE_BYTES,
+  testCaseLimitMessage,
+  testCaseLimitViolation,
+} from "@/app/api/admin/problems/limits";
 import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
 import { MAX_PROBLEM_AUTHORING_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
-const MAX_CASES = 100;
 
 type Difficulty = "easy" | "medium" | "hard";
 
@@ -121,8 +125,8 @@ async function handlePOST(req: NextRequest) {
   } else {
     return jsonError("memoryLimitMb is required", 400);
   }
-  if (!Number.isInteger(memoryLimitMb) || memoryLimitMb < 16 || memoryLimitMb > 2048) {
-    return jsonError("memoryLimitMb must be between 16 and 2048", 400);
+  if (!Number.isInteger(memoryLimitMb) || memoryLimitMb < 16 || memoryLimitMb > MAX_PROBLEM_MEMORY_MB) {
+    return jsonError(`memoryLimitMb must be between 16 and ${MAX_PROBLEM_MEMORY_MB}`, 400);
   }
 
   const outputComparator = parseOutputComparator(comparatorRaw);
@@ -151,8 +155,8 @@ async function handlePOST(req: NextRequest) {
     if (!Array.isArray(testCasesRaw)) {
       return jsonError("testCases must be an array", 400);
     }
-    if (testCasesRaw.length > MAX_CASES) {
-      return jsonError(`at most ${MAX_CASES} test cases per problem`, 400);
+    if (testCasesRaw.length > MAX_TEST_CASES_PER_PROBLEM) {
+      return jsonError(`at most ${MAX_TEST_CASES_PER_PROBLEM} test cases per problem`, 400);
     }
     for (let i = 0; i < testCasesRaw.length; i++) {
       const tc = testCasesRaw[i] as RawCase;
@@ -162,13 +166,13 @@ async function handlePOST(req: NextRequest) {
       if (typeof tc.input !== "string" || tc.input.length === 0) {
         return jsonError(`test case ${i + 1} input must be non-empty`, 400);
       }
-      if (Buffer.byteLength(tc.input, "utf8") > MAX_FILE_BYTES) {
+      if (Buffer.byteLength(tc.input, "utf8") > MAX_TEST_CASE_FILE_BYTES) {
         return jsonError(`test case ${i + 1} input exceeds 10MB`, 400);
       }
       if (typeof tc.expectedOutput !== "string" || tc.expectedOutput.length === 0) {
         return jsonError(`test case ${i + 1} expectedOutput must be non-empty`, 400);
       }
-      if (Buffer.byteLength(tc.expectedOutput, "utf8") > MAX_FILE_BYTES) {
+      if (Buffer.byteLength(tc.expectedOutput, "utf8") > MAX_TEST_CASE_FILE_BYTES) {
         return jsonError(`test case ${i + 1} expectedOutput exceeds 10MB`, 400);
       }
       const isSample = typeof tc.isSample === "boolean" ? tc.isSample : false;
@@ -184,6 +188,9 @@ async function handlePOST(req: NextRequest) {
       });
     }
   }
+
+  const caseLimitViolation = testCaseLimitViolation(0, 0, validatedCases);
+  if (caseLimitViolation) return jsonError(testCaseLimitMessage(caseLimitViolation), 400);
 
   // Publishing an unjudgeable problem would hand out free accepts for it.
   if (initialStatus === "published" && validatedCases.length === 0) {

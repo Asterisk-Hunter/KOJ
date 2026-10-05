@@ -7,12 +7,14 @@ import { jsonError, requireSetter } from "@/app/api/admin/authz";
 import { MAX_TEST_CASE_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 import { parseTestCasesFromText } from "@/app/api/admin/problems/import/parser";
 import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
+import {
+  MAX_TEST_CASE_FILE_BYTES,
+  testCaseLimitMessage,
+  testCaseLimitViolation,
+} from "@/app/api/admin/problems/limits";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
-const MAX_CASES = 100;
 
 async function findProblem(idRaw: string, organizationId: number) {
   const numeric = Number(idRaw);
@@ -57,20 +59,8 @@ async function handlePOST(
   if (!parsed.ok) return parsed.response;
   const b = parsed.value;
 
-  // Check current test case count and max position
-  const [countRow] = await db
-    .select({
-      count: sql<number>`count(*)`.mapWith(Number),
-      maxPos: sql<number | null>`max(${problemTestCases.position})`.mapWith(Number),
-    })
-    .from(problemTestCases)
-    .where(eq(problemTestCases.problemId, problem.id));
-
-  const currentCount = countRow?.count ?? 0;
-  let nextPos = (countRow?.maxPos ?? -1) + 1;
-
   type InCase = { input: unknown; expectedOutput: unknown; isSample?: unknown; position?: unknown };
-  const toInsert: Array<{ input: string; expectedOutput: string; isSample: boolean; position: number }> = [];
+  const toInsert: Array<{ input: string; expectedOutput: string; isSample: boolean; position: number | null }> = [];
 
   // Mode 1: raw CSV or delimited string
   if (typeof b.rawText === "string" && b.rawText.trim()) {
@@ -80,7 +70,7 @@ async function handlePOST(
         input: p.input,
         expectedOutput: p.expectedOutput,
         isSample: p.isSample,
-        position: nextPos++,
+        position: null,
       });
     }
   } else if (Array.isArray(b.testCases)) {
@@ -92,19 +82,19 @@ async function handlePOST(
       if (typeof tc.input !== "string" || !tc.input) {
         return jsonError(`test case ${i + 1} input must be non-empty`, 400);
       }
-      if (Buffer.byteLength(tc.input, "utf8") > MAX_FILE_BYTES) {
+      if (Buffer.byteLength(tc.input, "utf8") > MAX_TEST_CASE_FILE_BYTES) {
         return jsonError(`test case ${i + 1} input exceeds 10MB`, 400);
       }
       if (typeof tc.expectedOutput !== "string" || !tc.expectedOutput) {
         return jsonError(`test case ${i + 1} expectedOutput must be non-empty`, 400);
       }
-      if (Buffer.byteLength(tc.expectedOutput, "utf8") > MAX_FILE_BYTES) {
+      if (Buffer.byteLength(tc.expectedOutput, "utf8") > MAX_TEST_CASE_FILE_BYTES) {
         return jsonError(`test case ${i + 1} expectedOutput exceeds 10MB`, 400);
       }
       const isSample = typeof tc.isSample === "boolean" ? tc.isSample : false;
       const pos = typeof tc.position === "number" && Number.isInteger(tc.position) && tc.position >= 0
         ? tc.position
-        : nextPos++;
+        : null;
 
       toInsert.push({
         input: tc.input,
@@ -121,22 +111,35 @@ async function handlePOST(
     return jsonError("No valid test cases found in request", 400);
   }
 
-  if (currentCount + toInsert.length > MAX_CASES) {
-    return jsonError(
-      `Cannot add ${toInsert.length} cases: would exceed max limit of ${MAX_CASES} cases (currently ${currentCount})`,
-      400,
-    );
-  }
+  const requestViolation = testCaseLimitViolation(0, 0, toInsert);
+  if (requestViolation) return jsonError(testCaseLimitMessage(requestViolation), 400);
 
   // Insert all test cases
-  await db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
+    const [lockedProblem] = await tx
+      .select({ id: problems.id })
+      .from(problems)
+      .where(and(eq(problems.id, problem.id), eq(problems.organizationId, grant.context.organizationId)))
+      .for("update");
+    if (!lockedProblem) return { ok: false as const, error: "problem not found", status: 404 as const };
+    const [usage] = await tx
+      .select({
+        count: sql<number>`count(*)`.mapWith(Number),
+        bytes: sql<number>`COALESCE(sum(octet_length(${problemTestCases.input}) + octet_length(${problemTestCases.expectedOutput})), 0)`.mapWith(Number),
+        maxPosition: sql<number | null>`max(${problemTestCases.position})`.mapWith(Number),
+      })
+      .from(problemTestCases)
+      .where(eq(problemTestCases.problemId, problem.id));
+    const violation = testCaseLimitViolation(usage?.count ?? 0, usage?.bytes ?? 0, toInsert);
+    if (violation) return { ok: false as const, error: testCaseLimitMessage(violation), status: 400 as const };
+    let nextPosition = (usage?.maxPosition ?? -1) + 1;
     await tx.insert(problemTestCases).values(
       toInsert.map((c) => ({
         problemId: problem.id,
         input: c.input,
         expectedOutput: c.expectedOutput,
         isSample: c.isSample,
-        position: c.position,
+        position: c.position ?? nextPosition++,
       })),
     );
     await recordAdminAuditEvent(tx, {
@@ -147,7 +150,9 @@ async function handlePOST(
       entityId: problem.id,
       metadata: { count: toInsert.length },
     });
+    return { ok: true as const };
   });
+  if (!result.ok) return jsonError(result.error, result.status);
 
   // Return updated test cases
   const allCases = await db

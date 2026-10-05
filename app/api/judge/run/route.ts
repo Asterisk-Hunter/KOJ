@@ -181,7 +181,7 @@ async function handlePOST(req: NextRequest) {
     Math.max(100, typeof b.timeLimitMs === "number" && Number.isInteger(b.timeLimitMs) ? b.timeLimitMs : 2000),
   );
   const memoryMb = Math.min(
-    2048,
+    1024,
     Math.max(16, typeof b.memoryMb === "number" && Number.isInteger(b.memoryMb) ? b.memoryMb : 256),
   );
 

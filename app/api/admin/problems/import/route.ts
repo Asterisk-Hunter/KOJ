@@ -6,6 +6,11 @@ import { ensureUserRow, jsonError, requireSetter } from "@/app/api/admin/authz";
 import { MAX_PROBLEM_AUTHORING_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
 import {
+  MAX_PROBLEM_MEMORY_MB,
+  testCaseLimitMessage,
+  testCaseLimitViolation,
+} from "@/app/api/admin/problems/limits";
+import {
   extractAtCoderTaskId,
   extractCodeforcesId,
   extractLeetCodeSlug,
@@ -285,6 +290,12 @@ async function handlePOST(req: NextRequest) {
       400,
     );
   }
+
+  if (parsed.memoryLimitMb > MAX_PROBLEM_MEMORY_MB) {
+    return jsonError(`memoryLimitMb must be between 16 and ${MAX_PROBLEM_MEMORY_MB}`, 400);
+  }
+  const caseLimitViolation = testCaseLimitViolation(0, 0, parsed.testCases);
+  if (caseLimitViolation) return jsonError(testCaseLimitMessage(caseLimitViolation), 400);
 
   // If autoCreate is true, persist directly to Neon Postgres
   if (autoCreate) {
