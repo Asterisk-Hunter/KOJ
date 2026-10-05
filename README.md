@@ -20,12 +20,14 @@ Browser ◄── SSE status reads from Postgres ── Vercel
 - The admin view reports queue depth and age, worker liveness, infrastructure failures, and stored execution-time percentiles. SSE clients can reconnect and reload status from Postgres.
 - The judge supports Python, C, C++, Java, Go, Rust, and JavaScript. CI covers the accepted-verdict corpus for all seven, selected Python failure verdicts, and bounded Linux `rlimit` probes.
 - Problem setters can choose exact output comparison or finite numeric-token comparison with bounded absolute and relative tolerances; exact remains the default.
+- Setters can also configure an optional Python special checker. Contest tooling includes manual freeze/unfreeze and staged or full result reveal, announcements, private/public clarifications, teams of up to three, and timed virtual participation.
+- Admins have an append-only action log and advisory plagiarism-similarity reports over a bounded recent sample; reports do not determine misconduct.
 - Streaming byte limits bound incoming submission, problem-authoring, contest, admin, interactive-run, and webhook bodies before JSON parsing.
 - The judge container runs as non-root UID/GID `10001`, adding a privilege reduction layer. Cloud Run `rlimit` still does not isolate filesystem or network access; this deployment is for a trusted college audience, not arbitrary public code execution. See [the threat model](docs/threat-model.md).
 
-## Measured results
+## Status and remaining work
 
-Deployment and live Neon migration state are not verified, and KOJ has not yet been documented as used in a real IIIT Kottayam contest. Queue throughput, p95 latency, worker capacity, uptime, participant counts, and submission counts are therefore withheld until measured on the deployed stack. See [implementation status](docs/status.md) and [deployment steps](docs/deployment.md).
+The Cloud Run/Vercel/Neon deployment is a target, not a verified production deployment. Live Neon migration state, production smoke tests, deployed alert policies, and a real college contest remain unverified. No measured load/capacity, uptime, participant, or submission figures are claimed. Interactive problem protocol, problem-package export/validation, broad adversarial sandbox coverage, and complete route-by-role authorization coverage also remain future work. See [implementation status](docs/status.md), [features](docs/features.md), and the [deployment checklist](docs/deployment.md#cloud-run-launch-checklist).
 
 ---
 
