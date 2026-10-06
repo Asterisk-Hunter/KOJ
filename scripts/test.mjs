@@ -16,6 +16,7 @@ function findTests(directory) {
 const typescriptTests = [
   ...findTests(path.join(root, "lib")),
   ...findTests(path.join(root, "app", "api")),
+  ...findTests(path.join(root, "db")),
 ];
 const typescriptResult = spawnSync(
   process.execPath,
