@@ -116,3 +116,20 @@ Never log settings objects, DSNs, source code, stdin, or expected output.
 The Vercel daily recovery cron requeues only old pending/running submissions
 that have no job row. Queue leases—not the cron—are responsible for ordinary
 worker crash recovery.
+
+## Private research evaluation
+
+The feature-branch research API is a separate private surface under
+`/v1/research`; it does not create contestant submissions or return test
+content. Empty `TRAINING_API_SECRET` disables those routes. Enable it only
+after the matching research migrations are applied and the research API is
+deployed as a private Cloud Run service that requires IAM authentication.
+Grant `roles/run.invoker` only to the GPU VM service account; it must also
+present the separate `TRAINING_API_SECRET`. Set `TRAINING_WORKER_ENABLED=true`
+only on the isolated Docker VM worker, which does not receive the API secret.
+Restrict the dataset registry with `TRAINING_ORGANIZATION_ID`, and keep
+Cloud Run /judge execution disabled. Research candidates use the same
+server-side sandbox, bounded single active slot, retries, and hidden-test
+redaction policy; never route them through caller-supplied `/judge` cases.
+See `ml/README.md` for the owner-operated import, quota, budget, and
+verification runbook.

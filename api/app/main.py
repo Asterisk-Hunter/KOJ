@@ -25,6 +25,7 @@ from .judge import (
     resolve_sandbox_backend,
     warm_go_cache,
 )
+from .research import router as research_router
 from .upstream import JudgeUpstream, JudgeUpstreamUnavailable
 
 # Never log request bodies or case stdin/expected/stdout. Uvicorn access
@@ -116,6 +117,17 @@ class _BodySizeLimitMiddleware:
             await self.app(scope, receive, send)
             return None
         headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
+        if self.paths == ("/v1/research/runs",):
+            expected = settings.TRAINING_API_SECRET
+            provided = headers.get("x-training-secret", "")
+            if not expected:
+                response = JSONResponse(status_code=503, content={"detail": "research API disabled"})
+                await response(scope, receive, send)
+                return None
+            if not provided or not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
+                response = JSONResponse(status_code=401, content={"detail": "unauthorized"})
+                await response(scope, receive, send)
+                return None
         if not _judge_authorized(headers.get("x-judge-secret")):
             response = JSONResponse(status_code=401, content={"detail": "unauthorized"})
             await response(scope, receive, send)
@@ -181,6 +193,11 @@ app = FastAPI(
 )
 
 app.add_middleware(_BodySizeLimitMiddleware, max_bytes=settings.MAX_JUDGE_BODY_BYTES, paths=_JUDGE_BODY_PATHS)
+app.add_middleware(
+    _BodySizeLimitMiddleware,
+    max_bytes=settings.TRAINING_MAX_BODY_BYTES,
+    paths=("/v1/research/runs",),
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -189,6 +206,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "X-Judge-Secret", "Authorization", "Idempotency-Key"],
 )
+app.include_router(research_router)
 
 
 @app.get("/")

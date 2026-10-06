@@ -13,6 +13,7 @@ import {
   text,
   timestamp,
   uniqueIndex,
+  uuid,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -438,6 +439,86 @@ export const judgeWorkers = pgTable("judge_workers", {
     .defaultNow(),
   stoppedAt: timestamp("stopped_at", { withTimezone: true }),
 });
+
+export const researchDatasets = pgTable("research_datasets", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id),
+  slug: text("slug").notNull(),
+  version: text("version").notNull(),
+  sourceUrl: text("source_url").notNull(),
+  licenseId: text("license_id").notNull(),
+  licenseUrl: text("license_url").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("research_datasets_slug_version_unique").on(table.slug, table.version),
+  uniqueIndex("research_datasets_id_organization_unique").on(table.id, table.organizationId),
+]);
+
+export const researchProblems = pgTable("research_problems", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  datasetId: uuid("dataset_id").notNull().references(() => researchDatasets.id, { onDelete: "cascade" }),
+  sourceProblemId: text("source_problem_id").notNull(),
+  sourceUrl: text("source_url").notNull(),
+  licenseId: text("license_id").notNull(),
+  licenseUrl: text("license_url").notNull(),
+  split: text("split").notNull(),
+  prompt: text("prompt").notNull(),
+  testCases: jsonb("test_cases").notNull(),
+  timeLimitMs: integer("time_limit_ms").notNull().default(2000),
+  memoryLimitMb: integer("memory_limit_mb").notNull().default(256),
+  contentSha256: text("content_sha256").notNull(),
+}, (table) => [
+  uniqueIndex("research_problems_dataset_source_unique").on(table.datasetId, table.sourceProblemId),
+  uniqueIndex("research_problems_id_dataset_split_unique").on(table.id, table.datasetId, table.split),
+  index("research_problems_dataset_split_idx").on(table.datasetId, table.split, table.id),
+  check("research_problems_split_check", sql`${table.split} IN ('train', 'heldout', 'external')`),
+  check("research_problems_limits_check", sql`${table.timeLimitMs} BETWEEN 100 AND 10000 AND ${table.memoryLimitMb} BETWEEN 64 AND 512`),
+  check("research_problems_tests_array_check", sql`jsonb_typeof(${table.testCases}) = 'array' AND jsonb_array_length(${table.testCases}) BETWEEN 1 AND 100`),
+]);
+
+export const researchRuns = pgTable("research_runs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  datasetId: uuid("dataset_id").notNull().references(() => researchDatasets.id),
+  split: text("split").notNull(),
+  modelId: text("model_id").notNull(),
+  round: integer("round").notNull().default(0),
+  idempotencyKeyHash: text("idempotency_key_hash").notNull().unique(),
+  payloadSha256: text("payload_sha256").notNull(),
+  totalSamples: integer("total_samples").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("research_runs_id_dataset_split_unique").on(table.id, table.datasetId, table.split),
+  check("research_runs_split_check", sql`${table.split} IN ('train', 'heldout', 'external')`),
+  check("research_runs_round_check", sql`${table.round} >= 0`),
+  check("research_runs_sample_count_check", sql`${table.totalSamples} BETWEEN 1 AND 64`),
+]);
+
+export const researchSamples = pgTable("research_samples", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  runId: uuid("run_id").notNull(),
+  datasetId: uuid("dataset_id").notNull(),
+  split: text("split").notNull(),
+  problemId: uuid("problem_id").notNull(),
+  sampleId: text("sample_id").notNull(),
+  code: text("code").notNull(),
+  status: text("status").notNull().default("queued"),
+  verdict: text("verdict"),
+  attempts: integer("attempts").notNull().default(0),
+  availableAt: timestamp("available_at", { withTimezone: true }).notNull().defaultNow(),
+  leasedBy: text("leased_by"),
+  leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("research_samples_run_sample_unique").on(table.runId, table.sampleId),
+  foreignKey({ columns: [table.runId, table.datasetId, table.split], foreignColumns: [researchRuns.id, researchRuns.datasetId, researchRuns.split] }).onDelete("cascade"),
+  foreignKey({ columns: [table.problemId, table.datasetId, table.split], foreignColumns: [researchProblems.id, researchProblems.datasetId, researchProblems.split] }),
+  index("research_samples_queue_idx").on(table.availableAt, table.createdAt).where(sql`${table.status} = 'queued'`),
+  index("research_samples_run_status_idx").on(table.runId, table.status),
+  check("research_samples_status_check", sql`${table.status} IN ('queued', 'leased', 'completed', 'dead')`),
+  check("research_samples_verdict_check", sql`${table.verdict} IS NULL OR ${table.verdict} IN ('accepted', 'wrong_answer', 'time_limit_exceeded', 'memory_limit_exceeded', 'runtime_error', 'compilation_error', 'presentation_error')`),
+  check("research_samples_lease_check", sql`${table.status} <> 'leased' OR (${table.leasedBy} IS NOT NULL AND ${table.leaseExpiresAt} IS NOT NULL)`),
+]);
 
 export const notes = pgTable("notes", {
   id: serial("id").primaryKey(),

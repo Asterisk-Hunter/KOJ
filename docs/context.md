@@ -48,3 +48,5 @@ Before framework-specific changes, read the applicable guide in node_modules/nex
 - npm run db:migrate — Drizzle migrations; review live Neon state first.
 
 For current verification and gaps, use docs/testing.md and docs/status.md rather than older sprint notes.
+
+The experimental Python-only rejection-sampling/LoRA workflow and private headless research queue are documented in `ml/README.md`. They are not deployed or active by default; do not enable them on the live judge until the feature branch migrations, worker/API rollout, and isolation checks have passed.

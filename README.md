@@ -29,6 +29,8 @@ Browser ◄── SSE status reads from Postgres ── Vercel
 
 The Cloud Run/Vercel/Neon deployment is a target, not a verified production deployment. Live Neon migration state, production smoke tests, deployed alert policies, and a real college contest remain unverified. No measured load/capacity, uptime, participant, or submission figures are claimed. Interactive problem protocol, problem-package export/validation, broad adversarial sandbox coverage, and complete route-by-role authorization coverage also remain future work. See [implementation status](docs/status.md), [features](docs/features.md), and the [deployment checklist](docs/deployment.md#cloud-run-launch-checklist).
 
+The separate KOJ-verdict-driven code-model training loop is in [`ml/README.md`](ml/README.md) on a feature branch. Its research API is disabled until reviewed migrations, API/worker deployment, and private integration checks pass; it has not been run against the hosted judge.
+
 ---
 
 ## Stack

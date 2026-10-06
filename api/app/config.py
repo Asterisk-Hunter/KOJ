@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field, PostgresDsn
+from pydantic import Field, PostgresDsn, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -43,6 +43,29 @@ class Settings(BaseSettings):
         default="",
         description="Shared secret for internal /judge calls. Empty = judge disabled (returns 500).",
     )
+
+    TRAINING_API_SECRET: str = Field(
+        default="",
+        min_length=0,
+        description="Dedicated shared credential for headless research evaluation. Empty disables research endpoints and worker jobs.",
+    )
+    TRAINING_WORKER_ENABLED: bool = Field(
+        default=False,
+        description="Enable private research queue consumption on the Docker worker; separate from API authentication credentials.",
+    )
+    TRAINING_ORGANIZATION_ID: int = Field(default=1, ge=1)
+    TRAINING_MAX_BODY_BYTES: int = Field(default=2 * 1024 * 1024, ge=1024, le=5 * 1024 * 1024)
+    TRAINING_MAX_ACTIVE_SAMPLES: int = Field(default=128, ge=1, le=1000)
+    TRAINING_DAILY_SAMPLE_LIMIT: int = Field(default=3000, ge=1, le=100000)
+    TRAINING_MAX_RETAINED_SAMPLES: int = Field(default=100000, ge=1, le=1000000)
+    TRAINING_LEASE_SECONDS: int = Field(default=180, ge=30, le=1800)
+
+    @field_validator("TRAINING_API_SECRET")
+    @classmethod
+    def validate_training_secret(cls, value: str) -> str:
+        if value and len(value) < 32:
+            raise ValueError("TRAINING_API_SECRET must contain at least 32 characters")
+        return value
 
     JUDGE_UPSTREAM_URL: str = Field(
         default="",

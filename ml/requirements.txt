@@ -1,0 +1,6 @@
+torch>=2.6,<3
+transformers>=4.51,<5
+peft>=0.15,<1
+accelerate>=1.6,<2
+requests>=2.32,<3
+google-auth>=2.29,<3
