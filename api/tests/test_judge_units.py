@@ -319,13 +319,15 @@ class TestSpecialCheckerResult:
         def run(_image, workdir, command, _memory, _timeout, stdin_text=None, **_kwargs):
             run_dirs.append(workdir)
             if "-c" in command:
-                case = json.loads(stdin_text)
+                envelope = json.loads(stdin_text)
+                case = json.loads(envelope["payload"])
                 assert case == {
                     "input": "19 23\\n",
                     "expected_output": "not a fixed answer",
                     "actual_output": "42\\n",
                 }
-                assert command[-1] == "import json"
+                assert envelope["source"] == "import json"
+                assert command[-1] != envelope["source"]
                 return ProcessResult(0, "", "", False)
             return ProcessResult(0, "42\\n", "", False)
 

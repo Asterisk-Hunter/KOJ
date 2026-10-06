@@ -133,6 +133,17 @@ _CLOUDRUN_TAR_MAX_BYTES = 512 * 1024 * 1024
 _CLOUDRUN_JUDGE_LOCK = threading.Lock()
 _DOCKER_ARTIFACT_VOLUME_BYTES = 256 * 1024 * 1024
 _INFRASTRUCTURE_PUBLIC_MESSAGE = "Judge infrastructure temporarily unavailable."
+_CHECKER_RUNNER = '''import builtins as __koj_builtins
+import io as __koj_io
+import json as __koj_json
+import sys as __koj_sys
+
+__koj_exec = __koj_builtins.exec
+__koj_envelope = __koj_json.loads(__koj_sys.stdin.read())
+__koj_sys.stdin = __koj_io.TextIOWrapper(__koj_io.BytesIO(__koj_envelope["payload"].encode("utf-8")), encoding="utf-8")
+__koj_globals = {"__name__": "__main__", "__builtins__": dict(vars(__koj_builtins))}
+__koj_exec(compile(__koj_envelope["source"], "<koj-checker>", "exec"), __koj_globals, __koj_globals)
+'''
 
 Verdict = Literal[
     "accepted",
@@ -1614,9 +1625,9 @@ def _execute_judge(
         )
         checker_image = _image_for("python") if backend == "docker" else None
         checker_cmd = (
-            ["python3", "-I", "-S", "-c", req.checker_code or ""]
+            ["python3", "-I", "-S", "-c", _CHECKER_RUNNER]
             if backend == "docker"
-            else [sys.executable, "-I", "-S", "-c", req.checker_code or ""]
+            else [sys.executable, "-I", "-S", "-c", _CHECKER_RUNNER]
         )
 
         try:
@@ -1769,6 +1780,11 @@ def _execute_judge(
                         ensure_ascii=False,
                         separators=(",", ":"),
                     )
+                    checker_input = json.dumps(
+                        {"source": req.checker_code, "payload": checker_payload},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
                     checker_timeout = min(
                         _SPECIAL_CHECKER_TIMEOUT_S,
                         max(0.1, req.time_limit_ms / 1000),
@@ -1786,12 +1802,12 @@ def _execute_judge(
                         checker_timeout,
                         **(
                             {
-                                "stdin_text": checker_payload,
+                                "stdin_text": checker_input,
                                 "artifact_volume": artifact_volume,
                                 "artifact_volume_read_only": True,
                             }
                             if backend == "docker"
-                            else {"stdin_text": checker_payload}
+                            else {"stdin_text": checker_input}
                         ),
                     )
                     checker_phase = False
