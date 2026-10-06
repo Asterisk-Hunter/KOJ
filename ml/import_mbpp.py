@@ -13,7 +13,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-import pyarrow.parquet as parquet
 import requests
 
 _DATASET = "google-research-datasets/mbpp"
@@ -125,6 +124,8 @@ def _convert_row(row: dict[str, Any], split: str, revision: str) -> dict[str, An
 
 
 def _read_split(split: str, revision: str) -> list[dict[str, Any]]:
+    import pyarrow.parquet as parquet
+
     url = f"{_DATASET_URL}/resolve/{revision}/full/{split}-00000-of-00001.parquet"
     response = requests.get(url, timeout=60, stream=True)
     response.raise_for_status()
