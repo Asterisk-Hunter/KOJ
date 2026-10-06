@@ -117,7 +117,8 @@ class _BodySizeLimitMiddleware:
             await self.app(scope, receive, send)
             return None
         headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
-        if self.paths == ("/v1/research/runs",):
+        is_research = self.paths == ("/v1/research/runs",)
+        if is_research:
             expected = settings.TRAINING_API_SECRET
             provided = headers.get("x-training-secret", "")
             if not expected:
@@ -128,7 +129,13 @@ class _BodySizeLimitMiddleware:
                 response = JSONResponse(status_code=401, content={"detail": "unauthorized"})
                 await response(scope, receive, send)
                 return None
-        if not _judge_authorized(headers.get("x-judge-secret")):
+            from .research import _verify_oidc_token
+
+            if not _verify_oidc_token(headers.get("authorization")):
+                response = JSONResponse(status_code=401, content={"detail": "unauthorized"})
+                await response(scope, receive, send)
+                return None
+        if not is_research and not _judge_authorized(headers.get("x-judge-secret")):
             response = JSONResponse(status_code=401, content={"detail": "unauthorized"})
             await response(scope, receive, send)
             return None
