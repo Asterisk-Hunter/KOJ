@@ -21,6 +21,10 @@ _MAX_CANDIDATE_BYTES = 16 * 1024
 _MAX_TOTAL_CODE_BYTES = 512 * 1024
 
 
+def _dataset_digest(rows: list[tuple[str, str, str]]) -> str:
+    return hashlib.sha256(json.dumps(rows, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
 class ResearchCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -60,11 +64,34 @@ class ResearchRunRequest(BaseModel):
         return self
 
 
-def _authorize(provided: str | None) -> None:
+def _verify_oidc_token(authorization: str | None) -> bool:
+    if not authorization or not authorization.startswith("Bearer "):
+        return False
+    token = authorization.removeprefix("Bearer ").strip()
+    if not token or not settings.TRAINING_OIDC_AUDIENCE or not settings.TRAINING_OIDC_PRINCIPAL:
+        return False
+    try:
+        from google.auth.transport.requests import Request
+        from google.oauth2 import id_token
+
+        claims = id_token.verify_oauth2_token(token, Request(), settings.TRAINING_OIDC_AUDIENCE)
+    except Exception:  # noqa: BLE001 — invalid or unavailable identity is unauthorized
+        return False
+    issuer = claims.get("iss")
+    return (
+        issuer in {"accounts.google.com", "https://accounts.google.com"}
+        and claims.get("email") == settings.TRAINING_OIDC_PRINCIPAL
+        and claims.get("email_verified") is True
+    )
+
+
+def _authorize(provided: str | None, authorization: str | None = None) -> None:
     expected = settings.TRAINING_API_SECRET
     if not expected:
         raise HTTPException(status_code=503, detail="research evaluation is disabled")
     if not provided or not hmac.compare_digest(provided.encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    if not _verify_oidc_token(authorization):
         raise HTTPException(status_code=401, detail="unauthorized")
 
 
@@ -81,11 +108,12 @@ def list_research_problems(
     after: str | None = Query(default=None, max_length=160),
     limit: int = Query(default=50, ge=1, le=50),
     x_training_secret: str | None = Header(default=None, alias="X-Training-Secret"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> dict[str, object]:
-    _authorize(x_training_secret)
+    _authorize(x_training_secret, authorization)
     with db.get_connection() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT problem.source_problem_id, problem.prompt "
+            "SELECT dataset.id, problem.source_problem_id, problem.prompt "
             "FROM research_problems AS problem JOIN research_datasets AS dataset "
             "ON dataset.id = problem.dataset_id WHERE dataset.organization_id = %s "
             "AND dataset.slug = %s AND dataset.version = %s "
@@ -96,9 +124,21 @@ def list_research_problems(
         rows = cur.fetchall()
     has_more = len(rows) > limit
     page = rows[:limit]
+    dataset_digest = None
+    if rows:
+        dataset_id = rows[0][0]
+        with db.get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT source_problem_id, split, content_sha256 FROM research_problems "
+                "WHERE dataset_id = %s ORDER BY source_problem_id",
+                (dataset_id,),
+            )
+            digest_rows = cur.fetchall()
+        dataset_digest = _dataset_digest(digest_rows)
     return {
-        "problems": [{"problem_key": row[0], "prompt": row[1]} for row in page],
-        "next_after": page[-1][0] if has_more and page else None,
+        "problems": [{"problem_key": row[1], "prompt": row[2]} for row in page],
+        "dataset_sha256": dataset_digest,
+        "next_after": page[-1][1] if has_more and page else None,
     }
 
 
@@ -107,8 +147,9 @@ def create_research_run(
     request: ResearchRunRequest,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     x_training_secret: str | None = Header(default=None, alias="X-Training-Secret"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> dict[str, object]:
-    _authorize(x_training_secret)
+    _authorize(x_training_secret, authorization)
     if not idempotency_key or not idempotency_key.strip() or len(idempotency_key) > 128:
         raise HTTPException(status_code=400, detail="valid Idempotency-Key required")
 
@@ -182,25 +223,30 @@ def create_research_run(
 def get_research_run(
     run_id: UUID,
     x_training_secret: str | None = Header(default=None, alias="X-Training-Secret"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> dict[str, object]:
-    _authorize(x_training_secret)
+    _authorize(x_training_secret, authorization)
     with db.get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT run.id, run.total_samples, "
             "count(sample.id) FILTER (WHERE sample.status = 'completed'), "
             "count(sample.id) FILTER (WHERE sample.verdict = 'accepted'), "
             "count(sample.id) FILTER (WHERE sample.status = 'dead') "
-            "FROM research_runs AS run LEFT JOIN research_samples AS sample ON sample.run_id = run.id "
-            "WHERE run.id = %s GROUP BY run.id",
-            (run_id,),
+            "FROM research_runs AS run "
+            "JOIN research_datasets AS dataset ON dataset.id = run.dataset_id "
+            "LEFT JOIN research_samples AS sample ON sample.run_id = run.id "
+            "WHERE run.id = %s AND dataset.organization_id = %s GROUP BY run.id",
+            (run_id, settings.TRAINING_ORGANIZATION_ID),
         )
         row = cur.fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="research run not found")
         cur.execute(
             "SELECT sample.sample_id, sample.status, sample.verdict "
-            "FROM research_samples AS sample WHERE sample.run_id = %s ORDER BY sample.sample_id",
-            (run_id,),
+            "FROM research_samples AS sample JOIN research_runs AS run ON run.id = sample.run_id "
+            "JOIN research_datasets AS dataset ON dataset.id = run.dataset_id "
+            "WHERE sample.run_id = %s AND dataset.organization_id = %s ORDER BY sample.sample_id",
+            (run_id, settings.TRAINING_ORGANIZATION_ID),
         )
         samples = [{"sample_id": sample[0], "status": sample[1], "verdict": sample[2]} for sample in cur.fetchall()]
 

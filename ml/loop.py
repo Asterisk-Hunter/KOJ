@@ -45,10 +45,15 @@ def judge_samples(
     samples = _read_jsonl(samples_path)
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     seen_sample_ids: set[str] = set()
+    trusted_problems = client.problems(dataset, version, split)
     trusted_prompts = {
         problem["problem_key"]: problem["prompt"]
-        for problem in client.problems(dataset, version, split)
+        for problem in trusted_problems
     }
+    dataset_digests = {problem["dataset_sha256"] for problem in trusted_problems}
+    if len(dataset_digests) != 1:
+        raise ValueError("KOJ returned inconsistent dataset digests")
+    trusted_dataset_digest = next(iter(dataset_digests))
     for sample in samples:
         expected = {
             "dataset": dataset,
@@ -60,6 +65,8 @@ def judge_samples(
         }
         if any(sample.get(key) != value for key, value in expected.items()):
             raise ValueError("sample metadata does not match the pinned judge inputs")
+        if sample.get("dataset_sha256") != trusted_dataset_digest:
+            raise ValueError("sample dataset digest does not match the server-pinned dataset")
         if not isinstance(sample.get("problem_key"), str) or not sample["problem_key"] or not isinstance(sample.get("code"), str) or not sample["code"]:
             raise ValueError("candidate is missing problem_key or code")
         if sample["problem_key"] not in trusted_prompts or sample.get("prompt") != trusted_prompts[sample["problem_key"]]:
@@ -72,36 +79,44 @@ def judge_samples(
 
     results: list[dict[str, Any]] = []
     for problem_key in sorted(grouped):
-        candidates = grouped[problem_key]
-        for offset in range(0, len(candidates), 64):
-            batch = candidates[offset : offset + 64]
-            content = json.dumps(
-                [{"sample_id": item["sample_id"], "code": item["code"]} for item in batch],
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            idempotency_key = hashlib.sha256(
-                f"{dataset}:{version}:{split}:{round_index}:{problem_key}:{content}".encode("utf-8")
-            ).hexdigest()
-            run_id = client.submit_problem(
-                dataset=dataset,
-                version=version,
-                split=split,
-                model_id=run_model_id or model_id,
-                round_index=round_index,
-                problem_key=problem_key,
-                candidates=[{"sample_id": item["sample_id"], "code": item["code"]} for item in batch],
-                idempotency_key=idempotency_key,
-            )
-            status = client.wait_for_run(run_id, timeout_s=run_timeout_s)
-            by_sample = {entry["sample_id"]: entry for entry in status["samples"]}
-            for sample in batch:
-                verdict = by_sample.get(sample["sample_id"], {})
-                results.append({
-                    **sample,
-                    "status": verdict.get("status", "dead"),
-                    "verdict": verdict.get("verdict"),
-                })
+        pending = grouped[problem_key]
+        retry_index = 0
+        while pending and retry_index <= 2:
+            retry_results: list[dict[str, Any]] = []
+            for offset in range(0, len(pending), 64):
+                batch = pending[offset : offset + 64]
+                content = json.dumps(
+                    [{"sample_id": item["sample_id"], "code": item["code"]} for item in batch],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                idempotency_key = hashlib.sha256(
+                    f"{dataset}:{version}:{split}:{round_index}:{problem_key}:{retry_index}:{content}".encode("utf-8")
+                ).hexdigest()
+                run_id = client.submit_problem(
+                    dataset=dataset,
+                    version=version,
+                    split=split,
+                    model_id=run_model_id or model_id,
+                    round_index=round_index,
+                    problem_key=problem_key,
+                    candidates=[{"sample_id": item["sample_id"], "code": item["code"]} for item in batch],
+                    idempotency_key=idempotency_key,
+                )
+                status = client.wait_for_run(run_id, timeout_s=run_timeout_s)
+                by_sample = {entry["sample_id"]: entry for entry in status["samples"]}
+                for sample in batch:
+                    verdict = by_sample.get(sample["sample_id"], {})
+                    retry_results.append({
+                        **sample,
+                        "status": verdict.get("status", "dead"),
+                        "verdict": verdict.get("verdict"),
+                    })
+            pending = [item for item in retry_results if item["status"] != "completed"]
+            results.extend(item for item in retry_results if item["status"] == "completed")
+            if pending:
+                retry_index += 1
+        results.extend(pending)
     _write_jsonl(output, results)
     return results
 
@@ -109,24 +124,39 @@ def judge_samples(
 def summarize(results: list[dict[str, Any]], output: Path, label: str) -> dict[str, Any]:
     grouped: dict[str, list[bool]] = defaultdict(list)
     infrastructure_failures = 0
+    all_problem_keys: set[str] = set()
+    dataset_digests = {result.get("dataset_sha256") for result in results}
+    if len(dataset_digests) != 1 or not isinstance(next(iter(dataset_digests)), str):
+        raise ValueError("results must share one server-pinned dataset digest")
     for result in results:
+        problem_key = str(result["problem_key"])
+        all_problem_keys.add(problem_key)
         if result.get("status") == "completed" and isinstance(result.get("verdict"), str):
-            grouped[str(result["problem_key"])].append(result["verdict"] == "accepted")
+            grouped[problem_key].append(result["verdict"] == "accepted")
         else:
             infrastructure_failures += 1
     if not grouped:
         raise ValueError("no completed samples; no pass@k score can be reported")
     sample_counts = {len(values) for values in grouped.values()}
-    if len(sample_counts) != 1:
-        raise ValueError("pass@k requires the same number of completed samples per problem")
-    n = sample_counts.pop()
+    target_count = max(sample_counts)
+    scored_groups = {
+        problem_key: values
+        for problem_key, values in grouped.items()
+        if len(values) == target_count
+    }
+    incomplete_problems = sorted(all_problem_keys - set(scored_groups))
+    if not scored_groups:
+        raise ValueError("no complete problem groups; no pass@k score can be reported")
+    n = target_count
     metrics = {
         "label": label,
-        "problems_scored": len(grouped),
+        "dataset_sha256": next(iter(dataset_digests)),
+        "problems_scored": len(scored_groups),
+        "incomplete_problems": incomplete_problems,
         "samples_per_problem": n,
         "infrastructure_failures": infrastructure_failures,
         "pass_at_k": {
-            str(k): estimate_pass_at_k(grouped.values(), k)
+            str(k): estimate_pass_at_k(scored_groups.values(), k)
             for k in (1, 5, 10, 16, 32, 64)
             if k <= n
         },

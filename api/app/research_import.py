@@ -19,6 +19,11 @@ _MAX_TASKS = 10_000
 _MAX_PROBLEM_BYTES = 1024 * 1024
 
 
+def _validate_immutable_problem_set(existing_ids: set[str], incoming_ids: set[str]) -> None:
+    if existing_ids != incoming_ids:
+        raise ValueError("dataset version is immutable; problem set differs")
+
+
 def _https_url(value: object, name: str) -> str:
     if not isinstance(value, str) or len(value) > 2048:
         raise ValueError(f"{name} must be a URL")
@@ -173,6 +178,12 @@ def import_dataset(manifest_path: Path, problems_path: Path) -> int:
                 ):
                     raise ValueError("dataset version exists with different license or source metadata")
             dataset_id = row[0]
+            cur.execute(
+                "SELECT source_problem_id FROM research_problems WHERE dataset_id = %s",
+                (dataset_id,),
+            )
+            existing_problem_ids = {existing[0] for existing in cur.fetchall()}
+            _validate_immutable_problem_set(existing_problem_ids, seen)
             for task in tasks:
                 cur.execute(
                     "INSERT INTO research_problems "

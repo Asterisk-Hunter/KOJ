@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .prompts import build_prompt
+from .sampling import validate_model_revision
 
 
 def _adapter_digest(path: Path) -> str:
@@ -37,8 +38,10 @@ def train_lora(
         raise ValueError("SFT input must contain only accepted train-split samples")
     if any(not isinstance(sample.get("code"), str) or not sample["code"] for sample in accepted_samples):
         raise ValueError("accepted sample is missing code")
-    if not revision.strip() or revision == "main":
-        raise ValueError("pin the model to an immutable Hugging Face commit revision")
+    dataset_digests = {sample.get("dataset_sha256") for sample in accepted_samples}
+    if len(dataset_digests) != 1 or not isinstance(next(iter(dataset_digests)), str):
+        raise ValueError("accepted samples must share one server-pinned dataset digest")
+    revision = validate_model_revision(revision)
 
     dataset_digest = hashlib.sha256(
         "\n".join(
@@ -51,6 +54,7 @@ def train_lora(
         "model_revision": revision,
         "parent_adapter_sha256": _adapter_digest(parent_adapter) if parent_adapter else None,
         "accepted_sha256": dataset_digest,
+        "dataset_sha256": next(iter(dataset_digests)),
         "verified_sample_count": len(accepted_samples),
         "epochs": epochs,
         "learning_rate": learning_rate,

@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 from .client import ResearchClient
 from .prompts import build_prompt
+
+_MODEL_REVISION = re.compile(r"[0-9a-f]{40}\Z", re.IGNORECASE)
+
+
+def validate_model_revision(revision: str) -> str:
+    revision_id = revision.strip()
+    if not _MODEL_REVISION.fullmatch(revision_id):
+        raise ValueError("model revision must be an immutable 40-character Hugging Face commit SHA")
+    return revision_id
 
 
 def sample_problems(
@@ -37,9 +47,11 @@ def sample_problems(
     problems = client.problems(dataset, version, split, max_problems)
     if not problems:
         raise ValueError(f"dataset {dataset}@{version} has no {split} problems")
-    revision_id = revision.strip()
-    if not revision_id or revision_id == "main":
-        raise ValueError("pin the model to an immutable Hugging Face commit revision")
+    revision_id = validate_model_revision(revision)
+    dataset_digests = {problem["dataset_sha256"] for problem in problems}
+    if len(dataset_digests) != 1:
+        raise ValueError("KOJ returned inconsistent dataset digests")
+    dataset_sha256 = next(iter(dataset_digests))
 
     dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     tokenizer = AutoTokenizer.from_pretrained(model_id, revision=revision_id, trust_remote_code=False)
@@ -68,7 +80,7 @@ def sample_problems(
                 if not line.strip():
                     continue
                 row = json.loads(line)
-                if not isinstance(row, dict) or row.get("split") != split or row.get("dataset") != dataset or row.get("version") != version or row.get("model_id") != model_id or row.get("model_revision") != revision_id or row.get("round") != round_index:
+                if not isinstance(row, dict) or row.get("split") != split or row.get("dataset") != dataset or row.get("version") != version or row.get("model_id") != model_id or row.get("model_revision") != revision_id or row.get("round") != round_index or row.get("dataset_sha256") != dataset_sha256:
                     raise ValueError("existing sample file does not match this run's pinned inputs")
                 problem_key, sample_id = row.get("problem_key"), row.get("sample_id")
                 if not isinstance(problem_key, str) or not isinstance(sample_id, str):
@@ -121,6 +133,7 @@ def sample_problems(
                     "model_revision": revision_id,
                     "round": round_index,
                     "seed": sample_seed,
+                    "dataset_sha256": dataset_sha256,
                 }
                 result_file.write(json.dumps(item, ensure_ascii=False) + "\n")
                 result_file.flush()

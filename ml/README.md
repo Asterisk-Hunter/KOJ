@@ -64,6 +64,9 @@ KOJ_TRAINING_API_AUDIENCE=https://<private-research-api-origin>
 
 Configure the research Cloud Run service to **require authentication** and grant `roles/run.invoker` only to the GPU VM service account. The client obtains an audience-bound Google ID token from VM metadata credentials; a local operator can provide a short-lived `KOJ_TRAINING_API_ID_TOKEN` for a manual smoke test. The API still checks its independent `X-Training-Secret`, and the client refuses non-HTTPS origins except localhost. Do not make this service public or expose it to the browser.
 
+Configure the API with `TRAINING_OIDC_AUDIENCE` equal to the Cloud Run service URL and `TRAINING_OIDC_PRINCIPAL` equal to the GPU VM service-account email. The API verifies the Google token's signature, issuer, audience, verified email, and principal in addition to the training secret.
+Set `TRAINING_ORGANIZATION_ID` explicitly to the approved Neon organization; leaving it empty keeps research disabled rather than defaulting to an organization.
+
 Run one two-round experiment (the default limits 100 train and 100 held-out problems to start):
 
 ```powershell

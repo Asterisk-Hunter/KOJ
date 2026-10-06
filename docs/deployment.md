@@ -65,6 +65,9 @@ Previous diagram referencing Supabase/Neon interchangeable is superseded — Neo
 | `DATABASE_URL` | `.env.local` (Next.js), `.env` (FastAPI) | Neon pooled connection string (`…-pooler…?sslmode=require&channel_binding=require`) |
 | `FASTAPI_URL` | `.env.local` (Next.js) | FastAPI origin for internal judge endpoints and health checks; not used to enqueue submissions |
 | `JUDGE_INTERNAL_SECRET` | FastAPI (and Next if using internal judge endpoints) | Shared secret for compatibility `/judge` and `/judge-async` endpoints |
+| `TRAINING_OIDC_AUDIENCE` | Private research API | Cloud Run service URL expected in Google OIDC tokens |
+| `TRAINING_OIDC_PRINCIPAL` | Private research API | GPU VM service-account email allowed to call research endpoints |
+| `TRAINING_ORGANIZATION_ID` | Private research API and worker | Explicit Neon organization owning the research dataset registry; required when research is enabled |
 | `FRONTEND_URL` | `.env` (FastAPI) | Production frontend origin for CORS (e.g. `https://koj.vercel.app`) |
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | `.env.local` (Next) | Clerk publishable key |
 | `CLERK_SECRET_KEY` | `.env.local` (Next) | Clerk secret |

@@ -71,6 +71,7 @@ class ResearchClient:
     def problems(self, dataset: str, version: str, split: str, max_results: int | None = None) -> list[dict[str, str]]:
         results: list[dict[str, str]] = []
         after: str | None = None
+        dataset_sha256: str | None = None
         while True:
             params: dict[str, str] = {"dataset": dataset, "version": version, "split": split, "limit": "50"}
             if after:
@@ -79,10 +80,19 @@ class ResearchClient:
             page = body.get("problems")
             if not isinstance(page, list):
                 raise ValueError("KOJ problem response is missing its problem list")
+            page_digest = body.get("dataset_sha256")
+            if not page:
+                return results
+            if not isinstance(page_digest, str) or len(page_digest) != 64:
+                raise ValueError("KOJ problem response is missing its dataset digest")
+            if dataset_sha256 is None:
+                dataset_sha256 = page_digest
+            elif dataset_sha256 != page_digest:
+                raise ValueError("KOJ dataset digest changed during pagination")
             for item in page:
                 if not isinstance(item, dict) or not isinstance(item.get("problem_key"), str) or not isinstance(item.get("prompt"), str):
                     raise ValueError("KOJ returned a malformed research problem")
-                results.append({"problem_key": item["problem_key"], "prompt": item["prompt"]})
+                results.append({"problem_key": item["problem_key"], "prompt": item["prompt"], "dataset_sha256": page_digest})
                 if max_results is not None and len(results) >= max_results:
                     return results
             next_after = body.get("next_after")

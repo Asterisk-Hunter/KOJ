@@ -8,9 +8,10 @@ from pydantic import ValidationError
 
 from app import research
 from app import research_import
-from app.config import settings
-from ml.loop import judge_samples
+from app.config import Settings, settings
+from ml.loop import judge_samples, summarize
 from ml.client import ResearchClient
+from ml.sampling import validate_model_revision
 
 
 def test_research_run_accepts_one_problem_and_unique_samples() -> None:
@@ -27,6 +28,19 @@ def test_research_run_accepts_one_problem_and_unique_samples() -> None:
     )
 
     assert len(request.candidates) == 2
+
+
+def test_research_organization_is_required_only_when_research_is_enabled() -> None:
+    common = {"DATABASE_URL": "postgresql://test:test@localhost/test"}
+    assert Settings(**common).TRAINING_ORGANIZATION_ID is None
+
+    with pytest.raises(ValueError, match="TRAINING_ORGANIZATION_ID"):
+        Settings(**common, TRAINING_API_SECRET="a" * 32, TRAINING_OIDC_AUDIENCE="https://research.example.test", TRAINING_OIDC_PRINCIPAL="gpu@example.iam.gserviceaccount.com")
+    with pytest.raises(ValueError, match="TRAINING_ORGANIZATION_ID"):
+        Settings(**common, TRAINING_WORKER_ENABLED=True)
+
+    configured = Settings(**common, TRAINING_WORKER_ENABLED=True, TRAINING_ORGANIZATION_ID=7)
+    assert configured.TRAINING_ORGANIZATION_ID == 7
 
 
 @pytest.mark.parametrize(
@@ -72,10 +86,37 @@ def test_auth_is_disabled_by_default_and_rejects_bad_secret(monkeypatch: pytest.
     assert disabled.value.status_code == 503
 
     monkeypatch.setattr(settings, "TRAINING_API_SECRET", "correct")
+    monkeypatch.setattr(research, "_verify_oidc_token", lambda _authorization: True)
     with pytest.raises(research.HTTPException) as denied:
         research._authorize("incorrect")
     assert denied.value.status_code == 401
-    research._authorize("correct")
+    research._authorize("correct", "Bearer token")
+
+
+def test_research_oidc_verifier_checks_audience_and_principal(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "TRAINING_OIDC_AUDIENCE", "https://research.example.test")
+    monkeypatch.setattr(settings, "TRAINING_OIDC_PRINCIPAL", "gpu@example.iam.gserviceaccount.com")
+    import google.oauth2.id_token
+
+    monkeypatch.setattr(
+        google.oauth2.id_token,
+        "verify_oauth2_token",
+        lambda token, _request, audience: {
+            "iss": "https://accounts.google.com",
+            "aud": audience,
+            "email": "gpu@example.iam.gserviceaccount.com",
+            "email_verified": True,
+        },
+    )
+    assert research._verify_oidc_token("Bearer signed-token")
+
+    monkeypatch.setattr(settings, "TRAINING_OIDC_PRINCIPAL", "other@example.iam.gserviceaccount.com")
+    assert not research._verify_oidc_token("Bearer signed-token")
+
+
+def test_dataset_digest_is_stable_for_ordered_rows() -> None:
+    rows = [("task-1", "train", "a" * 64), ("task-2", "heldout", "b" * 64)]
+    assert research._dataset_digest(rows) == research._dataset_digest(rows)
 
 
 def test_idempotency_payload_digest_is_stable() -> None:
@@ -120,10 +161,15 @@ def test_problem_import_requires_test_cases_and_reviewed_license(tmp_path: Path)
         research_import._read_manifest(manifest_path)
 
 
+def test_problem_import_rejects_changes_to_an_existing_version() -> None:
+    with pytest.raises(ValueError, match="problem set differs"):
+        research_import._validate_immutable_problem_set({"task-1"}, {"task-1", "task-2"})
+
+
 def test_judge_samples_rejects_stale_or_tampered_prompts(tmp_path: Path) -> None:
     class Client:
         def problems(self, dataset: str, version: str, split: str) -> list[dict[str, str]]:
-            return [{"problem_key": "p-1", "prompt": "Trusted prompt"}]
+            return [{"problem_key": "p-1", "prompt": "Trusted prompt", "dataset_sha256": "a" * 64}]
 
         def submit_problem(self, **_kwargs: object) -> None:
             raise AssertionError("untrusted prompt must not be submitted")
@@ -141,6 +187,7 @@ def test_judge_samples_rejects_stale_or_tampered_prompts(tmp_path: Path) -> None
             "sample_id": "sample-1",
             "prompt": "Tampered prompt",
             "code": "print(1)",
+            "dataset_sha256": "a" * 64,
         }) + "\n",
         encoding="utf-8",
     )
@@ -151,11 +198,75 @@ def test_judge_samples_rejects_stale_or_tampered_prompts(tmp_path: Path) -> None
         )
 
 
+def test_judge_samples_retries_dead_infrastructure_samples(tmp_path: Path) -> None:
+    class Client:
+        def __init__(self) -> None:
+            self.submit_count = 0
+            self.submissions: list[dict[str, object]] = []
+
+        def problems(self, dataset: str, version: str, split: str) -> list[dict[str, str]]:
+            return [{"problem_key": "p-1", "prompt": "Trusted prompt", "dataset_sha256": "a" * 64}]
+
+        def submit_problem(self, **kwargs: object):
+            self.submit_count += 1
+            self.submissions.append(kwargs)
+            return self.submit_count
+
+        def wait_for_run(self, run_id, **_kwargs: object) -> dict[str, object]:
+            verdict = "dead" if run_id == 1 else "completed"
+            return {"samples": [{"sample_id": "sample-1", "status": verdict, "verdict": "accepted" if verdict == "completed" else None}]}
+
+    path = tmp_path / "samples.jsonl"
+    path.write_text(
+        json.dumps({
+            "dataset": "sample-set", "version": "v1", "split": "train", "model_id": "model",
+            "model_revision": "revision", "round": 0, "problem_key": "p-1", "sample_id": "sample-1",
+            "prompt": "Trusted prompt", "code": "print(1)", "dataset_sha256": "a" * 64,
+        }) + "\n",
+        encoding="utf-8",
+    )
+    client = Client()
+    results = judge_samples(
+        client, path, dataset="sample-set", version="v1", split="train", model_id="model",
+        model_revision="revision", round_index=0, output=tmp_path / "results.jsonl",
+    )
+    assert client.submit_count == 2
+    assert all(
+        submission["dataset"] == "sample-set" and submission["version"] == "v1"
+        for submission in client.submissions
+    )
+    assert results[0]["status"] == "completed"
+
+
+def test_summarize_reports_incomplete_problem_without_aborting(tmp_path: Path) -> None:
+    metrics = summarize(
+        [
+            {"problem_key": "p-1", "status": "completed", "verdict": "accepted", "dataset_sha256": "a" * 64},
+            {"problem_key": "p-1", "status": "dead", "verdict": None, "dataset_sha256": "a" * 64},
+            {"problem_key": "p-2", "status": "completed", "verdict": "wrong_answer", "dataset_sha256": "a" * 64},
+            {"problem_key": "p-2", "status": "completed", "verdict": "accepted", "dataset_sha256": "a" * 64},
+        ],
+        tmp_path / "metrics.json",
+        "heldout-round-0",
+    )
+    assert metrics["problems_scored"] == 1
+    assert metrics["incomplete_problems"] == ["p-1"]
+    assert metrics["infrastructure_failures"] == 1
+
+
 def test_research_client_requires_tls_outside_localhost(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("KOJ_TRAINING_API_SECRET", "test-secret")
     with pytest.raises(ValueError, match="HTTPS"):
         ResearchClient("http://training.example.test")
     assert ResearchClient("http://localhost:8000").base_url == "http://localhost:8000"
+
+
+def test_model_revision_requires_a_commit_sha() -> None:
+    assert validate_model_revision("a" * 40) == "a" * 40
+    with pytest.raises(ValueError, match="commit SHA"):
+        validate_model_revision("main")
+    with pytest.raises(ValueError, match="commit SHA"):
+        validate_model_revision("release-tag")
 
 @pytest.mark.parametrize(
     "task",

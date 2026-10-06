@@ -127,6 +127,11 @@ deployed as a private Cloud Run service that requires IAM authentication.
 Grant `roles/run.invoker` only to the GPU VM service account; it must also
 present the separate `TRAINING_API_SECRET`. Set `TRAINING_WORKER_ENABLED=true`
 only on the isolated Docker VM worker, which does not receive the API secret.
+Set `TRAINING_OIDC_AUDIENCE` to the research Cloud Run service URL and
+`TRAINING_OIDC_PRINCIPAL` to the GPU VM service-account email; the API verifies
+both the Google token and the shared secret.
+Set `TRAINING_ORGANIZATION_ID` explicitly to the approved Neon organization;
+there is no default organization when the research API or worker is enabled.
 Restrict the dataset registry with `TRAINING_ORGANIZATION_ID`, and keep
 Cloud Run /judge execution disabled. Research candidates use the same
 server-side sandbox, bounded single active slot, retries, and hidden-test
