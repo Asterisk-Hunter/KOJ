@@ -98,6 +98,7 @@ def test_docker_base_mounts_artifacts_rw_for_compile_and_ro_for_cases():
     assert "vol:/artifacts:ro" in case_args
     assert "vol:/scratch:rw" not in case_args
     assert "--read-only" in compile_args and "--read-only" in case_args
+    assert "--interactive" in compile_args and "--interactive" in case_args
     assert f"{Path('source')}:/sandbox:ro" in compile_args
     assert f"{Path('source')}:/sandbox:ro" in case_args
 

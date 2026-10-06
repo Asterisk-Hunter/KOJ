@@ -596,6 +596,7 @@ def _docker_base_argv(
         "docker",
         "run",
         "--rm",
+        "--interactive",
         "--pull",
         "never",
         "--network",
