@@ -28,6 +28,7 @@ jobs:
         env:
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_ZXhhbXBsZS5jb20k
           CLERK_SECRET_KEY: sk_test_placeholder
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
       - run: npm test
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/test
@@ -74,4 +75,4 @@ jobs:
           -e PYTHONPATH=/srv
           -v "${{ github.workspace }}/api:/tests:ro"
           koj-judge:test
-          sh -c "pip install --no-cache-dir -r /tests/requirements-test.txt && pytest -p no:cacheprovider -c /tests/pytest.ini -q -m integration /tests/integration_tests"
+          sh -c "python -m pip install --no-cache-dir -r /tests/requirements-test.txt && python -m pytest -p no:cacheprovider -c /tests/pytest.ini -q -m integration /tests/integration_tests"
