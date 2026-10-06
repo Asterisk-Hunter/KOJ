@@ -17,6 +17,7 @@ from app.config import Settings, settings
 from app.judge import JudgeResponse
 from ml.loop import judge_samples, summarize
 from ml.client import ResearchClient
+from ml.import_mbpp import parse_test
 from ml.sampling import validate_model_revision
 
 
@@ -397,6 +398,19 @@ def test_research_worker_has_its_own_research_only_loop(monkeypatch: pytest.Monk
     research_worker.run()
 
     assert calls == ["init", "close"]
+
+
+@pytest.mark.parametrize(
+    ("test_case", "expected"),
+    [
+        ('assert solve([1, 2], offset=3) == 6', {"stdin": '{"args":[[1,2]],"kwargs":{"offset":3}}', "expected_stdout": "6"}),
+        ('assert solve((1, 2)) == 3', None),
+        ('assert solve(read()) == 3', None),
+        ('assert solve([1]) != 3', None),
+    ],
+)
+def test_mbpp_importer_only_serializes_safe_literal_assertions(test_case: str, expected: dict[str, str] | None) -> None:
+    assert parse_test(test_case, "solve") == expected
 
 
 @pytest.mark.parametrize(
