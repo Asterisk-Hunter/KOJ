@@ -21,6 +21,7 @@ jobs:
           python-version: "3.12"
       - run: npm ci
       - run: python -m pip install -r api/requirements-test.txt
+      - run: npx next typegen
       - run: npm run lint
       - run: npx tsc --noEmit
       - run: npm run build
