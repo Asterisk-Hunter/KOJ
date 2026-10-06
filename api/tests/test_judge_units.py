@@ -370,6 +370,12 @@ class TestSpecialCheckerResult:
         assert response.status == "wrong_answer"
         assert response.cases[0].verdict == "wrong_answer"
 
+    def test_checker_exception_is_infrastructure_error(self):
+        from app.judge import _special_checker_passed
+
+        assert _special_checker_passed(1, False, "Traceback: checker crashed") is None
+        assert _special_checker_passed(1, False) is False
+
     def test_checker_crash_is_not_attributed_to_submission(self, monkeypatch):
         from app import judge
 

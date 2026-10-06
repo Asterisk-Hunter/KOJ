@@ -417,8 +417,14 @@ def _whitespace_only_diff(actual: str, expected: str) -> bool:
     return strip(actual) == strip(expected) and not _outputs_equal(actual, expected)
 
 
-def _special_checker_passed(returncode: int | None, output_limit_exceeded: bool) -> bool | None:
+def _special_checker_passed(
+    returncode: int | None,
+    output_limit_exceeded: bool,
+    stderr: str = "",
+) -> bool | None:
     if output_limit_exceeded or returncode not in (0, 1):
+        return None
+    if returncode == 1 and stderr:
         return None
     return returncode == 0
 
@@ -1793,6 +1799,7 @@ def _execute_judge(
                     checker_passed = _special_checker_passed(
                         checker_proc.returncode,
                         checker_proc.output_limit_exceeded,
+                        checker_proc.stderr,
                     )
                     if checker_passed is None:
                         logger.error(
