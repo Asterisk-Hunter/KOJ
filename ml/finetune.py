@@ -112,7 +112,14 @@ def train_lora(
 
     tokenized: list[dict[str, list[int]]] = []
     for sample in accepted_samples:
-        prompt_ids = tokenizer(build_prompt(str(sample["prompt"])), add_special_tokens=True)["input_ids"]
+        prompt_ids = tokenizer(
+            build_prompt(
+                str(sample["prompt"]),
+                adapter_kind=str(sample.get("adapter_kind") or "stdin_stdout"),
+                adapter_entry_point=sample.get("adapter_entry_point"),
+            ),
+            add_special_tokens=True,
+        )["input_ids"]
         completion_ids = tokenizer(str(sample["code"]) + tokenizer.eos_token, add_special_tokens=False)["input_ids"]
         available = max_length - len(prompt_ids)
         if available <= 1:

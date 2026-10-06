@@ -50,6 +50,13 @@ def judge_samples(
         problem["problem_key"]: problem["prompt"]
         for problem in trusted_problems
     }
+    trusted_adapters = {
+        problem["problem_key"]: (
+            problem.get("adapter_kind") or "stdin_stdout",
+            problem.get("adapter_entry_point"),
+        )
+        for problem in trusted_problems
+    }
     dataset_digests = {problem["dataset_sha256"] for problem in trusted_problems}
     if len(dataset_digests) != 1:
         raise ValueError("KOJ returned inconsistent dataset digests")
@@ -71,6 +78,13 @@ def judge_samples(
             raise ValueError("candidate is missing problem_key or code")
         if sample["problem_key"] not in trusted_prompts or sample.get("prompt") != trusted_prompts[sample["problem_key"]]:
             raise ValueError("sample prompt does not match the server-pinned dataset problem")
+        expected_adapter = trusted_adapters.get(sample["problem_key"])
+        actual_adapter = (
+            sample.get("adapter_kind") or "stdin_stdout",
+            sample.get("adapter_entry_point"),
+        )
+        if expected_adapter != actual_adapter:
+            raise ValueError("sample adapter metadata does not match the server-pinned dataset")
         sample_id = sample.get("sample_id")
         if not isinstance(sample_id, str) or not sample_id or sample_id in seen_sample_ids:
             raise ValueError("sample IDs must be non-empty and unique in the pinned run")

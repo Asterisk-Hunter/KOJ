@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 from pydantic import ValidationError
 
 from app import research
 from app import research_import
+from app import research_adapter
+from app import worker
 from app.config import Settings, settings
+from app.judge import JudgeResponse
 from ml.loop import judge_samples, summarize
 from ml.client import ResearchClient
 from ml.sampling import validate_model_revision
@@ -279,3 +284,101 @@ def test_model_revision_requires_a_commit_sha() -> None:
 def test_problem_import_rejects_ambiguous_or_unbounded_test_data(task: dict[str, object]) -> None:
     with pytest.raises(ValueError):
         research_import._read_problem(json.dumps(task), 1)
+
+
+def test_function_adapter_requires_valid_server_owned_metadata() -> None:
+    task = {
+        "source_problem_id": "function-task",
+        "source_url": "https://example.test/task",
+        "license_id": "CC-BY-4.0",
+        "license_url": "https://creativecommons.org/licenses/by/4.0/",
+        "license_reviewed": True,
+        "split": "train",
+        "prompt": "Return the sum of two integers.",
+        "reference_solution": "def solution(a, b):\n    return a + b",
+        "tests": [{"stdin": '{"args":[2,3]}', "expected_stdout": "5"}],
+        "adapter_kind": research_adapter.PYTHON_ASSERTIONS_ADAPTER,
+        "adapter_entry_point": "solution",
+    }
+
+    parsed = research_import._read_problem(json.dumps(task), 1)
+
+    assert parsed["adapter_kind"] == research_adapter.PYTHON_ASSERTIONS_ADAPTER
+    assert parsed["adapter_entry_point"] == "solution"
+    assert parsed["test_cases"] == task["tests"]
+    generated = research_adapter.build_python_function_program(
+        str(parsed["reference_solution"]),
+        str(parsed["adapter_entry_point"]),
+    )
+    assert "def solution(a, b):" in generated
+    assert "5" not in generated
+    assert "expected_output" not in generated
+
+
+def test_function_adapter_checker_compares_private_expected_results() -> None:
+    checker = research_adapter.function_checker_code()
+
+    def check(actual_output: str) -> int:
+        payload = json.dumps({"expected_output": "5", "actual_output": actual_output})
+        result = subprocess.run(
+            [sys.executable, "-I", "-S", "-c", checker],
+            input=payload,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+        return result.returncode
+
+    assert check("5") == 0
+    assert check("4") != 0
+
+
+def test_research_worker_keeps_expected_result_out_of_candidate_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[object] = []
+    monkeypatch.setattr(worker.settings, "JUDGE_SANDBOX_MODE", "docker")
+    monkeypatch.setattr(worker, "resolve_sandbox_backend", lambda: "docker")
+    monkeypatch.setattr(worker, "execute_judge", lambda request, **_kwargs: captured.append(request) or JudgeResponse(
+        status="accepted", passed_tests=1, total_tests=1, execution_time_ms=1, cases=[]
+    ))
+    monkeypatch.setattr(worker.research, "heartbeat_sample", lambda *_args: True)
+    monkeypatch.setattr(worker.research, "complete_sample", lambda *_args: True)
+    monkeypatch.setattr(worker.research, "retry_sample", lambda *_args: True)
+
+    worker._process_research_sample(
+        "worker-1",
+        {
+            "id": "sample-id",
+            "run_id": "run-id",
+            "attempt": 1,
+            "code": "def solution(a, b):\n    return a + b",
+            "cases": [{"stdin": '{"args":[2,3]}', "expected_stdout": "5"}],
+            "time_limit_ms": 2000,
+            "memory_limit_mb": 256,
+            "adapter_kind": research_adapter.PYTHON_ASSERTIONS_ADAPTER,
+            "adapter_entry_point": "solution",
+        },
+    )
+
+    assert len(captured) == 1
+    request = captured[0]
+    assert isinstance(request, worker.JudgeRequest)
+    assert request.checker_code == research_adapter.function_checker_code()
+    assert request.cases[0].expected_stdout == "5"
+    assert "5" not in request.code
+
+
+@pytest.mark.parametrize(
+    ("kind", "entry_point"),
+    [
+        (None, None),
+        ("unknown", "solution"),
+        (research_adapter.PYTHON_ASSERTIONS_ADAPTER, "not a name"),
+    ],
+)
+def test_validate_research_adapter_rejects_malformed_metadata(
+    kind: object,
+    entry_point: object,
+) -> None:
+    with pytest.raises(ValueError):
+        research_adapter.validate_adapter(kind, entry_point)

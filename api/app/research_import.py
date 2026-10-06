@@ -12,6 +12,14 @@ from urllib.parse import urlparse
 from . import db
 from .config import settings
 from .judge import JudgeCase, JudgeRequest, execute_judge, resolve_sandbox_backend
+from .research_adapter import (
+    PYTHON_ASSERTIONS_ADAPTER,
+    STDIN_STDOUT_ADAPTER,
+    build_python_function_program,
+    function_checker_code,
+    validate_adapter,
+    validate_function_cases,
+)
 
 _SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?\Z")
 _SPLITS = {"train", "heldout", "external"}
@@ -60,7 +68,7 @@ def _read_problem(line: str, number: int) -> dict[str, object]:
     task = json.loads(line)
     if not isinstance(task, dict):
         raise ValueError(f"line {number}: expected a JSON object")
-    allowed_fields = {"source_problem_id", "source_url", "license_id", "license_url", "license_reviewed", "split", "prompt", "tests", "reference_solution", "time_limit_ms", "memory_limit_mb"}
+    allowed_fields = {"source_problem_id", "source_url", "license_id", "license_url", "license_reviewed", "split", "prompt", "tests", "reference_solution", "time_limit_ms", "memory_limit_mb", "adapter_kind", "adapter_entry_point"}
     if set(task) - allowed_fields:
         raise ValueError(f"line {number}: unknown fields")
     problem_key, split, prompt, tests = task.get("source_problem_id"), task.get("split"), task.get("prompt"), task.get("tests")
@@ -93,10 +101,20 @@ def _read_problem(line: str, number: int) -> dict[str, object]:
         raise ValueError(f"line {number}: time_limit_ms must be between 100 and 10000")
     if type(memory_limit_mb) is not int or not 64 <= memory_limit_mb <= 512:
         raise ValueError(f"line {number}: memory_limit_mb must be between 64 and 512")
+    adapter_kind, adapter_entry_point = validate_adapter(
+        task.get("adapter_kind", STDIN_STDOUT_ADAPTER),
+        task.get("adapter_entry_point"),
+    )
+    if adapter_kind == PYTHON_ASSERTIONS_ADAPTER:
+        try:
+            validate_function_cases(normalized_tests)
+        except ValueError as error:
+            raise ValueError(f"line {number}: {error}") from error
     encoded_tests = json.dumps(normalized_tests, ensure_ascii=False, separators=(",", ":"))
     content = json.dumps(
         {"prompt": prompt, "tests": normalized_tests, "reference_solution_sha256": hashlib.sha256(reference_solution.encode("utf-8")).hexdigest(), "time_limit_ms": time_limit_ms, "memory_limit_mb": memory_limit_mb,
-         "source_url": source_url, "license_id": license_id, "license_url": license_url},
+         "source_url": source_url, "license_id": license_id, "license_url": license_url, "adapter_kind": adapter_kind,
+         "adapter_entry_point": adapter_entry_point},
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -114,6 +132,8 @@ def _read_problem(line: str, number: int) -> dict[str, object]:
         "reference_solution": reference_solution,
         "time_limit_ms": time_limit_ms,
         "memory_limit_mb": memory_limit_mb,
+        "adapter_kind": adapter_kind,
+        "adapter_entry_point": adapter_entry_point,
         "content_sha256": hashlib.sha256(content).hexdigest(),
     }
 
@@ -140,15 +160,19 @@ def import_dataset(manifest_path: Path, problems_path: Path) -> int:
         raise ValueError("problem JSONL is empty")
 
     for task in tasks:
-        verification = execute_judge(
-            JudgeRequest(
-                language="python",
-                code=str(task["reference_solution"]),
-                cases=[JudgeCase.model_validate(case) for case in task["test_cases"]],
-                time_limit_ms=int(task["time_limit_ms"]),
-                memory_mb=int(task["memory_limit_mb"]),
+        reference_code = str(task["reference_solution"])
+        if task["adapter_kind"] == PYTHON_ASSERTIONS_ADAPTER:
+            reference_code = build_python_function_program(
+                reference_code, str(task["adapter_entry_point"])
             )
-        )
+        verification = execute_judge(JudgeRequest(
+            language="python",
+            code=reference_code,
+            cases=[JudgeCase.model_validate(case) for case in task["test_cases"]],
+            time_limit_ms=int(task["time_limit_ms"]),
+            memory_mb=int(task["memory_limit_mb"]),
+            checker_code=function_checker_code() if task["adapter_kind"] == PYTHON_ASSERTIONS_ADAPTER else None,
+        ))
         if verification.infra_error or verification.status != "accepted":
             raise ValueError(f"reference solution failed verification for {task['source_problem_id']}")
 
@@ -187,19 +211,20 @@ def import_dataset(manifest_path: Path, problems_path: Path) -> int:
             for task in tasks:
                 cur.execute(
                     "INSERT INTO research_problems "
-                    "(dataset_id, source_problem_id, source_url, license_id, license_url, split, prompt, test_cases, time_limit_ms, memory_limit_mb, content_sha256) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s) "
+                    "(dataset_id, source_problem_id, source_url, license_id, license_url, split, prompt, test_cases, time_limit_ms, memory_limit_mb, adapter_kind, adapter_entry_point, content_sha256) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s) "
                     "ON CONFLICT (dataset_id, source_problem_id) DO NOTHING",
                     (dataset_id, task["source_problem_id"], task["source_url"], task["license_id"], task["license_url"],
-                     task["split"], task["prompt"], json.dumps(task["test_cases"], ensure_ascii=False), task["time_limit_ms"], task["memory_limit_mb"], task["content_sha256"]),
+                    task["split"], task["prompt"], json.dumps(task["test_cases"], ensure_ascii=False), task["time_limit_ms"], task["memory_limit_mb"],
+                    task["adapter_kind"], task["adapter_entry_point"], task["content_sha256"]),
                 )
                 cur.execute(
-                    "SELECT split, source_url, license_id, license_url, content_sha256 "
+                    "SELECT split, source_url, license_id, license_url, adapter_kind, adapter_entry_point, content_sha256 "
                     "FROM research_problems WHERE dataset_id = %s AND source_problem_id = %s",
                     (dataset_id, task["source_problem_id"]),
                 )
                 imported = cur.fetchone()
-                if imported != (task["split"], task["source_url"], task["license_id"], task["license_url"], task["content_sha256"]):
+                if imported != (task["split"], task["source_url"], task["license_id"], task["license_url"], task["adapter_kind"], task["adapter_entry_point"], task["content_sha256"]):
                     raise ValueError(f"dataset version is immutable; problem {task['source_problem_id']} differs")
     return len(tasks)
 

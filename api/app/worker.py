@@ -14,6 +14,12 @@ from . import db, queue, research
 from .config import settings
 from .judge import JudgeCase, JudgeRequest, JudgeResponse, execute_judge, resolve_sandbox_backend, warm_go_cache
 from .cloudrun_jobs import JobConfig, JobOutcome, run_job
+from .research_adapter import (
+    PYTHON_ASSERTIONS_ADAPTER,
+    STDIN_STDOUT_ADAPTER,
+    build_python_function_program,
+    function_checker_code,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -143,14 +149,24 @@ def _process_research_sample(worker_id: str, sample: dict[str, object]) -> None:
     heartbeat = threading.Thread(target=keep_lease, name=f"research-lease-{sample_id}", daemon=True)
     heartbeat.start()
     try:
+        adapter_kind = sample.get("adapter_kind", STDIN_STDOUT_ADAPTER)
         cases = [JudgeCase.model_validate(case) for case in sample["cases"]]
+        candidate_code = str(sample["code"])
+        if adapter_kind == PYTHON_ASSERTIONS_ADAPTER:
+            entry_point = sample.get("adapter_entry_point")
+            if not isinstance(entry_point, str):
+                raise ValueError("research function adapter metadata is incomplete")
+            candidate_code = build_python_function_program(candidate_code, entry_point)
+        elif adapter_kind != STDIN_STDOUT_ADAPTER:
+            raise ValueError("unsupported research adapter")
         result = execute_judge(
             JudgeRequest(
                 language="python",
-                code=str(sample["code"]),
+                code=candidate_code,
                 cases=cases,
                 time_limit_ms=int(sample["time_limit_ms"]),
                 memory_mb=int(sample["memory_limit_mb"]),
+                checker_code=function_checker_code() if adapter_kind == PYTHON_ASSERTIONS_ADAPTER else None,
             ),
             lock_wait_seconds=65,
         )

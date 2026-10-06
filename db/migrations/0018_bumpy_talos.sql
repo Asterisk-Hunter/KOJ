@@ -1,0 +1,3 @@
+ALTER TABLE "research_problems" ADD COLUMN "adapter_kind" text DEFAULT 'stdin_stdout' NOT NULL;--> statement-breakpoint
+ALTER TABLE "research_problems" ADD COLUMN "adapter_entry_point" text;--> statement-breakpoint
+ALTER TABLE "research_problems" ADD CONSTRAINT "research_problems_adapter_check" CHECK (("research_problems"."adapter_kind" = 'stdin_stdout' AND "research_problems"."adapter_entry_point" IS NULL) OR ("research_problems"."adapter_kind" = 'python_assertions' AND "research_problems"."adapter_entry_point" IS NOT NULL));

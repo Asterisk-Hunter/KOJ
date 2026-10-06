@@ -68,8 +68,8 @@ class ResearchClient:
             raise ValueError("KOJ research API returned a non-object response")
         return body
 
-    def problems(self, dataset: str, version: str, split: str, max_results: int | None = None) -> list[dict[str, str]]:
-        results: list[dict[str, str]] = []
+    def problems(self, dataset: str, version: str, split: str, max_results: int | None = None) -> list[dict[str, str | None]]:
+        results: list[dict[str, str | None]] = []
         after: str | None = None
         dataset_sha256: str | None = None
         while True:
@@ -92,7 +92,21 @@ class ResearchClient:
             for item in page:
                 if not isinstance(item, dict) or not isinstance(item.get("problem_key"), str) or not isinstance(item.get("prompt"), str):
                     raise ValueError("KOJ returned a malformed research problem")
-                results.append({"problem_key": item["problem_key"], "prompt": item["prompt"], "dataset_sha256": page_digest})
+                adapter_kind = item.get("adapter_kind", "stdin_stdout")
+                adapter_entry_point = item.get("adapter_entry_point")
+                if not isinstance(adapter_kind, str) or adapter_kind not in {"stdin_stdout", "python_assertions"}:
+                    raise ValueError("KOJ returned an unsupported research adapter")
+                if adapter_kind == "python_assertions" and not isinstance(adapter_entry_point, str):
+                    raise ValueError("KOJ function adapter is missing its entry point")
+                if adapter_kind == "stdin_stdout" and adapter_entry_point is not None:
+                    raise ValueError("KOJ stdin/stdout adapter unexpectedly has an entry point")
+                results.append({
+                    "problem_key": item["problem_key"],
+                    "prompt": item["prompt"],
+                    "adapter_kind": adapter_kind,
+                    "adapter_entry_point": adapter_entry_point,
+                    "dataset_sha256": page_digest,
+                })
                 if max_results is not None and len(results) >= max_results:
                     return results
             next_after = body.get("next_after")

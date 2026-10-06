@@ -466,6 +466,8 @@ export const researchProblems = pgTable("research_problems", {
   testCases: jsonb("test_cases").notNull(),
   timeLimitMs: integer("time_limit_ms").notNull().default(2000),
   memoryLimitMb: integer("memory_limit_mb").notNull().default(256),
+  adapterKind: text("adapter_kind").notNull().default("stdin_stdout"),
+  adapterEntryPoint: text("adapter_entry_point"),
   contentSha256: text("content_sha256").notNull(),
 }, (table) => [
   uniqueIndex("research_problems_dataset_source_unique").on(table.datasetId, table.sourceProblemId),
@@ -474,6 +476,7 @@ export const researchProblems = pgTable("research_problems", {
   check("research_problems_split_check", sql`${table.split} IN ('train', 'heldout', 'external')`),
   check("research_problems_limits_check", sql`${table.timeLimitMs} BETWEEN 100 AND 10000 AND ${table.memoryLimitMb} BETWEEN 64 AND 512`),
   check("research_problems_tests_array_check", sql`jsonb_typeof(${table.testCases}) = 'array' AND jsonb_array_length(${table.testCases}) BETWEEN 1 AND 100`),
+  check("research_problems_adapter_check", sql`(${table.adapterKind} = 'stdin_stdout' AND ${table.adapterEntryPoint} IS NULL) OR (${table.adapterKind} = 'python_assertions' AND ${table.adapterEntryPoint} IS NOT NULL)`),
 ]);
 
 export const researchRuns = pgTable("research_runs", {

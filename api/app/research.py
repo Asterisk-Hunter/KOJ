@@ -113,7 +113,7 @@ def list_research_problems(
     _authorize(x_training_secret, authorization)
     with db.get_connection() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT dataset.id, problem.source_problem_id, problem.prompt "
+            "SELECT dataset.id, problem.source_problem_id, problem.prompt, problem.adapter_kind, problem.adapter_entry_point "
             "FROM research_problems AS problem JOIN research_datasets AS dataset "
             "ON dataset.id = problem.dataset_id WHERE dataset.organization_id = %s "
             "AND dataset.slug = %s AND dataset.version = %s "
@@ -136,7 +136,10 @@ def list_research_problems(
             digest_rows = cur.fetchall()
         dataset_digest = _dataset_digest(digest_rows)
     return {
-        "problems": [{"problem_key": row[1], "prompt": row[2]} for row in page],
+        "problems": [
+            {"problem_key": row[1], "prompt": row[2], "adapter_kind": row[3], "adapter_entry_point": row[4]}
+            for row in page
+        ],
         "dataset_sha256": dataset_digest,
         "next_after": page[-1][1] if has_more and page else None,
     }
@@ -288,14 +291,25 @@ def claim_sample(worker_id: str, lease_seconds: int) -> dict[str, object] | None
             if row is None:
                 return None
             cur.execute(
-                "SELECT test_cases, time_limit_ms, memory_limit_mb FROM research_problems WHERE id = %s",
+                "SELECT test_cases, time_limit_ms, memory_limit_mb, adapter_kind, adapter_entry_point "
+                "FROM research_problems WHERE id = %s",
                 (row[2],),
             )
             problem = cur.fetchone()
             cur.execute("SELECT code FROM research_samples WHERE id = %s", (row[0],))
             code = cur.fetchone()[0]
-    return {"id": row[0], "run_id": row[1], "problem_id": row[2], "attempt": row[3], "code": code,
-            "cases": problem[0], "time_limit_ms": problem[1], "memory_limit_mb": problem[2]}
+    return {
+        "id": row[0],
+        "run_id": row[1],
+        "problem_id": row[2],
+        "attempt": row[3],
+        "code": code,
+        "cases": problem[0],
+        "time_limit_ms": problem[1],
+        "memory_limit_mb": problem[2],
+        "adapter_kind": problem[3],
+        "adapter_entry_point": problem[4],
+    }
 
 
 def heartbeat_sample(sample_id: UUID, worker_id: str, lease_seconds: int) -> bool:

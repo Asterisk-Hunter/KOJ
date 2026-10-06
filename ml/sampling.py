@@ -95,7 +95,11 @@ def sample_problems(
     generated_count = 0
     with output.open("a", encoding="utf-8") as result_file:
         for problem_index, problem in enumerate(problems):
-            prompt = build_prompt(problem["prompt"])
+            prompt = build_prompt(
+                problem["prompt"],
+                adapter_kind=str(problem.get("adapter_kind") or "stdin_stdout"),
+                adapter_entry_point=problem.get("adapter_entry_point"),
+            )
             inputs = tokenizer(prompt, return_tensors="pt", truncation=False)
             if inputs["input_ids"].shape[-1] > max_input_tokens:
                 raise ValueError(f"problem {problem['problem_key']} exceeds the configured prompt token budget")
@@ -125,6 +129,8 @@ def sample_problems(
                     "problem_key": problem["problem_key"],
                     "sample_id": sample_id,
                     "prompt": problem["prompt"],
+                    "adapter_kind": problem.get("adapter_kind", "stdin_stdout"),
+                    "adapter_entry_point": problem.get("adapter_entry_point"),
                     "code": tokenizer.decode(sequence[prompt_length:], skip_special_tokens=True),
                     "split": split,
                     "dataset": dataset,

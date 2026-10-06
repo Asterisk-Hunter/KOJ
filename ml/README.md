@@ -41,6 +41,8 @@ python -m app.research_import --manifest ..\ml\data\manifest.json --problems ..\
 
 The importer refuses missing/unreviewed license metadata, non-HTTPS provenance, ambiguous case fields, duplicate problem IDs, oversized problems, and attempt to overwrite an imported version. It requires an operator-supplied Python reference solution for every task, runs each solution in the Docker sandbox against the proposed tests, and rejects the entire import if any reference is not accepted. It does not download or execute dataset loader scripts.
 
+Function-call tasks can opt into `"adapter_kind":"python_assertions"` with an `adapter_entry_point`. Encode each test's positional/named arguments as JSON in `stdin` (`{"args":[...],"kwargs":{...}}`) and its expected return value as JSON in `expected_stdout`. The candidate process receives only the call arguments; a separate sandboxed checker compares its JSON result to the server-held expected value. Do not replace this with assertions concatenated into candidate source, which would disclose hidden expected values. Public corpus tests are still potentially known from pretraining and should not be described as contamination-proof.
+
 ### Initial source review
 
 - **Qwen2.5-Coder-1.5B** is the initial model: the upstream card describes a 1.54B code-specialized pretrained causal LM, Apache-2.0, and identifies SFT/RL as post-training paths. Pin its Hugging Face commit SHA (`--revision`) for each run. [Model card](https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B)
@@ -82,7 +84,7 @@ python -m ml loop --dataset my-code-set --version <immutable-source-revision> `
 
 The run performs: base held-out/external sampling and KOJ judging → train-split sampling and judging → keep only accepted code → LoRA SFT → repeat for each round. GPU artifacts, accepted code, raw generated outputs, and per-run score JSON are written to ignored local `ml/runs` or the specified output directory, not to Git. If the daily KOJ research cap is reached, the client observes `Retry-After` and resumes after the reset. Holdout/external splits are never loaded into the SFT corpus.
 
-For each model round, `*-metrics.json` contains per-problem unbiased pass@k averages for k values supported by the sample count. Do not average raw sample-level correctness as pass@k. Failed infrastructure samples are excluded and surfaced separately; repeat them only after investigating the queue, and keep the sampling protocol fixed across base/R1/R2. A separate `external` dataset and hidden tests are required for external evaluation. Function-only benchmarks such as HumanEval+/MBPP+ need a reviewed stdin/stdout adapter or their official evaluator; do not pretend the standard KOJ input/output API evaluates function calls directly.
+For each model round, `*-metrics.json` contains per-problem unbiased pass@k averages for k values supported by the sample count. Do not average raw sample-level correctness as pass@k. Failed infrastructure samples are excluded and surfaced separately; repeat them only after investigating the queue, and keep the sampling protocol fixed across base/R1/R2. A separate `external` dataset and hidden tests are required for external evaluation. Function-only benchmarks such as HumanEval+/MBPP+ must use the reviewed `python_assertions` function-call adapter or their official evaluator; do not pretend the standard KOJ input/output API evaluates function calls directly.
 
 ## 3. GPU quota and spend guardrails
 
