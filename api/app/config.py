@@ -166,7 +166,7 @@ class Settings(BaseSettings):
     )
     DATABASE_TLS_VERIFY: bool = Field(
         default=True,
-        description="Require Postgres certificate and hostname verification; disable only for local development.",
+        description="Require certificate and hostname verification for direct TCP connections; Cloud SQL proxy sockets secure this upstream.",
     )
     API_EXPOSE_DOCS: bool = Field(
         default=False,
