@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from app import research
 from app import research_import
 from app import research_adapter
+from app import research_worker
 from app import worker
 from app.config import Settings, settings
 from app.judge import JudgeResponse
@@ -366,6 +367,36 @@ def test_research_worker_keeps_expected_result_out_of_candidate_source(monkeypat
     assert request.checker_code == research_adapter.function_checker_code()
     assert request.cases[0].expected_stdout == "5"
     assert "5" not in request.code
+
+
+def test_research_worker_has_its_own_research_only_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    class StopAfterWait:
+        stopped = False
+
+        def is_set(self) -> bool:
+            return self.stopped
+
+        def wait(self, _seconds: float) -> bool:
+            self.stopped = True
+            return True
+
+        def set(self) -> None:
+            self.stopped = True
+
+    monkeypatch.setattr(research_worker.settings, "TRAINING_WORKER_ENABLED", True)
+    monkeypatch.setattr(research_worker.settings, "JUDGE_SANDBOX_MODE", "docker")
+    monkeypatch.setattr(research_worker, "resolve_sandbox_backend", lambda: "docker")
+    monkeypatch.setattr(research_worker.db, "init_pool", lambda: calls.append("init"))
+    monkeypatch.setattr(research_worker.db, "close_pool", lambda: calls.append("close"))
+    monkeypatch.setattr(research_worker.research, "claim_sample", lambda *_args: None)
+    monkeypatch.setattr(research_worker.threading, "Event", StopAfterWait)
+    monkeypatch.setattr(research_worker.signal, "signal", lambda *_args: None)
+
+    research_worker.run()
+
+    assert calls == ["init", "close"]
 
 
 @pytest.mark.parametrize(

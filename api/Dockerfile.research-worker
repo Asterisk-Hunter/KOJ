@@ -12,4 +12,4 @@ COPY app ./app
 COPY seccomp-koj.json /usr/local/share/koj/seccomp-koj.json
 RUN useradd --system --uid 10001 --home-dir /home/koj --create-home --shell /usr/sbin/nologin koj
 USER 10001:10001
-CMD ["python", "-m", "app.worker"]
+CMD ["python", "-m", "app.research_worker"]
