@@ -77,6 +77,8 @@ The example Cloud Run worker pool in `scripts/deployment/` uses `rlimit`, which 
 
 Before updating the VM, verify its running source revision and the live Drizzle migration ledger. The startup script extracts each pinned source archive into `/opt/koj/releases/<sha>`, switches `/opt/koj/source` to that release, and restarts both services so they load the new source and environment. Updating Git or Cloud Run alone does not update the VM worker. Deploy and roll back source/image revisions together, then rerun the Docker host probe and a real submission canary. Never run `db:push` against production.
 
+The restricted judge database roles set `statement_timeout` and `lock_timeout` at the role level. Neon pooled connections reject those settings when sent as a libpq startup `options` parameter; keep the VM API and worker connection strings free of that parameter.
+
 ## Cron
 
 Vercel Cron invokes the daily orphan-submission recovery endpoint. The cron only creates jobs for old pending/running submissions with no existing job; worker leases handle ordinary crashes.

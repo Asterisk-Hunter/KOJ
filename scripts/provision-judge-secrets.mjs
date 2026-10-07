@@ -62,6 +62,7 @@ try {
         await client.query(`GRANT USAGE ON SCHEMA public TO ${configuration.role}`);
         for (const grant of configuration.grants) await client.query(grant);
         await client.query(`ALTER ROLE ${configuration.role} SET statement_timeout = '15s'`);
+        await client.query(`ALTER ROLE ${configuration.role} SET lock_timeout = '2s'`);
         await client.query(`ALTER ROLE ${configuration.role} SET idle_in_transaction_session_timeout = '30s'`);
         const restrictedUrl = new URL(sourceUrl);
         restrictedUrl.username = configuration.role;

@@ -39,7 +39,6 @@ def init_pool() -> None:
         kwargs={
             "autocommit": True,
             "connect_timeout": 5,
-            "options": "-c statement_timeout=5000 -c lock_timeout=2000",
             **_tls_kwargs(),
         },
         timeout=5.0,
@@ -147,7 +146,6 @@ def get_connection() -> Generator[psycopg.Connection, None, None]:
         dsn,
         autocommit=True,
         connect_timeout=5,
-        options="-c statement_timeout=5000 -c lock_timeout=2000",
         **_tls_kwargs(),
     )
     try:

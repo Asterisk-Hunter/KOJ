@@ -106,7 +106,7 @@ def test_init_pool_probes_readiness_and_reuses_the_pool(monkeypatch):
     assert captured["min_size"] == 1 and captured["max_size"] == 10
     assert captured["check"] is Pool.check_connection
     assert captured["kwargs"]["connect_timeout"] == 5
-    assert captured["kwargs"]["options"] == "-c statement_timeout=5000 -c lock_timeout=2000"
+    assert "options" not in captured["kwargs"]
 
     db.init_pool()
     assert db._pool is not None
@@ -191,13 +191,15 @@ def test_get_connection_uses_the_pool_and_releases_it(monkeypatch):
 
 def test_get_connection_falls_back_to_a_short_lived_connection(monkeypatch):
     conn = _Connection()
+    captured = {}
     monkeypatch.setattr(db, "_pool", None)
     monkeypatch.setattr(db, "init_pool", lambda: (_ for _ in ()).throw(RuntimeError("dsn rejected")))
-    monkeypatch.setattr(db.psycopg, "connect", lambda *_args, **_kwargs: conn)
+    monkeypatch.setattr(db.psycopg, "connect", lambda *_args, **kwargs: captured.update(kwargs) or conn)
 
     with db.get_connection() as yielded:
         assert yielded is conn
     assert conn.closed is True
+    assert "options" not in captured
 
 
 def test_get_connection_swallows_a_failing_close_on_the_fallback_path(monkeypatch):
