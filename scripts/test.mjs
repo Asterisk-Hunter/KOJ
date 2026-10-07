@@ -23,6 +23,7 @@ const typescriptResult = spawnSync(
   [
     "--experimental-strip-types",
     "--experimental-test-module-mocks",
+    "--experimental-test-coverage",
     "--import",
     pathToFileURL(path.join(root, "scripts", "ts-test-hooks.mjs")).href,
     "--test",
@@ -46,11 +47,38 @@ const pythonCommands =
         { command: "python", args: [] },
       ];
 
+// Coverage is report-only: pytest-cov is optional here, and nothing fails on a
+// coverage number. Returns null when the interpreter itself is missing.
+function pytestCovArgs(candidate) {
+  // pytest finds plugins through distribution metadata, so check that rather
+  // than `import pytest_cov`, which a partial uninstall can still satisfy.
+  const probe = spawnSync(
+    candidate.command,
+    [
+      ...candidate.args,
+      "-c",
+      "import importlib.metadata as m; m.version('pytest-cov')",
+    ],
+    { cwd: path.join(root, "api"), stdio: "ignore" },
+  );
+  if (probe.error?.code === "ENOENT") return null;
+  return probe.status === 0 ? ["--cov=app", "--cov-report=term-missing"] : [];
+}
+
 let pythonResult;
+let coverageNoticeShown = false;
 for (const candidate of pythonCommands) {
+  const covArgs = pytestCovArgs(candidate);
+  if (covArgs === null) continue;
+  if (covArgs.length === 0 && !coverageNoticeShown) {
+    console.log(
+      "pytest-cov not installed; Python tests run without coverage (pip install -r api/requirements-test.txt)",
+    );
+    coverageNoticeShown = true;
+  }
   pythonResult = spawnSync(
     candidate.command,
-    [...candidate.args, "-m", "pytest", "-q", "-m", "not integration"],
+    [...candidate.args, "-m", "pytest", "-q", ...covArgs, "-m", "not integration"],
     { cwd: path.join(root, "api"), stdio: "inherit" },
   );
   if (pythonResult.error?.code === "ENOENT") continue;
