@@ -3,8 +3,17 @@ set -Eeuo pipefail
 set +x
 
 export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y --no-install-recommends ca-certificates curl git docker.io python3 python3-venv
+required_packages=(ca-certificates curl git docker.io python3 python3-venv)
+missing_packages=()
+for package in "${required_packages[@]}"; do
+  if [[ "$(dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null || true)" != installed ]]; then
+    missing_packages+=("$package")
+  fi
+done
+if ((${#missing_packages[@]})); then
+  apt-get update
+  apt-get install -y --no-install-recommends "${missing_packages[@]}"
+fi
 systemctl enable --now docker
 
 metadata_value() {
@@ -47,7 +56,7 @@ if ! id koj >/dev/null 2>&1; then
   useradd --system --home-dir /var/lib/koj --shell /usr/sbin/nologin koj
 fi
 usermod -aG docker koj
-install -d -o koj -g koj -m 0750 /var/lib/koj /tmp/koj
+install -d -o koj -g koj -m 0750 /var/lib/koj
 install -o koj -g koj -m 0660 /dev/null /var/lib/koj/execution.lock
 cat >/etc/docker/daemon.json <<'JSON'
 {

@@ -11,7 +11,7 @@ Group=koj
 SupplementaryGroups=docker
 WorkingDirectory=/opt/koj/source/api
 EnvironmentFile=/etc/koj/api.env
-Environment=TMPDIR=/tmp/koj
+Environment=TMPDIR=/var/lib/koj
 ExecStart=/opt/koj/venv/bin/uvicorn app.main:app --host ${FASTAPI_HOST} --port ${FASTAPI_PORT} --workers 1
 Restart=on-failure
 RestartSec=3
@@ -24,7 +24,7 @@ PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-ReadWritePaths=/tmp/koj /var/lib/koj
+ReadWritePaths=/var/lib/koj
 MemoryMax=512M
 CPUQuota=100%
 TasksMax=128

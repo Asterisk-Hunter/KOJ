@@ -71,3 +71,22 @@ def test_startup_stages_source_and_restarts_services_for_new_revision():
     assert 'mv -- /opt/koj/source "$legacy_source"' in startup
     assert 'systemctl restart koj-api.service koj-worker.service' in startup
     assert 'systemctl enable koj-api.service koj-worker.service' in startup
+
+
+def test_startup_skips_apt_network_when_required_packages_are_installed():
+    startup = (_DEPLOYMENT / "startup.sh").read_text()
+
+    assert 'required_packages=(ca-certificates curl git docker.io python3 python3-venv)' in startup
+    assert 'dpkg-query -W -f=\'${db:Status-Status}\' "$package"' in startup
+    assert 'if ((${#missing_packages[@]})); then' in startup
+    assert 'apt-get update' in startup
+
+
+def test_judge_services_use_persistent_writable_tmpdir():
+    startup = (_DEPLOYMENT / "startup.sh").read_text()
+    for service_name in ("koj-api.service", "koj-worker.service"):
+        service = (_DEPLOYMENT / service_name).read_text()
+        assert "Environment=TMPDIR=/var/lib/koj" in service
+        assert "ReadWritePaths=/var/lib/koj" in service
+        assert "/tmp/koj" not in service
+    assert "install -d -o koj -g koj -m 0750 /var/lib/koj" in startup
