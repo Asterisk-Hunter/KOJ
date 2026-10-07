@@ -555,18 +555,26 @@ def _visible_case(
 
 
 def _cleanup_container(container_name: str) -> None:
-    """Force-remove a lingering container before its artifact volume is removed."""
-    try:
-        proc = subprocess.run(
-            ["docker", "rm", "-f", container_name],
-            capture_output=True,
-            text=True,
-            timeout=_DOCKER_KILL_TIMEOUT_S,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise SandboxUnavailable("failed to stop Docker sandbox container") from error
-    if proc.returncode != 0 and "no such container" not in (proc.stderr or "").lower():
-        raise SandboxUnavailable("failed to stop Docker sandbox container")
+    """Force-remove a lingering container before its artifacts are cleared."""
+    deadline = time.monotonic() + _DOCKER_KILL_TIMEOUT_S
+    while True:
+        try:
+            proc = subprocess.run(
+                ["docker", "rm", "-f", container_name],
+                capture_output=True,
+                text=True,
+                timeout=max(0.1, deadline - time.monotonic()),
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise SandboxUnavailable("failed to stop Docker sandbox container") from error
+        stderr = (proc.stderr or "").lower()
+        if proc.returncode == 0 or "no such container" in stderr:
+            return
+        if "removal of container" not in stderr or "already in progress" not in stderr:
+            raise SandboxUnavailable("failed to stop Docker sandbox container")
+        if time.monotonic() >= deadline:
+            raise SandboxUnavailable("failed to stop Docker sandbox container")
+        time.sleep(0.1)
 
 
 def _image_for(language: str) -> str:

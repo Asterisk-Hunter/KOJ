@@ -124,6 +124,23 @@ def test_docker_artifact_cleanup_uses_the_sandbox_image_and_job_mount(monkeypatc
     assert options["timeout"] == 15
 
 
+def test_docker_cleanup_waits_for_container_removal_in_progress(monkeypatch):
+    from types import SimpleNamespace
+    from app import judge
+
+    calls = []
+    responses = iter([
+        SimpleNamespace(returncode=1, stderr="Error response from daemon: removal of container is already in progress"),
+        SimpleNamespace(returncode=1, stderr="Error: No such container"),
+    ])
+    monkeypatch.setattr(judge.subprocess, "run", lambda argv, **_kwargs: calls.append(argv) or next(responses))
+    monkeypatch.setattr(judge.time, "sleep", lambda _seconds: None)
+
+    judge._cleanup_container("koj-test-container")
+
+    assert calls == [["docker", "rm", "-f", "koj-test-container"]] * 2
+
+
 def test_docker_base_mounts_artifacts_rw_for_compile_and_ro_for_cases():
     from pathlib import Path
     from app import judge
