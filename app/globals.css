@@ -53,4 +53,50 @@ body {
       linear-gradient(90deg, rgba(0, 255, 157, 0.03) 1px, transparent 1px);
     background-size: 40px 40px;
   }
+
+  /* Page-load reveal: fade + rise, staggered via reveal-1..4 delays. */
+  .reveal {
+    opacity: 0;
+    transform: translateY(14px);
+    animation: reveal-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  .reveal-1 { animation-delay: 0.1s; }
+  .reveal-2 { animation-delay: 0.22s; }
+  .reveal-3 { animation-delay: 0.34s; }
+  .reveal-4 { animation-delay: 0.46s; }
+
+  .card-lift {
+    transition:
+      transform 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+      border-color 0.25s ease,
+      box-shadow 0.25s ease;
+  }
+
+  .card-lift:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 24px rgba(0, 255, 157, 0.08);
+  }
+}
+
+@keyframes reveal-up {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+
+  .card-lift,
+  .card-lift:hover {
+    transition: none;
+    transform: none;
+    box-shadow: none;
+  }
 }

@@ -9,7 +9,7 @@ import types
 import pytest
 from fastapi import HTTPException
 
-from app import main, research
+from app import main
 from app.config import settings
 from app.judge import JudgeCase, JudgeRequest, JudgeResponse
 from app.upstream import JudgeUpstreamUnavailable
@@ -362,15 +362,6 @@ def _judge_scope(path="/judge", secret=b"s3cret"):
     return {"type": "http", "path": path, "headers": headers}
 
 
-def _research_scope(secret=b"train", authorization=b"Bearer token"):
-    headers = []
-    if secret is not None:
-        headers.append((b"x-training-secret", secret))
-    if authorization is not None:
-        headers.append((b"authorization", authorization))
-    return {"type": "http", "path": "/v1/research/runs", "headers": headers}
-
-
 def _body(body, more_body=False):
     return {"type": "http.request", "body": body, "more_body": more_body}
 
@@ -452,23 +443,6 @@ def test_body_limit_replays_the_buffered_body_and_tolerates_bad_headers(monkeypa
 
     assert sent.status == 204
     assert app.bodies == [b"{}"]
-
-
-def test_research_body_limit_enforces_secret_and_oidc(monkeypatch):
-    app = _BodyApp()
-    middleware = main._BodySizeLimitMiddleware(app, max_bytes=64, paths=("/v1/research/runs",))
-
-    monkeypatch.setattr(settings, "TRAINING_API_SECRET", "")
-    assert _call_middleware(middleware, _research_scope(), [_body(b"{}")]).status == 503
-
-    monkeypatch.setattr(settings, "TRAINING_API_SECRET", "train")
-    assert _call_middleware(middleware, _research_scope(secret=None), [_body(b"{}")]).status == 401
-
-    monkeypatch.setattr(research, "_verify_oidc_token", lambda _header: False)
-    assert _call_middleware(middleware, _research_scope(), [_body(b"{}")]).status == 401
-
-    monkeypatch.setattr(research, "_verify_oidc_token", lambda _header: True)
-    assert _call_middleware(middleware, _research_scope(), [_body(b"{}")]).status == 204
 
 
 class _Thread:

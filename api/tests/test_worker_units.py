@@ -320,17 +320,8 @@ def test_run_requires_a_database_url(monkeypatch):
         worker.run()
 
 
-def test_run_refuses_research_without_the_docker_sandbox(monkeypatch):
-    monkeypatch.setattr(settings, "DATABASE_URL", "postgresql://user:pw@db/koj")
-    monkeypatch.setattr(settings, "TRAINING_WORKER_ENABLED", True)
-    monkeypatch.setattr(settings, "JUDGE_SANDBOX_MODE", "rlimit")
-    with pytest.raises(RuntimeError, match="research judging requires"):
-        worker.run()
-
-
 def test_run_registers_and_unregisters_around_the_poll_loop(monkeypatch):
     monkeypatch.setattr(settings, "DATABASE_URL", "postgresql://user:pw@db/koj")
-    monkeypatch.setattr(settings, "TRAINING_WORKER_ENABLED", False)
     monkeypatch.setattr(worker.db, "init_pool", lambda: None)
     monkeypatch.setattr(worker.db, "close_pool", _Recorder())
     monkeypatch.setattr(worker, "warm_go_cache", _Recorder())

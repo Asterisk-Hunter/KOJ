@@ -6,7 +6,7 @@ export default function PageHeader({ eyebrow, title, description, action }: { ey
     <>
       <Navigation />
       <header className="border-b border-kjborder bg-kjsurface/30 pt-24 pb-8">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row md:items-end md:justify-between gap-6">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row md:items-end md:justify-between gap-6 reveal">
           <div>
             <p className="uppercase font-mono tracking-[0.3em] text-xs text-kjprimary mb-3">{eyebrow}</p>
             <h1 className="text-3xl sm:text-4xl font-mono font-bold text-kjtext">{title}</h1>
