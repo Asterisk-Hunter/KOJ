@@ -62,20 +62,35 @@ systemctl restart docker
 
 access_token="$(curl -fsS -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
 source_archive="$(mktemp /run/koj-source.XXXXXX.tar.gz)"
+source_stage="$(mktemp -d /opt/koj/.source.XXXXXX)"
+trap '[[ -z "${source_archive:-}" ]] || rm -f -- "$source_archive"; [[ -z "${source_stage:-}" ]] || rm -rf -- "$source_stage"' EXIT
 curl -fsS -H "Authorization: Bearer ${access_token}" \
   "https://storage.googleapis.com/${KOJ_SOURCE_BUCKET}/${KOJ_GIT_SHA}.tar.gz" -o "$source_archive"
 unset access_token
 printf '%s  %s\n' "$KOJ_SOURCE_SHA256" "$source_archive" | sha256sum --check --status
-install -d -o root -g root -m 0755 /opt/koj/source
-tar --extract --gzip --file "$source_archive" --directory /opt/koj/source --no-same-owner --no-same-permissions
+tar --extract --gzip --file "$source_archive" --directory "$source_stage" --no-same-owner --no-same-permissions
 rm -f -- "$source_archive"
-printf '%s\n' "$KOJ_GIT_SHA" >/opt/koj/source-revision
-chown -R root:root /opt/koj/source
-chmod -R go-w /opt/koj/source
-
+release_path="/opt/koj/releases/$KOJ_GIT_SHA"
+install -d -o root -g root -m 0755 /opt/koj/releases
+if [[ -e "$release_path" ]]; then
+  if [[ ! -d "$release_path" || -L "$release_path" ]]; then
+    echo "KOJ source release path is not a directory: ${release_path}" >&2
+    exit 1
+  fi
+  chown root:root "$release_path"
+  chmod 0755 "$release_path"
+  rm -rf -- "$source_stage"
+  source_stage=""
+else
+  chown -R root:root "$source_stage"
+  chmod -R go-w "$source_stage"
+  chmod 0755 "$source_stage"
+  mv -- "$source_stage" "$release_path"
+  source_stage=""
+fi
 python3 -m venv /opt/koj/venv
-/opt/koj/venv/bin/pip install --no-cache-dir -r /opt/koj/source/api/requirements.txt
-install -o root -g root -m 0644 /opt/koj/source/api/seccomp-koj.json /etc/koj/seccomp-koj.json
+/opt/koj/venv/bin/pip install --no-cache-dir -r "$release_path/api/requirements.txt"
+install -o root -g root -m 0644 "$release_path/api/seccomp-koj.json" /etc/koj/seccomp-koj.json
 
 for secret_name in "$KOJ_API_DB_SECRET" "$KOJ_WORKER_DB_SECRET" "$KOJ_INTERNAL_SECRET_NAME"; do
   if [[ ! "$secret_name" =~ ^[A-Za-z0-9_-]+$ ]]; then
@@ -126,10 +141,36 @@ chown root:root /etc/koj/api.env /etc/koj/worker.env
 chmod 0600 /etc/koj/api.env /etc/koj/worker.env
 unset api_db worker_db judge_secret
 
-install -o root -g root -m 0644 /opt/koj/source/scripts/deployment/koj-api.service /etc/systemd/system/koj-api.service
-install -o root -g root -m 0644 /opt/koj/source/scripts/deployment/koj-worker.service /etc/systemd/system/koj-worker.service
+install -o root -g root -m 0644 "$release_path/scripts/deployment/koj-api.service" /etc/systemd/system/koj-api.service
+install -o root -g root -m 0644 "$release_path/scripts/deployment/koj-worker.service" /etc/systemd/system/koj-worker.service
+source_link="/opt/koj/.source-link.$$"
+ln -s "releases/$KOJ_GIT_SHA" "$source_link"
+if [[ -e /opt/koj/source || -L /opt/koj/source ]]; then
+  for service in koj-api.service koj-worker.service; do
+    if systemctl is-active --quiet "$service"; then
+      systemctl stop "$service"
+    fi
+  done
+  if [[ -d /opt/koj/source && ! -L /opt/koj/source ]]; then
+    old_revision="$(cat /opt/koj/source-revision 2>/dev/null || true)"
+    if [[ "$old_revision" =~ ^[0-9a-f]{40}$ ]]; then
+      legacy_suffix="$old_revision"
+    else
+      legacy_suffix="$(date -u +%Y%m%dT%H%M%SZ)"
+    fi
+    legacy_source="/opt/koj/source.legacy.${legacy_suffix}"
+    if [[ -e "$legacy_source" || -L "$legacy_source" ]]; then
+      legacy_source="${legacy_source}.$(date -u +%Y%m%dT%H%M%SZ).$$"
+    fi
+    mv -- /opt/koj/source "$legacy_source"
+  fi
+fi
+mv -Tf "$source_link" /opt/koj/source
+revision_file="/opt/koj/.source-revision.$$"
+printf '%s\n' "$KOJ_GIT_SHA" >"$revision_file"
+mv -f -- "$revision_file" /opt/koj/source-revision
 systemctl daemon-reload
-systemctl enable --now koj-api.service
-systemctl enable koj-worker.service
+systemctl enable koj-api.service koj-worker.service
+systemctl restart koj-api.service koj-worker.service
 docker info --format '{{.CgroupVersion}} {{.Driver}}'
 echo "KOJ judge host provisioned at ${KOJ_GIT_SHA}; run scripts/deployment/verify-docker-host.py before enabling public judging."

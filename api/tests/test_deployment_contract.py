@@ -58,3 +58,16 @@ def test_docker_host_probe_checks_host_environment_and_docker_socket_isolation()
     assert "KOJ_HOST_ENV_PROBE=koj-host-env-probe-marker" in probe
     assert "pathlib.Path('/proc').iterdir()" in probe
     assert "docker.sock" in probe
+
+
+def test_startup_stages_source_and_restarts_services_for_new_revision():
+    startup = (_DEPLOYMENT / "startup.sh").read_text()
+
+    assert "tar --extract --gzip --file \"$source_archive\" --directory \"$source_stage\"" in startup
+    assert 'chmod 0755 "$source_stage"' in startup
+    assert 'mv -Tf "$source_link" /opt/koj/source' in startup
+    assert 'if systemctl is-active --quiet "$service"; then' in startup
+    assert 'legacy_source="/opt/koj/source.legacy.${legacy_suffix}"' in startup
+    assert 'mv -- /opt/koj/source "$legacy_source"' in startup
+    assert 'systemctl restart koj-api.service koj-worker.service' in startup
+    assert 'systemctl enable koj-api.service koj-worker.service' in startup

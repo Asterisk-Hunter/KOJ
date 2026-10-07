@@ -75,7 +75,7 @@ The public-contest target is the dedicated Linux VM with `JUDGE_SANDBOX_MODE=doc
 
 The example Cloud Run worker pool in `scripts/deployment/` uses `rlimit`, which has no filesystem or network isolation and is **not** the public-contest target. It is not deployed in the current project. Do not point public submissions at it. The Cloud Run control API's `/health` only proves HTTP liveness; `/ready`, a recent `judge_workers` heartbeat, and a completed canary are separate launch checks.
 
-Before updating the VM, verify its running source revision and the live Drizzle migration ledger. The startup script installs a pinned source archive and sandbox image; updating Git or Cloud Run alone does not update the VM worker. Deploy and roll back source/image revisions together, then rerun the Docker host probe and a real submission canary. Never run `db:push` against production.
+Before updating the VM, verify its running source revision and the live Drizzle migration ledger. The startup script extracts each pinned source archive into `/opt/koj/releases/<sha>`, switches `/opt/koj/source` to that release, and restarts both services so they load the new source and environment. Updating Git or Cloud Run alone does not update the VM worker. Deploy and roll back source/image revisions together, then rerun the Docker host probe and a real submission canary. Never run `db:push` against production.
 
 ## Cron
 
