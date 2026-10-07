@@ -1,4 +1,4 @@
-## 2026-10-07 — product haul (`feat/product-haul`)
+## 2026-10-07 — product haul (feat/product-haul)
 
 Branch off `main`. The coverage-slice test history from earlier sessions was folded into this branch before the work below.
 
