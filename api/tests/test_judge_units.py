@@ -56,32 +56,72 @@ def test_local_child_environment_does_not_inherit_service_secrets(monkeypatch, t
     assert child_environment["HOME"] == str(tmp_path)
 
 
-def test_docker_artifact_volume_uses_bounded_tmpfs_and_is_removed(monkeypatch):
+def test_docker_artifact_volume_persists_on_host_tmpfs_between_containers(monkeypatch):
+    from contextlib import contextmanager
+    from app import judge
+
+    calls = []
+    @contextmanager
+    def temporary_directory(**kwargs):
+        calls.append(("create", kwargs))
+        yield "/dev/shm/koj-artifacts-fixed"
+        calls.append(("remove", None))
+
+    monkeypatch.setattr(judge, "_host_shm_is_tmpfs", lambda: True, raising=False)
+    monkeypatch.setattr(judge.tempfile, "TemporaryDirectory", temporary_directory)
+    monkeypatch.setattr(judge.os, "chmod", lambda path, mode: calls.append(("chmod", path, mode)))
+    monkeypatch.setattr(
+        judge,
+        "_clear_docker_artifacts",
+        lambda path: calls.append(("clear", path)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        judge.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("Docker named volumes do not retain tmpfs artifacts"),
+    )
+
+    with judge._docker_artifact_volume() as volume:
+        assert volume == "/dev/shm/koj-artifacts-fixed"
+
+    assert calls == [
+        ("create", {"prefix": "koj-artifacts-", "dir": "/dev/shm"}),
+        ("chmod", "/dev/shm/koj-artifacts-fixed", 0o777),
+        ("clear", "/dev/shm/koj-artifacts-fixed"),
+        ("remove", None),
+    ]
+
+
+def test_docker_artifact_volume_fails_closed_without_host_tmpfs(monkeypatch):
+    from app import judge
+
+    monkeypatch.setattr(judge, "_host_shm_is_tmpfs", lambda: False)
+    with pytest.raises(judge.SandboxUnavailable, match="not a tmpfs"):
+        with judge._docker_artifact_volume():
+            pytest.fail("non-tmpfs artifacts must not be exposed to a container")
+
+
+def test_docker_artifact_cleanup_uses_the_sandbox_image_and_job_mount(monkeypatch):
     from types import SimpleNamespace
     from app import judge
 
     calls = []
-    monkeypatch.setattr(judge.shutil, "which", lambda _name: "docker")
-    monkeypatch.setattr(judge.uuid, "uuid4", lambda: SimpleNamespace(hex="fixed"))
+    monkeypatch.setattr(judge, "_image_for", lambda _language: "pinned-image")
     monkeypatch.setattr(
         judge.subprocess,
         "run",
-        lambda argv, **kwargs: calls.append((argv, kwargs))
-        or SimpleNamespace(returncode=0, stdout="koj-artifacts-fixed\n", stderr=""),
+        lambda argv, **kwargs: calls.append((argv, kwargs)) or SimpleNamespace(returncode=0),
     )
 
-    with judge._docker_artifact_volume() as volume:
-        assert volume == "koj-artifacts-fixed"
+    judge._clear_docker_artifacts("/dev/shm/koj-artifacts-fixed")
 
-    create_argv, create_options = calls[0]
-    remove_argv, remove_options = calls[1]
-    assert create_argv[:4] == ["docker", "volume", "create", "--driver"]
-    assert "type=tmpfs" in create_argv
-    assert "device=tmpfs" in create_argv
-    assert "o=size=268435456,uid=65534,gid=65534,mode=0700" in create_argv
-    assert create_options["timeout"] == judge._DOCKER_KILL_TIMEOUT_S
-    assert remove_argv == ["docker", "volume", "rm", "--force", volume]
-    assert remove_options["timeout"] == judge._DOCKER_KILL_TIMEOUT_S
+    argv, options = calls[0]
+    assert "--network" in argv and argv[argv.index("--network") + 1] == "none"
+    assert "--read-only" in argv
+    assert "/dev/shm/koj-artifacts-fixed:/artifacts:rw" in argv
+    assert "pinned-image" in argv
+    assert options["timeout"] == 15
 
 
 def test_docker_base_mounts_artifacts_rw_for_compile_and_ro_for_cases():

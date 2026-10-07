@@ -138,7 +138,6 @@ _CLOUDRUN_CLI = Path("/usr/local/gcp/bin/sandbox")
 _CLOUDRUN_ROOTFS = Path("/opt/koj-sandbox-root")
 _CLOUDRUN_TAR_MAX_BYTES = 512 * 1024 * 1024
 _CLOUDRUN_JUDGE_LOCK = threading.Lock()
-_DOCKER_ARTIFACT_VOLUME_BYTES = 256 * 1024 * 1024
 _INFRASTRUCTURE_PUBLIC_MESSAGE = "Judge infrastructure temporarily unavailable."
 _CHECKER_RUNNER = '''import builtins as __koj_builtins
 import io as __koj_io
@@ -692,52 +691,55 @@ def _docker_base_argv(
     ]
 
 
-def _create_docker_artifact_volume() -> str:
-    if shutil.which("docker") is None:
-        raise SandboxUnavailable("docker binary not found on judge host")
-    volume_name = f"koj-artifacts-{uuid.uuid4().hex}"
+def _host_shm_is_tmpfs() -> bool:
+    try:
+        with open("/proc/mounts", encoding="utf-8") as mounts:
+            return any(fields[1:3] == ["/dev/shm", "tmpfs"] for fields in (line.split() for line in mounts))
+    except OSError:
+        return False
+
+
+def _clear_docker_artifacts(directory: str) -> None:
+    cleanup_code = (
+        "import os,shutil; "
+        "[(shutil.rmtree(entry.path) if entry.is_dir(follow_symlinks=False) "
+        "else os.unlink(entry.path)) for entry in os.scandir('/artifacts')]"
+    )
     try:
         result = subprocess.run(
             [
-                "docker", "volume", "create", "--driver", "local",
-                "--opt", "type=tmpfs", "--opt", "device=tmpfs",
-                "--opt", f"o=size={_DOCKER_ARTIFACT_VOLUME_BYTES},uid=65534,gid=65534,mode=0700",
-                volume_name,
+                "docker", "run", "--rm", "--pull", "never", "--network", "none",
+                "--read-only", "--user", settings.JUDGE_DOCKER_USER,
+                "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+                "--security-opt", f"seccomp={settings.JUDGE_SECCOMP_PROFILE}",
+                "--pids-limit", "16", "--memory", "64m", "--memory-swap", "64m",
+                "--cpus", "0.25", "-v", f"{directory}:/artifacts:rw",
+                _image_for("python"), "python3", "-I", "-S", "-B", "-c", cleanup_code,
             ],
             capture_output=True,
             text=True,
-            timeout=_DOCKER_KILL_TIMEOUT_S,
+            timeout=15,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
-        raise SandboxUnavailable("failed to create bounded Docker artifact volume") from error
-    if result.returncode != 0 or result.stdout.strip() != volume_name:
-        raise SandboxUnavailable("failed to create bounded Docker artifact volume")
-    return volume_name
-
-
-def _remove_docker_artifact_volume(volume_name: str) -> None:
-    try:
-        result = subprocess.run(
-            ["docker", "volume", "rm", "--force", volume_name],
-            capture_output=True,
-            text=True,
-            timeout=_DOCKER_KILL_TIMEOUT_S,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise SandboxUnavailable("failed to remove Docker artifact volume") from error
+        raise SandboxUnavailable("failed to clear Docker artifact tmpfs") from error
     if result.returncode != 0:
-        raise SandboxUnavailable("failed to remove Docker artifact volume")
+        raise SandboxUnavailable("failed to clear Docker artifact tmpfs")
 
 
 @contextmanager
 def _docker_artifact_volume():
-    volume_name = _create_docker_artifact_volume()
+    if not _host_shm_is_tmpfs():
+        raise SandboxUnavailable("judge host /dev/shm is not a tmpfs mount")
     try:
-        yield volume_name
-    finally:
-        _remove_docker_artifact_volume(volume_name)
+        with tempfile.TemporaryDirectory(prefix="koj-artifacts-", dir="/dev/shm") as directory:
+            os.chmod(directory, 0o777)
+            try:
+                yield directory
+            finally:
+                _clear_docker_artifacts(directory)
+    except OSError as error:
+        raise SandboxUnavailable("failed to manage bounded Docker artifact tmpfs") from error
 
 
 def _run_docker(

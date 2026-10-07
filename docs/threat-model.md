@@ -14,6 +14,9 @@ pool using `rlimit` is a trusted-audience fallback, not the public target.
   capabilities, no new privileges, a pinned seccomp profile, and no host Docker
   socket mount.
 - CPU, memory, process count, writable tmpfs, output, and wall time are bounded.
+- Compiled artifacts live in a per-job host `/dev/shm` tmpfs directory, mounted
+  writable for compilation and read-only for each case. The host tmpfs size and
+  container memory cgroup bound this storage; cleanup runs after each job.
 - The host-side worker uses a separate restricted database role. The API and
   worker services keep their environment files root-owned.
 - `scripts/deployment/verify-docker-host.py` probes the boundary on the target
