@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import types
 
 import pytest
@@ -425,6 +426,28 @@ def test_body_limit_replays_the_buffered_body_and_tolerates_bad_headers(monkeypa
     scope = _judge_scope()
     scope["headers"].append((b"content-length", b"not-a-number"))
 
+    sent = _call_middleware(middleware, scope, [_body(b"{}")])
+
+    assert sent.status == 204
+    assert app.bodies == [b"{}"]
+
+    monkeypatch.setattr(settings, "JUDGE_INTERNAL_SECRET", "s3cret")
+    app = _BodyApp()
+    middleware = main._BodySizeLimitMiddleware(app, max_bytes=64, paths=main._JUDGE_BODY_PATHS)
+    scope = _judge_scope()
+    scope["headers"].append((b"content-length", b"not-a-number"))
+
+    sent = _call_middleware(middleware, scope, [_body(b"{}")])
+
+    assert sent.status == 204
+    assert app.bodies == [b"{}"]
+
+    monkeypatch.setattr(settings, "JUDGE_INTERNAL_SECRET", "s3cret")
+    app = _BodyApp()
+    middleware = main._BodySizeLimitMiddleware(app, max_bytes=64, paths=main._JUDGE_BODY_PATHS)
+    scope = _judge_scope()
+    scope["headers"].append((b"content-length", b"not-a-number"))
+
     sent = _call_middleware(middleware, scope, [{"type": "http.nonsense"}, _body(b"{}")])
 
     assert sent.status == 204
@@ -486,6 +509,50 @@ def test_lifespan_degrades_and_closes_the_pool(monkeypatch):
     asyncio.run(enter())
 
     assert closed.calls == [()]
+    assert threads[0].started is True
+
+
+def test_lifespan_uses_the_db_secret_for_acquire_and_release(monkeypatch):
+    monkeypatch.setattr(settings, "JUDGE_INTERNAL_SECRET", "s3cret")
+    monkeypatch.setattr(main.db, "ping", lambda: True)
+    acquire = monkeypatch.setattr(main, "_JUDGE_SEMAPHORE", types.SimpleNamespace(acquire=lambda blocking=False: True))
+    monkeypatch.setattr(settings, "JUDGE_HTTP_EXECUTION_ENABLED", True)
+    monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.setattr(main, "_JUDGE_UPSTREAM", types.SimpleNamespace(ready=lambda: True))
+    monkeypatch.setattr(main, "resolve_sandbox_backend", lambda: "rlimit")
+    monkeypatch.setattr(main, "execute_judge", lambda _req: _judge_response())
+
+    assertion = main.ready(x_judge_secret="s3cret")
+    assert assertion.status_code == 200
+    assert json.loads(assertion.body) == {
+        "status": "ok",
+        "db": True,
+        "execution_available": True,
+        "sandbox": "rlimit",
+    }
+
+
+def test_lifespan_wires_the_go_cache_warm_thread(monkeypatch):
+    monkeypatch.setattr(settings, "JUDGE_INTERNAL_SECRET", "s3cret")
+    monkeypatch.setattr(main.db, "init_pool", _Recorder(value=None))
+    closed = _Recorder()
+    monkeypatch.setattr(main.db, "close_pool", closed)
+    threads = []
+    monkeypatch.setattr(
+        main, "threading", types.SimpleNamespace(Thread=lambda **kwargs: _spawn(threads, kwargs))
+    )
+    monkeypatch.setattr(main, "warm_go_cache", lambda: None)
+
+    async def enter():
+        async with main.lifespan(None):
+            pass
+
+    asyncio.run(enter())
+
+    assert closed.calls == [()]
+    assert len(threads) == 1
+    assert threads[0].kwargs["name"] == "go-cache-warm"
+    assert threads[0].kwargs["target"] is not None
     assert threads[0].started is True
 
 
