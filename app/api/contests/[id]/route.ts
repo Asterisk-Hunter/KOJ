@@ -6,6 +6,7 @@ import { db } from "@/db";
 import { contestProblems, contestRegistrations, contestTeams, contestVirtualRegistrations, contests, problems } from "@/db/schema";
 import { settleExpiredContests, deriveContestUiStatus, contestRequiresInvite } from "@/app/api/contests/lifecycle";
 import { resolveOrganizationContext } from "@/lib/organizations";
+import { isOfficialContestActive } from "@/app/api/contests/participation-policy";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -96,7 +97,12 @@ async function handleGET(
     .where(and(eq(contestProblems.contestId, contest.id), eq(contestProblems.organizationId, organization.organizationId)))
     .orderBy(asc(contestProblems.position));
 
-  const isPublic = (contest.status === "live" && now >= contest.startsAt) || contest.status === "ended" || contest.status === "archived";
+  const hasProblemAccess = !organization.suspended && (
+    (isOfficialContestActive(contest, now) && registered) ||
+    contest.status === "ended" || contest.status === "archived"
+  );
+  const hideExplanation = contest.status === "live" ||
+    (virtualParticipation !== null && now.getTime() < new Date(virtualParticipation.endsAt).getTime());
 
   type ProblemOut = {
     id: number;
@@ -116,14 +122,14 @@ async function handleGET(
 
   const problemList: ProblemOut[] = [];
 
-  for (const cp of cpRows) {
+  for (const cp of hasProblemAccess ? cpRows : []) {
     const pRows = await db.select().from(problems).where(and(
       eq(problems.id, cp.problemId),
       eq(problems.organizationId, organization.organizationId),
     )).limit(1);
     if (pRows.length === 0) continue;
     const p = pRows[0];
-    if (isPublic) {
+    if (p.status !== "draft") {
       problemList.push({
         id: p.id,
         title: p.title,
@@ -134,19 +140,9 @@ async function handleGET(
         inputFormat: p.inputFormat,
         outputFormat: p.outputFormat,
         constraints: p.constraints,
-        explanation: p.explanation,
+        explanation: hideExplanation ? null : p.explanation,
         timeLimitMs: p.timeLimitMs,
         memoryLimitMb: p.memoryLimitMb,
-        status: p.status,
-      });
-    } else {
-      problemList.push({
-        id: p.id,
-        title: `Problem ${String.fromCharCode(64 + cp.position)}`,
-        difficulty: p.difficulty,
-        tags: p.tags,
-        position: cp.position,
-        // statements and titles withheld pre-start
         status: p.status,
       });
     }
@@ -166,7 +162,7 @@ async function handleGET(
     status,
     dbStatus: contest.status,
     problems: problemList,
-    problemsCount: problemList.length,
+    problemsCount: cpRows.length,
     participants,
     registered,
     teamName,

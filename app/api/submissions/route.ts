@@ -1,7 +1,7 @@
 import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
 import { auth, clerkClient } from "@clerk/nextjs/server";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   contestProblems,
@@ -39,13 +39,22 @@ function jsonError(message: string, status: number) {
 
 /** Thrown inside the submit transaction when the 30s cooldown is still active. */
 class RateLimited {
-  constructor(readonly retryAfter: number) {}
+  readonly retryAfter: number;
+  constructor(retryAfter: number) { this.retryAfter = retryAfter; }
 }
 
 class VirtualParticipationExpired {}
+class SubmissionAccessExpired {}
 
 class QueueAdmissionLimited {
-  constructor(readonly scope: "global" | "organization" | "user", readonly status: 429 | 503, readonly retryAfter: number) {}
+  readonly scope: "global" | "organization" | "user";
+  readonly status: 429 | 503;
+  readonly retryAfter: number;
+  constructor(scope: "global" | "organization" | "user", status: 429 | 503, retryAfter: number) {
+    this.scope = scope;
+    this.status = status;
+    this.retryAfter = retryAfter;
+  }
 }
 
 async function handlePOST(req: NextRequest) {
@@ -130,6 +139,7 @@ async function handlePOST(req: NextRequest) {
     return jsonError("problem not found", 404);
   }
   const problem = problemRows[0];
+  if (problem.status === "draft") return jsonError("problem not found", 404);
 
   // Contest vs practice validation
   if (effectiveContestId !== null) {
@@ -202,7 +212,7 @@ async function handlePOST(req: NextRequest) {
         clerkId: userId,
         username,
         email,
-      });
+      }).onConflictDoNothing({ target: users.clerkId });
     } catch {
       return jsonError("failed to resolve user", 500);
     }
@@ -218,26 +228,14 @@ async function handlePOST(req: NextRequest) {
     return jsonError("account suspended", 403);
   }
 
-  // Load cases ordered by position
-  let caseRows: (typeof problemTestCases.$inferSelect)[];
-  if (mode === "run") {
-    caseRows = await db
-      .select()
-      .from(problemTestCases)
-      .where(and(eq(problemTestCases.problemId, problemId), eq(problemTestCases.isSample, true)))
-      .orderBy(asc(problemTestCases.position));
-    if (caseRows.length === 0) {
-      return jsonError("no sample cases", 400);
-    }
-  } else {
-    caseRows = await db
-      .select()
-      .from(problemTestCases)
-      .where(eq(problemTestCases.problemId, problemId))
-      .orderBy(asc(problemTestCases.position));
-    if (caseRows.length === 0) {
-      return jsonError("no test cases", 400);
-    }
+  // The worker loads test data; admission only needs to know cases exist.
+  const caseRows = await db.select({ id: problemTestCases.id }).from(problemTestCases)
+    .where(mode === "run"
+      ? and(eq(problemTestCases.problemId, problemId), eq(problemTestCases.isSample, true))
+      : eq(problemTestCases.problemId, problemId))
+    .limit(1);
+  if (caseRows.length === 0) {
+    return jsonError(mode === "run" ? "no sample cases" : "no test cases", 400);
   }
 
   // Rate limit (REQ-RATE-01/02) + pending insert, atomically: the cooldown
@@ -253,12 +251,13 @@ async function handlePOST(req: NextRequest) {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('koj:queue-admission'), 0)`);
       const [activeCounts] = await tx
         .select({
-          globalActive: sql<number>`count(*) FILTER (WHERE ${inArray(judgeJobs.status, ["queued", "leased"])})`.mapWith(Number),
-          organizationActive: sql<number>`count(*) FILTER (WHERE ${inArray(judgeJobs.status, ["queued", "leased"])} AND ${eq(submissions.organizationId, organization.organizationId)})`.mapWith(Number),
-          userActive: sql<number>`count(*) FILTER (WHERE ${inArray(judgeJobs.status, ["queued", "leased"])} AND ${eq(submissions.userId, userId)})`.mapWith(Number),
+          globalActive: sql<number>`count(*)`.mapWith(Number),
+          organizationActive: sql<number>`count(*) FILTER (WHERE ${eq(submissions.organizationId, organization.organizationId)})`.mapWith(Number),
+          userActive: sql<number>`count(*) FILTER (WHERE ${eq(submissions.userId, userId)})`.mapWith(Number),
         })
         .from(judgeJobs)
-        .innerJoin(submissions, eq(judgeJobs.submissionId, submissions.id));
+        .innerJoin(submissions, eq(judgeJobs.submissionId, submissions.id))
+        .where(inArray(judgeJobs.status, ["queued", "leased"]));
       const denial = getQueueAdmissionDenial(activeCounts, 1);
       if (denial) throw new QueueAdmissionLimited(denial.scope, denial.status, denial.retryAfter);
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${userId}), ${problemId})`);
@@ -274,7 +273,49 @@ async function handlePOST(req: NextRequest) {
           throw new RateLimited(Math.max(1, Math.ceil(30 - elapsedSec)));
         }
       }
-      if (virtualEndsAt !== null && !isVirtualAttemptActive(new Date(), virtualEndsAt)) {
+      // Re-read access after waiting for admission/cooldown locks. Hold a share
+      // lock so lifecycle/authoring changes cannot race the pending insert.
+      let officialWindow: { startsAt: Date; endsAt: Date } | null = null;
+      // Match lifecycle lock ordering: contest before linked problem.
+      if (effectiveContestId !== null) {
+        const [currentContest] = await tx.select({ status: contests.status, startsAt: contests.startsAt, endsAt: contests.endsAt })
+          .from(contests).where(and(eq(contests.id, effectiveContestId), eq(contests.organizationId, organization.organizationId)))
+          .limit(1).for("share");
+        const now = Date.now();
+        if (!currentContest || (participation === "official"
+          ? currentContest.status !== "live" || now < currentContest.startsAt.getTime() || now >= currentContest.endsAt.getTime()
+          : currentContest.status !== "ended" && currentContest.status !== "archived")) {
+          throw new SubmissionAccessExpired();
+        }
+        if (participation === "official") {
+          officialWindow = currentContest;
+          const [registration] = await tx.select({ teamId: contestRegistrations.teamId }).from(contestRegistrations)
+            .where(and(eq(contestRegistrations.contestId, effectiveContestId), eq(contestRegistrations.userId, userId))).limit(1);
+          if (!registration) throw new SubmissionAccessExpired();
+          teamId = registration.teamId;
+        } else {
+          const [registration] = await tx.select({ endsAt: contestVirtualRegistrations.endsAt }).from(contestVirtualRegistrations)
+            .where(and(eq(contestVirtualRegistrations.contestId, effectiveContestId), eq(contestVirtualRegistrations.userId, userId))).limit(1);
+          if (!registration) throw new SubmissionAccessExpired();
+          virtualEndsAt = registration.endsAt;
+        }
+        const [link] = await tx.select({ problemId: contestProblems.problemId }).from(contestProblems)
+          .where(and(eq(contestProblems.contestId, effectiveContestId), eq(contestProblems.problemId, problemId),
+            eq(contestProblems.organizationId, organization.organizationId))).limit(1);
+        if (!link) throw new SubmissionAccessExpired();
+      }
+      const [currentProblem] = await tx.select({ status: problems.status }).from(problems)
+        .where(and(eq(problems.id, problemId), eq(problems.organizationId, organization.organizationId)))
+        .limit(1).for("share");
+      if (!currentProblem || currentProblem.status === "draft" ||
+          (effectiveContestId === null && currentProblem.status !== "published")) {
+        throw new SubmissionAccessExpired();
+      }
+      const submittedAt = new Date();
+      if (officialWindow && (submittedAt < officialWindow.startsAt || submittedAt >= officialWindow.endsAt)) {
+        throw new SubmissionAccessExpired();
+      }
+      if (virtualEndsAt !== null && !isVirtualAttemptActive(submittedAt, virtualEndsAt)) {
         throw new VirtualParticipationExpired();
       }
       const inserted = await tx
@@ -290,6 +331,8 @@ async function handlePOST(req: NextRequest) {
           code,
           mode,
           status: "pending",
+          // NOW() is the transaction start, not admission after a lock wait.
+          submittedAt,
         })
         .returning({ id: submissions.id });
       const sid = inserted[0].id;
@@ -313,6 +356,9 @@ async function handlePOST(req: NextRequest) {
         { error: message },
         { status: e.status, headers: { "Retry-After": String(e.retryAfter) } },
       );
+    }
+    if (e instanceof SubmissionAccessExpired) {
+      return jsonError("problem or contest is no longer accepting submissions", 403);
     }
     if (e instanceof VirtualParticipationExpired) {
       return jsonError("virtual participation time expired", 403);

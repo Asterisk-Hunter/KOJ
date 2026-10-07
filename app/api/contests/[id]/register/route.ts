@@ -5,14 +5,16 @@ import { randomBytes } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { contestRegistrations, contestTeams, contests, users } from "@/db/schema";
-import { settleExpiredContests, isRegistrationOpen, contestRequiresInvite } from "@/app/api/contests/lifecycle";
+import { settleExpiredContests, contestRequiresInvite } from "@/app/api/contests/lifecycle";
 import { hashInviteCode, verifyInviteCode } from "@/app/api/contests/invite-code";
-import { teamHasCapacity } from "@/app/api/contests/participation-policy";
+import { canRegisterForContest, teamHasCapacity } from "@/app/api/contests/participation-policy";
 import { MAX_CONTEST_REGISTRATION_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 import { resolveOrganizationContext } from "@/lib/organizations";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+class RegistrationClosed extends Error {}
 
 function jsonError(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
@@ -82,20 +84,7 @@ async function handlePOST(
     return jsonError("teamCode must be 8..64 characters", 400);
   }
 
-  const now = new Date();
-
-  // Ended/archived: no registration.
-  if (contest.status !== "draft" && contest.status !== "live") {
-    return jsonError("registration closed", 403);
-  }
-  // Late registration: allow joining a live contest until endsAt (supersedes BR-06 pre-start-only window).
-  if (contest.status === "live") {
-    if (now >= contest.endsAt) {
-      return jsonError("registration closed", 403);
-    }
-  } else if (!isRegistrationOpen(contest.startsAt, now)) {
-    return jsonError("registration closed", 403);
-  }
+  if (!canRegisterForContest(contest, new Date())) return jsonError("registration closed", 403);
 
   // Ensure users row exists via clerkClient exactly as submission route
   const existingUser = await db
@@ -122,62 +111,61 @@ async function handlePOST(
         clerkId: userId,
         username,
         email,
-      });
+      }).onConflictDoNothing({ target: users.clerkId });
     } catch {
       return jsonError("failed to resolve user", 500);
     }
   }
 
-  // Check already registered
-  const existingReg = await db
-    .select()
-    .from(contestRegistrations)
-    .where(
-      and(
-        eq(contestRegistrations.contestId, contest.id),
-        eq(contestRegistrations.userId, userId),
-      ),
-    )
-    .limit(1);
-  if (existingReg.length > 0) {
-    return NextResponse.json({ registered: true, already: true });
-  }
-
-  if (typeof teamName === "string") {
-    const secret = randomBytes(18).toString("base64url");
-    const registered = await db.transaction(async (tx) => {
-      const [team] = await tx.insert(contestTeams).values({ contestId: contest.id, name: teamName.trim(), joinCodeHash: hashInviteCode(secret) }).returning({ id: contestTeams.id });
-      await tx.insert(contestRegistrations).values({ contestId: contest.id, userId, teamId: team.id });
-      return team;
-    });
-    return NextResponse.json({ registered: true, teamName: teamName.trim(), teamJoinCode: `${registered.id}.${secret}`, teamId: registered.id }, { status: 201 });
-  }
-
-  let teamId: number | null = null;
-  if (typeof teamCode === "string") {
-    const [teamIdRaw, secret] = teamCode.trim().split(".", 2);
-    const parsedTeamId = Number(teamIdRaw);
-    if (!Number.isInteger(parsedTeamId) || parsedTeamId <= 0 || !secret) return jsonError("invalid team join code", 403);
-    const [team] = await db.select().from(contestTeams).where(and(eq(contestTeams.contestId, contest.id), eq(contestTeams.id, parsedTeamId))).limit(1);
-    if (!team || !verifyInviteCode(secret, { hash: team.joinCodeHash, legacy: null })) return jsonError("invalid team join code", 403);
-    teamId = team.id;
-  }
-
+  // The contest row serializes roster changes and lifecycle edits. Recheck time
+  // and invites after waiting for the lock, not against the earlier snapshot.
   try {
-    await db.transaction(async (tx) => {
-      if (teamId !== null) {
-        await tx.execute(sql`SELECT pg_advisory_xact_lock(${contest.id}, ${teamId})`);
-        const [{ count }] = await tx.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(contestRegistrations)
-          .where(and(eq(contestRegistrations.contestId, contest.id), eq(contestRegistrations.teamId, teamId)));
-        if (!teamHasCapacity(count)) throw new Error("team is full (3 members maximum)");
+    return await db.transaction(async (tx) => {
+      const [current] = await tx.select().from(contests).where(and(
+        eq(contests.id, contest.id), eq(contests.organizationId, organization.organizationId),
+      )).limit(1).for("update");
+      if (!current) return jsonError("contest not found", 404);
+      if (!canRegisterForContest(current, new Date())) return jsonError("registration closed", 403);
+      if (contestRequiresInvite(current) && !verifyInviteCode(body.inviteCode ?? body.invite_code, {
+        hash: current.inviteCodeHash, legacy: current.inviteCode,
+      })) return jsonError("invalid invite code", 403);
+
+      const [existing] = await tx.select({ teamId: contestRegistrations.teamId }).from(contestRegistrations)
+        .where(and(eq(contestRegistrations.contestId, current.id), eq(contestRegistrations.userId, userId))).limit(1);
+      if (existing) return NextResponse.json({ registered: true, already: true, teamId: existing.teamId });
+
+      if (typeof teamName === "string") {
+        const secret = randomBytes(18).toString("base64url");
+        const joinCodeHash = hashInviteCode(secret);
+        if (!canRegisterForContest(current, new Date())) throw new RegistrationClosed();
+        const [team] = await tx.insert(contestTeams).values({ contestId: current.id, name: teamName.trim(), joinCodeHash }).returning({ id: contestTeams.id });
+        const registeredAt = new Date();
+        if (!canRegisterForContest(current, registeredAt)) throw new RegistrationClosed();
+        await tx.insert(contestRegistrations).values({ contestId: current.id, userId, teamId: team.id, registeredAt });
+        return NextResponse.json({ registered: true, teamName: teamName.trim(), teamJoinCode: `${team.id}.${secret}`, teamId: team.id }, { status: 201 });
       }
-      await tx.insert(contestRegistrations).values({ contestId: contest.id, userId, teamId }).onConflictDoNothing();
-    });
-  } catch {
-    return jsonError(teamId === null ? "failed to register" : "team is full or registration failed", teamId === null ? 500 : 409);
+
+      let teamId: number | null = null;
+      if (typeof teamCode === "string") {
+        const parts = teamCode.trim().split(".");
+        const parsedTeamId = Number(parts[0]);
+        if (parts.length !== 2 || !Number.isSafeInteger(parsedTeamId) || parsedTeamId <= 0 || !parts[1]) return jsonError("invalid team join code", 403);
+        const [team] = await tx.select().from(contestTeams).where(and(eq(contestTeams.contestId, current.id), eq(contestTeams.id, parsedTeamId))).limit(1);
+        if (!team || !verifyInviteCode(parts[1], { hash: team.joinCodeHash, legacy: null })) return jsonError("invalid team join code", 403);
+        teamId = team.id;
+        const [{ count }] = await tx.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(contestRegistrations)
+          .where(and(eq(contestRegistrations.contestId, current.id), eq(contestRegistrations.teamId, teamId)));
+        if (!teamHasCapacity(count)) return jsonError("team is full (3 members maximum)", 409);
+      }
+      const registeredAt = new Date();
+      if (!canRegisterForContest(current, registeredAt)) throw new RegistrationClosed();
+      await tx.insert(contestRegistrations).values({ contestId: current.id, userId, teamId, registeredAt });
+      return NextResponse.json({ registered: true, teamId }, { status: 201 });
+      });
+    } catch (error) {
+      if (error instanceof RegistrationClosed) return jsonError("registration closed", 403);
+      throw error;
+    }
   }
 
-  return NextResponse.json({ registered: true, teamId });
-}
-
-export const POST = withApiGuard(handlePOST);
+  export const POST = withApiGuard(handlePOST);

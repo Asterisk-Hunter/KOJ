@@ -80,7 +80,9 @@ export default function RankingsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [virtual, setVirtual] = useState(false);
 
-  const isLiveContest = data?.contest.status === "live";
+  const isStreamingContest = virtual
+    ? data?.contest.status === "ended" || data?.contest.status === "archived"
+    : data?.contest.status === "live";
 
   const fetchContests = useCallback(async () => {
     setContestsLoading(true);
@@ -202,11 +204,11 @@ export default function RankingsPage() {
 
   // Live leaderboard: subscribe to SSE version ticker
   useEffect(() => {
-    if (!selectedId || !isLiveContest) {
+    if (!selectedId || !isStreamingContest) {
       setLiveRefresh(false);
       return;
     }
-    const es = new EventSource(`/api/contests/${encodeURIComponent(selectedId)}/events`);
+    const es = new EventSource(`/api/contests/${encodeURIComponent(selectedId)}/events${virtual ? "?virtual=1" : ""}`);
     let lastVersion: string | null = null;
     setLiveRefresh(true);
     es.addEventListener("version", (ev) => {
@@ -218,7 +220,7 @@ export default function RankingsPage() {
       es.close();
       setLiveRefresh(false);
     };
-  }, [selectedId, isLiveContest, fetchRankings]);
+  }, [selectedId, isStreamingContest, virtual, fetchRankings]);
 
   const filteredRows = useMemo(() => {
     if (!data) return [];

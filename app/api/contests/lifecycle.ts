@@ -22,7 +22,7 @@ export function deriveContestUiStatus(
 ): ContestUiStatus {
   if (dbStatus === "archived" || dbStatus === "ended") return "Finished";
   if (dbStatus === "live") {
-    if (now >= startsAt && now <= endsAt) return "Active";
+    if (now >= startsAt && now < endsAt) return "Active";
     if (now < startsAt) return "Registration Open";
     return "Finished";
   }
@@ -33,7 +33,7 @@ export function deriveContestUiStatus(
     if (diff <= sevenDays) return "Registration Open";
     return "Upcoming";
   }
-  if (now >= startsAt && now <= endsAt) return "Registration Open";
+  if (now >= startsAt && now < endsAt) return "Registration Open";
   return "Finished";
 }
 
@@ -136,10 +136,16 @@ export async function revertLinkedProblems(
     .where(eq(contestProblems.contestId, contestId));
   const ids = [...new Set(links.map((l) => l.problemId))];
   if (ids.length === 0) return;
+  const stillContested = await executor.select({ problemId: contestProblems.problemId })
+    .from(contestProblems).innerJoin(contests, eq(contestProblems.contestId, contests.id))
+    .where(and(inArray(contestProblems.problemId, ids), eq(contests.status, "live"), not(eq(contests.id, contestId))));
+  const retained = new Set(stillContested.map((link) => link.problemId));
+  const revertible = ids.filter((id) => !retained.has(id));
+  if (revertible.length === 0) return;
   await executor
     .update(problems)
     .set({ status: "draft", updatedAt: now })
-    .where(and(inArray(problems.id, ids), eq(problems.status, "contest_active")));
+    .where(and(inArray(problems.id, revertible), eq(problems.status, "contest_active")));
 }
 
 /**

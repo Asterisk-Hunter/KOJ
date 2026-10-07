@@ -2,10 +2,11 @@ import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { contests, submissions } from "@/db/schema";
+import { contestRegistrations, contests, submissions } from "@/db/schema";
 import { getRedis } from "@/lib/redis";
 import { auth } from "@clerk/nextjs/server";
 import { resolveOrganizationContext } from "@/lib/organizations";
+import { getScoreboardFreezeAt, type FreezeMode } from "@/app/api/contests/scoreboard-policy";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,17 +37,50 @@ async function findContest(idRaw: string, organizationId: number) {
   return null;
 }
 
-async function versionFor(contestId: number, organizationId: number): Promise<{ count: number; maxSubmittedAt: string | null }> {
+type ContestVersion = {
+  count: number;
+  maxSubmittedAt: string | null;
+  maxCompletedAt: string | null;
+  judgedCount: number;
+  contestUpdatedAt: string;
+  startsAt: string;
+  endsAt: string;
+  status: string;
+  freezeAt: string | null;
+  freezeMode: FreezeMode;
+  revealCount: number;
+};
+
+function timestampValue(value: unknown): string | null {
+  return value instanceof Date ? value.toISOString() : typeof value === "string" ? value : null;
+}
+
+async function versionFor(contestId: number, organizationId: number, participation: "official" | "virtual"): Promise<ContestVersion> {
   const [row] = await db
     .select({
       count: sql<number>`count(*)`.mapWith(Number),
-      maxSubmittedAt: sql<string | null>`max(${submissions.submittedAt})`.mapWith(
-        (v: unknown) => (v instanceof Date ? v.toISOString() : (v as string | null)),
-      ),
+      maxSubmittedAt: sql<string | null>`max(${submissions.submittedAt})`.mapWith(timestampValue),
+      maxCompletedAt: sql<string | null>`max(${submissions.completedAt})`.mapWith(timestampValue),
+      judgedCount: sql<number>`count(${submissions.completedAt})`.mapWith(Number),
     })
     .from(submissions)
-    .where(and(eq(submissions.contestId, contestId), eq(submissions.organizationId, organizationId)));
-  return { count: row?.count ?? 0, maxSubmittedAt: row?.maxSubmittedAt ?? null };
+    .where(and(
+      eq(submissions.contestId, contestId), eq(submissions.organizationId, organizationId),
+      eq(submissions.mode, "submit"), eq(submissions.participation, participation),
+    ));
+  const [contest] = await db.select({
+    updatedAt: contests.updatedAt, status: contests.status, startsAt: contests.startsAt, endsAt: contests.endsAt,
+    freezeMode: contests.scoreboardFreezeMode, frozenAt: contests.scoreboardFrozenAt, revealCount: contests.scoreboardRevealCount,
+  }).from(contests).where(and(eq(contests.id, contestId), eq(contests.organizationId, organizationId))).limit(1);
+  if (!contest || contest.status === "draft") throw new Error("contest is no longer visible");
+  return {
+    count: row?.count ?? 0, maxSubmittedAt: row?.maxSubmittedAt ?? null,
+    maxCompletedAt: row?.maxCompletedAt ?? null, judgedCount: row?.judgedCount ?? 0,
+    contestUpdatedAt: contest.updatedAt.toISOString(),
+    startsAt: contest.startsAt.toISOString(), endsAt: contest.endsAt.toISOString(), status: contest.status,
+    freezeAt: getScoreboardFreezeAt(contest.freezeMode, contest.frozenAt, contest.startsAt, contest.endsAt)?.toISOString() ?? null,
+    freezeMode: contest.freezeMode, revealCount: contest.revealCount,
+  };
 }
 
 /**
@@ -57,19 +91,36 @@ async function versionFor(contestId: number, organizationId: number): Promise<{ 
  * cross-instance fan-out.
  */
 async function handleGET(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
   const { id: idRaw } = await ctx.params;
   const { userId } = await auth();
   const organization = await resolveOrganizationContext(userId);
   if (!organization) return jsonError("organization not found", 404);
+  if (organization.suspended) return jsonError("account suspended", 403);
   const contest = await findContest(idRaw, organization.organizationId);
   if (
     !contest ||
     (contest.status !== "live" && contest.status !== "ended" && contest.status !== "archived")
   ) {
     return jsonError("contest not found or not visible", 404);
+  }
+  const now = Date.now();
+  if (now < contest.startsAt.getTime()) return jsonError("contest has not started", 403);
+  if (contest.status === "live" && now < contest.endsAt.getTime()) {
+    if (!userId) return jsonError("not registered for contest", 403);
+    const [registration] = await db.select({ userId: contestRegistrations.userId }).from(contestRegistrations)
+      .where(and(eq(contestRegistrations.contestId, contest.id), eq(contestRegistrations.userId, userId))).limit(1);
+    if (!registration) return jsonError("not registered for contest", 403);
+  }
+  const virtualRaw = req.nextUrl.searchParams.get("virtual");
+  if (virtualRaw !== null && virtualRaw !== "0" && virtualRaw !== "1") {
+    return jsonError("virtual must be 0 or 1", 400);
+  }
+  const participation = virtualRaw === "1" ? "virtual" : "official";
+  if (participation === "virtual" && contest.status === "live") {
+    return jsonError("virtual standings are available after the contest ends", 409);
   }
   const contestId = contest.id;
 
@@ -79,10 +130,25 @@ async function handleGET(
   let tickInFlight = false;
   let timer: NodeJS.Timeout | null = null;
   const redis = getRedis();
-  const versionCacheKey = `contest_version:${contestId}`;
+  const versionCacheKey = `contest_version:${organization.organizationId}:${contestId}:${participation}:v2`;
+  let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+  const cleanup = () => {
+    closed = true;
+    if (timer) clearInterval(timer);
+    timer = null;
+    req.signal.removeEventListener("abort", abort);
+  };
+  const abort = () => {
+    if (closed) return;
+    cleanup();
+    streamController?.close();
+  };
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      streamController = controller;
+      req.signal.addEventListener("abort", abort, { once: true });
+      if (req.signal.aborted) { abort(); return; }
       const send = (event: string, payload: unknown) => {
         if (closed) return;
         controller.enqueue(
@@ -90,17 +156,20 @@ async function handleGET(
         );
       };
 
-      const fetchVersion = async (): Promise<{ count: number; maxSubmittedAt: string | null }> => {
+      const fetchVersion = async (): Promise<ContestVersion | null> => {
         // Redis-first: check cached version
         if (redis) {
           try {
-            const cached = await redis.get<{ count: number; maxSubmittedAt: string | null }>(versionCacheKey);
+            const cached = await redis.get<ContestVersion>(versionCacheKey);
+            if (closed) return null;
             if (cached) return cached;
           } catch {
             // Fall through to DB
           }
         }
-        const v = await versionFor(contestId, organization.organizationId);
+        if (closed) return null;
+        const v = await versionFor(contestId, organization.organizationId, participation);
+        if (closed) return null;
         // Cache for 3 seconds to reduce DB load on fast tick
         if (redis) {
           try {
@@ -112,19 +181,39 @@ async function handleGET(
         return v;
       };
 
+      let lastVersion: string | null = null;
+      const notifyVersion = async () => {
+        const snapshot = await fetchVersion();
+        if (!snapshot || closed) return;
+        const now = Date.now();
+        const timePhase = now < new Date(snapshot.startsAt).getTime() ? "scheduled"
+          : snapshot.status !== "live" || now >= new Date(snapshot.endsAt).getTime() ? "finished"
+          : snapshot.freezeMode === "automatic" && snapshot.freezeAt !== null && now >= new Date(snapshot.freezeAt).getTime() ? "automatic-freeze"
+          : "live";
+        // Time-derived state must not be cached: crossing a boundary changes the
+        // standings even when no submissions or lifecycle writes occur.
+        const version = { ...snapshot, timePhase };
+        const serialized = JSON.stringify(version);
+        if (serialized !== lastVersion && redis) {
+          try { await redis.del(`standings:${organization.organizationId}:${contestId}:${participation}`); } catch { /* Cache is best effort. */ }
+        }
+        lastVersion = serialized;
+        send("version", version);
+      };
+
       try {
-        send("version", await fetchVersion());
+        await notifyVersion();
+        if (closed) return;
         timer = setInterval(() => {
           if (closed || tickInFlight) return;
           void (async () => {
             tickInFlight = true;
             ticks += 1;
             try {
-              if (!closed) send("version", await fetchVersion());
+              if (!closed) await notifyVersion();
             } catch {
-              if (timer) clearInterval(timer);
               if (!closed) {
-                closed = true;
+                cleanup();
                 controller.close();
               }
               return;
@@ -132,10 +221,8 @@ async function handleGET(
               tickInFlight = false;
             }
             if (ticks >= MAX_TICKS) {
-              if (timer) clearInterval(timer);
-              timer = null;
               if (!closed) {
-                closed = true;
+                cleanup();
                 controller.close();
               }
             }
@@ -143,15 +230,13 @@ async function handleGET(
         }, TICK_MS);
       } catch {
         if (!closed) {
-          closed = true;
+          cleanup();
           controller.close();
         }
       }
     },
     cancel() {
-      closed = true;
-      if (timer) clearInterval(timer);
-      timer = null;
+      cleanup();
     },
   });
 

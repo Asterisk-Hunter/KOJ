@@ -18,6 +18,20 @@ export function getRedis(): Redis | null {
   const url = process.env.REDIS_URL;
   const token = process.env.REDIS_TOKEN;
   if (!url || !token) return null;
-  _redis = new Redis({ url, token });
+  try {
+    const endpoint = new URL(url);
+    if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password) return null;
+    _redis = new Redis({
+      url,
+      token,
+      // This is an optional cache, not a request-critical dependency. A fresh
+      // signal per HTTP request avoids permanently aborting the shared client.
+      signal: () => AbortSignal.timeout(250),
+      retry: false,
+    });
+  } catch {
+    // Invalid optional configuration must not take down DB-only routes.
+    return null;
+  }
   return _redis;
 }

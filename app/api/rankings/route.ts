@@ -2,12 +2,14 @@ import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
-import { contestProblems, contestTeams, contestVirtualRegistrations, contests, problems, submissions, users } from "@/db/schema";
+import { contestProblems, contestRegistrations, contestTeams, contestVirtualRegistrations, contests, problems, submissions, users } from "@/db/schema";
 import { getRedis } from "@/lib/redis";
 import { countWrongBefore, penaltyMinutesForSolve } from "@/lib/scoring";
 import { getScoreboardFreezeAt, selectRevealedSubmissionIds } from "@/app/api/contests/scoreboard-policy";
 import { auth } from "@clerk/nextjs/server";
 import { resolveOrganizationContext } from "@/lib/organizations";
+import { readStandingsCache, standingsCacheEntry, standingsVersion, type StandingsPayload } from "./cache";
+import { MAX_STANDINGS_CELLS, MAX_STANDINGS_PROBLEMS, MAX_STANDINGS_ROWS } from "./limits";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,7 +19,7 @@ function jsonError(message: string, status: number) {
 }
 
 const STANDINGS_CACHE_TTL = 8; // seconds — short enough for live contests
-const MAX_STANDINGS_ROWS = 50_000;
+
 
 // Standard ICPC / DOMjudge balloon color palette
 export const BALLOON_PALETTE = [
@@ -54,16 +56,37 @@ type StandingRow = {
   perProblem: PerProblemStanding[];
 };
 
+async function contestVisibilityDenial(
+  contest: Pick<typeof contests.$inferSelect, "id" | "status" | "startsAt" | "endsAt">,
+  userId: string | null,
+): Promise<NextResponse | null> {
+  if (contest.status !== "live" && contest.status !== "ended" && contest.status !== "archived") {
+    return jsonError("contest not found or not visible", 404);
+  }
+  const now = Date.now();
+  if (now < contest.startsAt.getTime()) return jsonError("contest has not started", 403);
+  // Match contest detail's problem visibility. Expired live rows are safe to
+  // expose after the end boundary while lifecycle settlement catches up.
+  if (contest.status === "live" && now < contest.endsAt.getTime()) {
+    if (!userId) return jsonError("not registered for contest", 403);
+    const [registration] = await db.select({ userId: contestRegistrations.userId }).from(contestRegistrations)
+      .where(and(eq(contestRegistrations.contestId, contest.id), eq(contestRegistrations.userId, userId))).limit(1);
+    if (!registration) return jsonError("not registered for contest", 403);
+  }
+  return null;
+}
+
 async function handleGET(req: NextRequest) {
   const { userId } = await auth();
   const organization = await resolveOrganizationContext(userId);
   if (!organization) return jsonError("organization not found", 404);
+  if (organization.suspended) return jsonError("account suspended", 403);
   const contestIdRaw = req.nextUrl.searchParams.get("contestId");
   if (!contestIdRaw) {
     return jsonError("contestId is required", 400);
   }
   const contestId = Number(contestIdRaw);
-  if (!Number.isInteger(contestId) || contestId <= 0) {
+  if (!Number.isSafeInteger(contestId) || contestId <= 0) {
     return jsonError("contestId must be a positive integer", 400);
   }
   const virtualRaw = req.nextUrl.searchParams.get("virtual");
@@ -78,25 +101,16 @@ async function handleGET(req: NextRequest) {
   if (contestRows.length === 0) {
     return jsonError("contest not found", 404);
   }
-  const contest = contestRows[0];
+  let contest = contestRows[0];
 
-  if (contest.status !== "live" && contest.status !== "ended" && contest.status !== "archived") {
-    return jsonError("contest not found or not visible", 404);
-  }
+  const initialDenial = await contestVisibilityDenial(contest, userId);
+  if (initialDenial) return initialDenial;
   if (virtual && contest.status !== "ended" && contest.status !== "archived") {
     return jsonError("virtual standings are available after the contest ends", 409);
   }
 
   const redis = getRedis();
   const cacheKey = `standings:${organization.organizationId}:${contestId}:${virtual ? "virtual" : "official"}`;
-  if (redis) {
-    try {
-      const cached = await redis.get(cacheKey);
-      if (cached) return NextResponse.json(cached);
-    } catch {
-      // Redis unavailable — fall through to DB path
-    }
-  }
 
   const cpRows = await db
     .select({
@@ -108,7 +122,11 @@ async function handleGET(req: NextRequest) {
     .from(contestProblems)
     .innerJoin(problems, eq(contestProblems.problemId, problems.id))
     .where(and(eq(contestProblems.contestId, contestId), eq(contestProblems.organizationId, organization.organizationId)))
-    .orderBy(asc(contestProblems.position));
+    .orderBy(asc(contestProblems.position))
+    .limit(MAX_STANDINGS_PROBLEMS + 1);
+  if (cpRows.length > MAX_STANDINGS_PROBLEMS) {
+    return jsonError(`standings exceed the ${MAX_STANDINGS_PROBLEMS}-problem limit`, 503);
+  }
 
   if (cpRows.length === 0) {
     return NextResponse.json({
@@ -120,6 +138,9 @@ async function handleGET(req: NextRequest) {
         endsAt: contest.endsAt.toISOString(),
         isFrozen: false,
         freezeMode: contest.scoreboardFreezeMode,
+        participation: virtual ? "virtual" : "official",
+        freezeMinutesRemaining: 0,
+        revealedAfterFreeze: contest.scoreboardRevealCount,
       },
       problems: [],
       rows: [],
@@ -130,7 +151,7 @@ async function handleGET(req: NextRequest) {
   const problemIds = cpRows.map((r) => r.problemId);
 
   const virtualRegistrations = virtual
-    ? await db.select({ userId: contestVirtualRegistrations.userId, startedAt: contestVirtualRegistrations.startedAt })
+    ? await db.select({ userId: contestVirtualRegistrations.userId, startedAt: contestVirtualRegistrations.startedAt, endsAt: contestVirtualRegistrations.endsAt })
       .from(contestVirtualRegistrations).where(eq(contestVirtualRegistrations.contestId, contestId)).limit(MAX_STANDINGS_ROWS + 1)
     : [];
   if (virtualRegistrations.length > MAX_STANDINGS_ROWS) {
@@ -157,7 +178,36 @@ async function handleGET(req: NextRequest) {
   if (boundedSubmissionRows.length > MAX_STANDINGS_ROWS) {
     return NextResponse.json({ error: "standings exceed the supported contest size" }, { status: 503 });
   }
-  const allSubmissionRows = boundedSubmissionRows;
+  // Refresh visibility metadata after reading verdicts: a freeze/reveal edit
+  // during those reads must not be combined with the old visibility policy.
+  const [currentContest] = await db.select().from(contests).where(and(
+    eq(contests.id, contestId), eq(contests.organizationId, organization.organizationId),
+  )).limit(1);
+  if (!currentContest) return jsonError("contest not found or not visible", 404);
+  const currentDenial = await contestVisibilityDenial(currentContest, userId);
+  if (currentDenial) return currentDenial;
+  if (virtual && currentContest.status !== "ended" && currentContest.status !== "archived") {
+    return jsonError("virtual standings are available after the contest ends", 409);
+  }
+  contest = currentContest;
+  const virtualWindowByUser = new Map(virtualRegistrations.map((registration) => [registration.userId, registration]));
+  const allSubmissionRows = boundedSubmissionRows.filter((submission) => {
+    const window = virtual ? virtualWindowByUser.get(submission.userId) : { startedAt: contest.startsAt, endsAt: contest.endsAt };
+    return window !== undefined && submission.submittedAt >= window.startedAt && submission.submittedAt < window.endsAt;
+  });
+  const standingIdFor = (submission: typeof allSubmissionRows[number]) =>
+    virtual || submission.teamId === null ? submission.userId : `team:${submission.teamId}`;
+  const problemIdSet = new Set(problemIds);
+  const standingIds = new Set(allSubmissionRows.filter((submission) => problemIdSet.has(submission.problemId)).map(standingIdFor));
+  if (virtual) {
+    for (const registration of virtualRegistrations) standingIds.add(registration.userId);
+  }
+  // Preflight before scoring, display-name reads, cache fingerprinting, or any
+  // dense per-problem allocation. Count the exact rows the grouping below emits.
+  if (standingIds.size * problemIds.length > MAX_STANDINGS_CELLS) {
+    return jsonError(`standings exceed the ${MAX_STANDINGS_CELLS}-cell limit (${standingIds.size} standing rows × ${problemIds.length} problems)`, 503);
+  }
+  const nowMs = Date.now();
 
   const freezeAt = getScoreboardFreezeAt(
     contest.scoreboardFreezeMode,
@@ -172,14 +222,15 @@ async function handleGET(req: NextRequest) {
     contest.scoreboardRevealCount,
   );
   const automaticFreezeActive = !virtual && contest.scoreboardFreezeMode === "automatic" && contest.status === "live" &&
-    freezeAt !== null && Date.now() >= freezeAt.getTime() && Date.now() < contest.endsAt.getTime();
+    freezeAt !== null && nowMs >= freezeAt.getTime() && nowMs < contest.endsAt.getTime();
   const stagedFreezeActive = !virtual && contest.scoreboardFreezeMode === "frozen" &&
     (contest.status === "live" || allSubmissionRows.some((submission) => freezeAt !== null && submission.submittedAt >= freezeAt && !revealedSubmissionIds.has(submission.id)));
   const isFrozen = automaticFreezeActive || stagedFreezeActive;
+  const hiddenSubmissionIds = new Set(allSubmissionRows.filter((submission) =>
+    isFrozen && effectiveFreezeAt !== null && submission.submittedAt >= effectiveFreezeAt && !revealedSubmissionIds.has(submission.id),
+  ).map((submission) => submission.id));
   const submissionRows = allSubmissionRows.map((submission) =>
-    isFrozen && effectiveFreezeAt !== null && submission.submittedAt >= effectiveFreezeAt && !revealedSubmissionIds.has(submission.id)
-      ? { ...submission, status: "running" as const }
-      : submission,
+    hiddenSubmissionIds.has(submission.id) ? { ...submission, status: "running" as const } : submission,
   );
 
   const submittedUserIds = [...new Set([...submissionRows.map((s) => s.userId), ...virtualRegistrations.map((registration) => registration.userId)])];
@@ -203,16 +254,40 @@ async function handleGET(req: NextRequest) {
 
   const contestStartMs = contest.startsAt.getTime();
   const contestEndMs = contest.endsAt.getTime();
-  const nowMs = Date.now();
-
-  // Scoreboard freeze: in ICPC/DOMjudge, scoreboard freezes in the last 60 minutes of live contest
-  const freezeAtMs = effectiveFreezeAt?.getTime() ?? Number.POSITIVE_INFINITY;
+  const responseContest: StandingsPayload["contest"] = {
+    id: contest.id, title: contest.title, status: contest.status,
+    startsAt: contest.startsAt.toISOString(), endsAt: contest.endsAt.toISOString(),
+    isFrozen, freezeMode: contest.scoreboardFreezeMode,
+    participation: virtual ? "virtual" : "official",
+    freezeMinutesRemaining: isFrozen ? Math.max(0, Math.ceil((contestEndMs - nowMs) / 60000)) : 0,
+    revealedAfterFreeze: contest.scoreboardRevealCount,
+  };
+  // Fingerprint the bounded authoritative inputs, including verdicts (not just
+  // submission/completion counts). This also detects rejudge and team edits.
+  const cacheVersion = redis && !isFrozen ? standingsVersion({
+    organizationId: organization.organizationId,
+    contest: responseContest,
+    updatedAt: contest.updatedAt,
+    frozenAt: contest.scoreboardFrozenAt,
+    problems: cpRows,
+    submissions: [...allSubmissionRows].sort((a, b) => a.id - b.id),
+    virtualRegistrations: [...virtualRegistrations].sort((a, b) => a.userId.localeCompare(b.userId)),
+    names: [...standingNameMap].sort(([a], [b]) => a.localeCompare(b)),
+  }) : "";
+  // Never rely on cached visibility during an official freeze/reveal. Cache
+  // keys remain compatible with the contest agent's invalidation paths.
+  if (redis && !isFrozen) {
+    try {
+      const cached = readStandingsCache(await redis.get(cacheKey), cacheVersion, responseContest, Date.now());
+      if (cached) return NextResponse.json(cached);
+    } catch { /* Optional cache failure falls back to authoritative standings. */ }
+  }
 
   // Group submissions by userId -> problemId -> sorted list
   const byUserProblem = new Map<string, Map<number, typeof submissionRows>>();
   for (const s of submissionRows) {
-    if (!problemIds.includes(s.problemId)) continue;
-    const standingId = s.teamId === null ? s.userId : `team:${s.teamId}`;
+    if (!problemIdSet.has(s.problemId)) continue;
+    const standingId = standingIdFor(s);
     let m = byUserProblem.get(standingId);
     if (!m) {
       m = new Map<number, typeof submissionRows>();
@@ -252,9 +327,7 @@ async function handleGET(req: NextRequest) {
       for (const s of list) {
         if (s.status === "accepted") {
           const subMs = s.submittedAt ? s.submittedAt.getTime() : contestStartMs;
-          if (isFrozen && subMs >= freezeAtMs) {
-            continue; // Mask post-freeze solve during active freeze window
-          }
+
           const currentFirst = firstSolverByProblem.get(pid);
           if (!currentFirst || subMs < currentFirst.submittedAtMs) {
             firstSolverByProblem.set(pid, { userId: standingId, submittedAtMs: subMs });
@@ -299,13 +372,11 @@ async function handleGET(req: NextRequest) {
       const isFirst = !virtual && (firstSolver?.userId === userId || firstSolver?.userId === `user:${userId}`);
 
       if (firstAcIndex === -1) {
-        // No AC
-        // Check if any attempts happened after freeze
-        const postFreezeAttempts = isFrozen
-          ? list.filter((s) => s.submittedAt && s.submittedAt.getTime() >= freezeAtMs).length
-          : 0;
+        // Hidden rows have already been masked once; explicitly revealed
+        // post-freeze verdicts must stay visible to scoring and first-to-solve.
+        const pendingAttempts = list.filter((s) => s.status === "pending" || s.status === "running").length;
 
-        if (isFrozen && postFreezeAttempts > 0) {
+        if (pendingAttempts > 0) {
           perProblem.push({
             problemId: pid,
             status: "PENDING",
@@ -313,7 +384,7 @@ async function handleGET(req: NextRequest) {
             penaltyMinutes: null,
             isFirstToSolve: false,
             timeMinutes: null,
-            pendingAttempts: postFreezeAttempts,
+            pendingAttempts,
           });
         } else {
           perProblem.push({
@@ -329,23 +400,6 @@ async function handleGET(req: NextRequest) {
         const firstAc = list[firstAcIndex];
         const submittedAtMs = firstAc.submittedAt ? firstAc.submittedAt.getTime() : contestStartMs;
 
-        // If solved AFTER freeze in a live frozen contest, hide AC from public standings
-        if (isFrozen && submittedAtMs >= freezeAtMs) {
-          const preFreezeList = list.filter((s) => !s.submittedAt || s.submittedAt.getTime() < freezeAtMs);
-          const hadPreFreezeAc = preFreezeList.some((s) => s.status === "accepted");
-          if (!hadPreFreezeAc) {
-            perProblem.push({
-              problemId: pid,
-              status: "PENDING",
-              attempts: list.length,
-              penaltyMinutes: null,
-              isFirstToSolve: false,
-              timeMinutes: null,
-              pendingAttempts: list.length - preFreezeList.length,
-            });
-            continue;
-          }
-        }
 
         const statusesBefore = list
           .slice(0, firstAcIndex)
@@ -419,19 +473,8 @@ async function handleGET(req: NextRequest) {
     };
   });
 
-  const responsePayload = {
-    contest: {
-      id: contest.id,
-      title: contest.title,
-      status: contest.status,
-      startsAt: contest.startsAt.toISOString(),
-      endsAt: contest.endsAt.toISOString(),
-      isFrozen,
-      freezeMode: contest.scoreboardFreezeMode,
-      participation: virtual ? "virtual" : "official",
-      freezeMinutesRemaining: isFrozen ? Math.max(0, Math.ceil((contestEndMs - nowMs) / 60000)) : 0,
-      revealedAfterFreeze: contest.scoreboardRevealCount,
-    },
+  const responsePayload: StandingsPayload = {
+    contest: responseContest,
     problems: problemsMeta,
     summary: problemSummary,
     rows: standings.map((r) => ({
@@ -452,10 +495,17 @@ async function handleGET(req: NextRequest) {
     })),
   };
 
-  // Cache standings for short TTL
-  if (redis) {
+  // An explicit deadline prevents a cache hit from crossing an automatic
+  // freeze or contest end, even if Redis TTLs or cached data are stale.
+  const cacheNow = Date.now();
+  const boundary = !virtual && contest.status === "live"
+    ? Math.min(contestEndMs, freezeAt && freezeAt.getTime() > nowMs ? freezeAt.getTime() : Number.POSITIVE_INFINITY)
+    : Number.POSITIVE_INFINITY;
+  const expiresAt = Math.min(cacheNow + STANDINGS_CACHE_TTL * 1000, boundary);
+  if (redis && !isFrozen && expiresAt > cacheNow) {
     try {
-      await redis.set(cacheKey, responsePayload, { ex: STANDINGS_CACHE_TTL });
+      await redis.set(cacheKey, standingsCacheEntry(responsePayload, cacheVersion, expiresAt),
+        { ex: Math.max(1, Math.ceil((expiresAt - cacheNow) / 1000)) });
     } catch {
       // Best-effort cache write
     }

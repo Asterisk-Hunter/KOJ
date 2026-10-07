@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth, SignInButton } from "@clerk/nextjs";
 import Navigation from "@/app/components/Navigation";
+import { getArenaParticipation } from "@/app/api/contests/participation-policy";
 
 type UiStatus = "Active" | "Registration Open" | "Upcoming" | "Finished";
 
@@ -82,7 +83,7 @@ export default function ContestDetailPage() {
   const [teamName, setTeamName] = useState("");
   const [teamCode, setTeamCode] = useState("");
   const [teamJoinCode, setTeamJoinCode] = useState<string | null>(null);
-  const boundaryReloaded = useRef(false);
+  const boundaryReloaded = useRef<string | null>(null);
   const { isLoaded, isSignedIn } = useAuth();
 
   const load = useCallback(async () => {
@@ -107,7 +108,7 @@ export default function ContestDetailPage() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
-  }, [load]);
+  }, [load, isLoaded, isSignedIn]);
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -117,19 +118,19 @@ export default function ContestDetailPage() {
   // Automatic start/end handling client-side: when the countdown crosses the
   // start/end boundary, refetch once so status + problems update by themselves.
   useEffect(() => {
-    if (!contest || boundaryReloaded.current) return;
+    if (!contest) return;
     const boundary =
       contest.status === "Active"
         ? new Date(contest.endsAt).getTime()
         : contest.status === "Registration Open" || contest.status === "Upcoming"
           ? new Date(contest.startsAt).getTime()
           : null;
-    if (boundary !== null && now >= boundary) {
-      boundaryReloaded.current = true;
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+    const key = `${id}:${boundary}`;
+    if (boundary !== null && now >= boundary && boundaryReloaded.current !== key) {
+      boundaryReloaded.current = key;
       void load();
     }
-  }, [now, contest, load]);
+  }, [now, contest, load, id]);
 
   const countdown = useMemo(() => {
     if (!contest) return "00:00:00";
@@ -224,8 +225,13 @@ export default function ContestDetailPage() {
     );
   }
 
-  const canEnterArena = contest.status === "Active" && contest.registered;
-  const showRegister = contest.status === "Registration Open" || contest.status === "Upcoming" || contest.status === "Active";
+  const participation = getArenaParticipation(
+    { status: contest.dbStatus, startsAt: new Date(contest.startsAt), endsAt: new Date(contest.endsAt) },
+    contest.virtualParticipation ? { startedAt: new Date(contest.virtualParticipation.startedAt), endsAt: new Date(contest.virtualParticipation.endsAt) } : null,
+    new Date(now),
+  );
+  const canEnterArena = participation === "official" && contest.registered;
+  const showRegister = contest.dbStatus === "live" && now < new Date(contest.endsAt).getTime();
 
   return (
     <>
@@ -266,7 +272,7 @@ export default function ContestDetailPage() {
               <span className="text-xs font-mono text-kjtext-muted">{contest.problemsCount} total</span>
             </div>
             {contest.problems.length === 0 ? (
-              <p className="px-5 py-8 text-sm font-mono text-kjtext-muted text-center">No problems assigned to this contest yet.</p>
+              <p className="px-5 py-8 text-sm font-mono text-kjtext-muted text-center">{contest.problemsCount > 0 ? "Problems unlock when the contest starts and you are registered." : "No problems assigned to this contest yet."}</p>
             ) : (
               contest.problems
                 .slice()
@@ -334,7 +340,7 @@ export default function ContestDetailPage() {
                 </>
               ) : null}
               {contest.status === "Finished" && !contest.virtualParticipation && isSignedIn && <button onClick={() => void handleVirtualStart()} disabled={registering} className="mt-3 w-full rounded border border-kjprimary px-4 py-3 text-xs font-mono font-bold text-kjprimary disabled:opacity-50">START VIRTUAL ATTEMPT</button>}
-              {contest.virtualParticipation && new Date(contest.virtualParticipation.endsAt).getTime() > now && <Link href={`/contests/${encodeURIComponent(contest.id)}/arena?virtual=1`} className="mt-3 block rounded border border-kjprimary px-4 py-3 text-center text-xs font-mono font-bold text-kjprimary">ENTER VIRTUAL ARENA · UNTIL {formatDate(contest.virtualParticipation.endsAt)}</Link>}
+              {participation === "virtual" && contest.virtualParticipation && <Link href={`/contests/${encodeURIComponent(contest.id)}/arena?virtual=1`} className="mt-3 block rounded border border-kjprimary px-4 py-3 text-center text-xs font-mono font-bold text-kjprimary">ENTER VIRTUAL ARENA · UNTIL {formatDate(contest.virtualParticipation.endsAt)}</Link>}
               {canEnterArena ? (
                 <Link
                   href={`/contests/${encodeURIComponent(contest.id)}/arena`}

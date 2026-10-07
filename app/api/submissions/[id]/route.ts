@@ -5,6 +5,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { submissions } from "@/db/schema";
 import { resolveOrganizationContext } from "@/lib/organizations";
+import { publicCaseResults, publicErrorMessage } from "../public-result";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -60,12 +61,12 @@ async function handleGET(
     memoryUsedMb: row.memoryUsedMb,
     passedTests: row.passedTests,
     totalTests: row.totalTests,
-    errorMessage: row.errorMessage,
-    caseResults: row.caseResults,
+    errorMessage: publicErrorMessage(row),
+    caseResults: publicCaseResults(row.caseResults, row.mode),
     submittedAt: row.submittedAt?.toISOString() ?? null,
     completedAt: row.completedAt?.toISOString() ?? null,
     startedAt: row.startedAt?.toISOString() ?? null,
-  });
+  }, { headers: { "Cache-Control": "private, no-store" } });
 }
 
 export const GET = withApiGuard(handleGET);

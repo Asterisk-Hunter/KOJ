@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Navigation from "@/app/components/Navigation";
 import ContestCommunication from "@/app/contests/[id]/ContestCommunication";
+import { getArenaParticipation } from "@/app/api/contests/participation-policy";
 
 type UiStatus = "Active" | "Registration Open" | "Upcoming" | "Finished";
 
@@ -39,18 +40,7 @@ const BALLOON_COLORS = [
   "#10b981", "#6366f1", "#f59e0b", "#f43f5e",
 ];
 
-type ArenaSubmission = {
-  id: number;
-  problemId: number;
-  problemTitle: string;
-  language: string;
-  status: string;
-  passedTests: number | null;
-  totalTests: number | null;
-  executionTimeMs: number | null;
-  memoryUsedMb: number | null;
-  submittedAt: string | null;
-};
+type ArenaProgress = { problemId: number; attempts: number; isSolved: boolean };
 
 export default function ContestArenaPage() {
   const { id } = useParams<{ id: string }>();
@@ -58,17 +48,17 @@ export default function ContestArenaPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const [submissions, setSubmissions] = useState<ArenaSubmission[]>([]);
+  const [progress, setProgress] = useState<ArenaProgress[]>([]);
   const [loadingSubmissions, setLoadingSubmissions] = useState(false);
 
   const loadSubmissions = useCallback(async (numericContestId: number) => {
     setLoadingSubmissions(true);
     try {
-      const res = await fetch(`/api/submissions?contestId=${numericContestId}`, { cache: "no-store" });
+      const res = await fetch(`/api/contests/${numericContestId}/progress`, { cache: "no-store" });
       if (res.ok) {
         const data = (await res.json()) as unknown;
         if (Array.isArray(data)) {
-          setSubmissions(data as ArenaSubmission[]);
+          setProgress(data as ArenaProgress[]);
         }
       }
     } catch {
@@ -111,6 +101,15 @@ export default function ContestArenaPage() {
     return () => clearInterval(t);
   }, []);
 
+  useEffect(() => {
+    if (!contest) return;
+    const deadline = new Date(contest.virtualParticipation?.endsAt ?? contest.endsAt).getTime();
+    const timer = setInterval(() => {
+      if (Date.now() < deadline) void loadSubmissions(contest.numericId);
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [contest, loadSubmissions]);
+
   const diffMs = useMemo(() => {
     if (!contest) return 0;
     return Math.max(0, new Date(contest.virtualParticipation?.endsAt ?? contest.endsAt).getTime() - now);
@@ -129,15 +128,9 @@ export default function ContestArenaPage() {
 
   const problemStatusMap = useMemo(() => {
     const map = new Map<number, { isSolved: boolean; attempts: number }>();
-    for (const sub of submissions) {
-      const prev = map.get(sub.problemId) ?? { isSolved: false, attempts: 0 };
-      map.set(sub.problemId, {
-        isSolved: prev.isSolved || sub.status === "accepted",
-        attempts: prev.attempts + 1,
-      });
-    }
+    for (const item of progress) map.set(item.problemId, { isSolved: item.isSolved, attempts: item.attempts });
     return map;
-  }, [submissions]);
+  }, [progress]);
 
   const solvedCount = useMemo(() => {
     let count = 0;
@@ -174,8 +167,13 @@ export default function ContestArenaPage() {
     );
   }
 
-  const isVirtual = contest.virtualParticipation !== null && now < new Date(contest.virtualParticipation.endsAt).getTime();
-  const isLive = contest.status === "Active" || isVirtual;
+  const participation = getArenaParticipation(
+    { status: contest.dbStatus, startsAt: new Date(contest.startsAt), endsAt: new Date(contest.endsAt) },
+    contest.virtualParticipation ? { startedAt: new Date(contest.virtualParticipation.startedAt), endsAt: new Date(contest.virtualParticipation.endsAt) } : null,
+    new Date(now),
+  );
+  const isVirtual = participation === "virtual";
+  const isLive = participation !== null;
   const isRegistered = contest.registered || isVirtual;
 
   if (!isLive) {
@@ -246,7 +244,7 @@ export default function ContestArenaPage() {
               <h1 className="text-sm sm:text-base font-mono font-bold text-kjtext">{contest.title}</h1>
             </div>
             <Link
-              href={`/rankings?contestId=${contest.numericId}`}
+              href={`/rankings?contestId=${contest.numericId}${isVirtual ? "&virtual=1" : ""}`}
               className="text-[10px] font-mono text-kjprimary border border-kjprimary/30 px-2.5 py-1 rounded hover:bg-kjprimary/10 transition-colors"
             >
               STANDINGS →
@@ -385,7 +383,7 @@ export default function ContestArenaPage() {
           )}
         </div>
 
-        {!isVirtual && <ContestCommunication contestId={contest.id} registered={isRegistered} />}
+        {!isVirtual && <ContestCommunication contestId={contest.id} numericContestId={contest.numericId} registered={isRegistered} />}
 
         <Link
           href={`/contests/${encodeURIComponent(contest.id)}`}

@@ -10,6 +10,7 @@ test("only active setters and admins manage contest communication", () => {
   assert.equal(canManageContestCommunication({ userId: "admin", role: "admin", suspended: false }), true);
   assert.equal(canManageContestCommunication({ userId: "staff", role: "setter", suspended: true }), false);
   assert.equal(canManageContestCommunication({ userId: "contestant", role: "contestant", suspended: false }), false);
+  assert.equal(canManageContestCommunication({ userId: null, role: "setter", suspended: false }), false);
 });
 
 test("private answers are limited to the asker and active staff", () => {

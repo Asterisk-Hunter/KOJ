@@ -33,6 +33,7 @@ async function handleGET(
   const { userId } = await auth();
   const organization = await resolveOrganizationContext(userId);
   if (!organization) return jsonError("organization not found", 404);
+  if (organization.suspended) return jsonError("account suspended", 403);
 
   const contestIdRaw = req.nextUrl.searchParams.get("contestId");
   let effectiveContestId: number | null = null;
@@ -70,7 +71,7 @@ async function handleGET(
         .limit(1);
       if (contestRows.length > 0) {
         const contest = contestRows[0];
-        if (contest.status === "live") {
+        if (contest.status === "live" && Date.now() >= contest.startsAt.getTime() && Date.now() < contest.endsAt.getTime()) {
           const reg = await db
             .select()
             .from(contestRegistrations)

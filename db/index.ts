@@ -23,19 +23,26 @@ declare global {
   var __koj_pg_pool: Pool | undefined;
 }
 
-const pool =
-  global.__koj_pg_pool ??
-  new Pool({
+function createPool(): Pool {
+  const created = new Pool({
     connectionString: databaseUrl.toString(),
     max: 10,
     connectionTimeoutMillis: 5000,
     statement_timeout: 10000,
     query_timeout: 15000,
+    keepAlive: true,
+    idleTimeoutMillis: 30000,
   });
-
-if (process.env.NODE_ENV !== "production") {
-  global.__koj_pg_pool = pool;
+  // pg evicts a failed idle client before emitting this event. Without a
+  // listener, an ordinary disconnect becomes an uncaught process exception.
+  created.on("error", () => {
+    console.error("[db] idle connection failed; pool will replace it");
+  });
+  return created;
 }
+
+const pool = global.__koj_pg_pool ?? createPool();
+global.__koj_pg_pool = pool;
 
 export const db = drizzle(pool, { schema });
 export { pool };

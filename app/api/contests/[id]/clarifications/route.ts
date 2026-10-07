@@ -7,6 +7,7 @@ import { contestClarifications, contestAnnouncements, contestRegistrations, cont
 import { MAX_CONTEST_REGISTRATION_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 import { canManageContestCommunication, canReadClarification } from "@/app/api/contests/clarification-policy";
 import { resolveOrganizationContext } from "@/lib/organizations";
+import { isOfficialContestActive } from "@/app/api/contests/participation-policy";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -78,9 +79,17 @@ async function handlePOST(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (typeof question !== "string" || !question.trim() || question.trim().length > 2000) {
     return NextResponse.json({ error: "question must be 1..2000 characters" }, { status: 400 });
   }
-  const [created] = await db.insert(contestClarifications).values({ contestId: contest.id, authorId: userId, question: question.trim() })
-    .returning({ id: contestClarifications.id });
-  return NextResponse.json({ id: created.id }, { status: 201 });
+  return db.transaction(async (tx) => {
+    const [current] = await tx.select().from(contests).where(and(
+      eq(contests.id, contest.id), eq(contests.organizationId, organization.organizationId),
+    )).limit(1).for("update");
+    if (!current || !isOfficialContestActive(current, new Date())) {
+      return NextResponse.json({ error: "questions are accepted only during a live contest" }, { status: 403 });
+    }
+    const [created] = await tx.insert(contestClarifications).values({ contestId: current.id, authorId: userId, question: question.trim() })
+      .returning({ id: contestClarifications.id });
+    return NextResponse.json({ id: created.id }, { status: 201 });
+  });
 }
 
 export const GET = withApiGuard(handleGET);

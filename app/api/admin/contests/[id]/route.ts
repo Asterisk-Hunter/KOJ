@@ -1,6 +1,6 @@
 import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import {
   contestProblems,
@@ -20,6 +20,7 @@ import {
 } from "@/app/api/contests/lifecycle";
 import { hashInviteCode } from "@/app/api/contests/invite-code";
 import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
+import { withLockedContest } from "@/app/api/admin/contests/mutation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -105,164 +106,111 @@ async function handlePATCH(
   if (!grant.ok) return grant.response;
 
   const { id: idRaw } = await ctx.params;
-  const contest = await findContest(idRaw, grant.context.organizationId);
-  if (!contest) return jsonError("contest not found", 404);
-
   const parsed = await readBoundedJsonObject(req, MAX_CONTEST_BODY_BYTES, "invalid json");
   if (!parsed.ok) return parsed.response;
   const b = parsed.value as PatchBody;
-  const now = new Date();
-  const current = contest.status as ContestStatus;
+  return withLockedContest(idRaw, grant.context.organizationId, async (tx, contest) => {
+    const now = new Date();
+    const current = contest.status as ContestStatus;
 
-  // --- status transition ---
-  if (b.status !== undefined) {
-    if (typeof b.status !== "string") return jsonError("status must be a string", 400);
-    const target = b.status as ContestStatus;
-    if (!nextStatuses(current).includes(target)) {
-      return jsonError(`cannot transition ${current} -> ${b.status}`, 400);
-    }
+    // --- status transition ---
+    if (b.status !== undefined) {
+      if (typeof b.status !== "string") return jsonError("status must be a string", 400);
+      const target = b.status as ContestStatus;
+      if (!nextStatuses(current).includes(target)) {
+        return jsonError(`cannot transition ${current} -> ${b.status}`, 400);
+      }
 
-    if (current === "draft" && target === "live") {
-      const links = await db
-        .select({ problemId: contestProblems.problemId })
-        .from(contestProblems)
-        .where(and(
-          eq(contestProblems.contestId, contest.id),
-          eq(contestProblems.organizationId, grant.context.organizationId),
-        ));
-      if (links.length === 0) return jsonError("cannot publish a contest with no problems", 400);
-      await db.transaction(async (tx) => {
-        await tx.update(contests).set({ status: "live", updatedAt: now }).where(and(
-          eq(contests.id, contest.id),
-          eq(contests.organizationId, grant.context.organizationId),
-        ));
-        await lockLinkedProblems(contest.id, now, tx);
-        await recordAdminAuditEvent(tx, {
-          organizationId: grant.context.organizationId,
-          actorId: grant.userId,
-          action: "contest.status_changed",
-          entityType: "contest",
-          entityId: contest.id,
-          metadata: { status: target },
-        });
-      });
-      return NextResponse.json({ id: contest.id, status: "live" });
-    }
-
-    if (current === "live" && target === "draft") {
-      if (now >= contest.startsAt) {
+      const patch: Partial<typeof contests.$inferInsert> = { status: target, updatedAt: now };
+      if (current === "draft" && target === "live") {
+        if (now >= contest.endsAt) return jsonError("cannot publish an expired contest", 400);
+        const links = await tx.select({ problemId: contestProblems.problemId }).from(contestProblems)
+          .where(and(eq(contestProblems.contestId, contest.id), eq(contestProblems.organizationId, grant.context.organizationId)));
+        if (links.length === 0) return jsonError("cannot publish a contest with no problems", 400);
+        // Lock in ID order so two contests cannot publish the same draft problems.
+        const linked = await tx.select({ id: problems.id, status: problems.status }).from(problems)
+          .where(and(inArray(problems.id, links.map((link) => link.problemId)), eq(problems.organizationId, grant.context.organizationId)))
+          .orderBy(asc(problems.id)).for("update");
+        if (linked.length !== links.length || linked.some((problem) => problem.status !== "draft")) {
+          return jsonError("contest problems must still be draft before publishing", 409);
+        }
+        if (new Date() >= contest.endsAt) return jsonError("cannot publish an expired contest", 400);
+      }
+      if (current === "live" && target === "draft" && now >= contest.startsAt) {
         return jsonError("cannot unpublish after the contest has started", 400);
       }
-      await db.transaction(async (tx) => {
-        await tx.update(contests).set({ status: "draft", updatedAt: now }).where(and(
-          eq(contests.id, contest.id),
-          eq(contests.organizationId, grant.context.organizationId),
-        ));
-        await revertLinkedProblems(contest.id, now, tx);
-        await recordAdminAuditEvent(tx, {
-          organizationId: grant.context.organizationId,
-          actorId: grant.userId,
-          action: "contest.status_changed",
-          entityType: "contest",
-          entityId: contest.id,
-          metadata: { status: target },
-        });
-      });
-      return NextResponse.json({ id: contest.id, status: "draft" });
-    }
-
-    if (current === "live" && target === "ended") {
-      const endsAt = contest.endsAt.getTime() > now.getTime() ? now : contest.endsAt;
-      await db.transaction(async (tx) => {
-        await tx.update(contests).set({ status: "ended", endsAt, updatedAt: now }).where(and(
-          eq(contests.id, contest.id),
-          eq(contests.organizationId, grant.context.organizationId),
-        ));
-        await releaseLinkedProblems([contest.id], now, tx);
-        await recordAdminAuditEvent(tx, {
-          organizationId: grant.context.organizationId,
-          actorId: grant.userId,
-          action: "contest.status_changed",
-          entityType: "contest",
-          entityId: contest.id,
-          metadata: { status: target },
-        });
-      });
-      return NextResponse.json({ id: contest.id, status: "ended" });
-    }
-
-    await db.transaction(async (tx) => {
-      await tx.update(contests).set({ status: target, updatedAt: now }).where(and(
-        eq(contests.id, contest.id),
-        eq(contests.organizationId, grant.context.organizationId),
+      if (current === "live" && target === "ended") {
+        if (now <= contest.startsAt) return jsonError("cannot end a contest before it starts", 400);
+        patch.endsAt = contest.endsAt > now ? now : contest.endsAt;
+      }
+      await tx.update(contests).set(patch).where(and(
+        eq(contests.id, contest.id), eq(contests.organizationId, grant.context.organizationId),
       ));
+      if (current === "draft" && target === "live") await lockLinkedProblems(contest.id, now, tx);
+      if (current === "live" && target === "draft") await revertLinkedProblems(contest.id, now, tx);
+      if (current === "live" && target === "ended") await releaseLinkedProblems([contest.id], now, tx);
       await recordAdminAuditEvent(tx, {
-        organizationId: grant.context.organizationId,
-        actorId: grant.userId,
-        action: "contest.status_changed",
-        entityType: "contest",
-        entityId: contest.id,
+        organizationId: grant.context.organizationId, actorId: grant.userId,
+        action: "contest.status_changed", entityType: "contest", entityId: contest.id,
         metadata: { status: target },
       });
-    });
-    return NextResponse.json({ id: contest.id, status: target });
-  }
-
-  // --- metadata edits: draft only (preserves live/history integrity) ---
-  if (current !== "draft") {
-    return jsonError("only draft contests can be edited", 400);
-  }
-
-  const patch: Partial<typeof contests.$inferInsert> = { updatedAt: now };
-
-  if (b.title !== undefined) {
-    if (typeof b.title !== "string" || b.title.trim().length === 0) {
-      return jsonError("title must be non-empty", 400);
+      return NextResponse.json({ id: contest.id, status: target });
     }
-    if (b.title.trim().length > 200) return jsonError("title too long", 400);
-    patch.title = b.title.trim();
-  }
-  if (b.description !== undefined) {
-    if (typeof b.description !== "string") return jsonError("description must be a string", 400);
-    if (b.description.length > 5000) return jsonError("description too long", 400);
-    patch.description = b.description;
-  }
-  if (b.inviteCode !== undefined) {
-    if (b.inviteCode === null) {
-      patch.inviteCode = null;
-      patch.inviteCodeHash = null;
-    } else if (
-      typeof b.inviteCode !== "string" ||
-      b.inviteCode.trim().length === 0 ||
-      b.inviteCode.trim().length > 64
-    ) {
-      return jsonError("inviteCode must be a string 1..64 chars or null", 400);
-    } else {
-      // Store hashed only; clear any legacy plaintext (rotation).
-      patch.inviteCode = null;
-      patch.inviteCodeHash = hashInviteCode(b.inviteCode.trim());
+
+    // --- metadata edits: draft only (preserves live/history integrity) ---
+    if (current !== "draft") {
+      return jsonError("only draft contests can be edited", 400);
     }
-  }
 
-  let startsAt = contest.startsAt;
-  let endsAt = contest.endsAt;
-  if (b.startsAt !== undefined) {
-    if (typeof b.startsAt !== "string") return jsonError("startsAt must be an ISO string", 400);
-    startsAt = new Date(b.startsAt);
-    if (Number.isNaN(startsAt.getTime())) return jsonError("startsAt must be a valid date", 400);
-    patch.startsAt = startsAt;
-  }
-  if (b.endsAt !== undefined) {
-    if (typeof b.endsAt !== "string") return jsonError("endsAt must be an ISO string", 400);
-    endsAt = new Date(b.endsAt);
-    if (Number.isNaN(endsAt.getTime())) return jsonError("endsAt must be a valid date", 400);
-    patch.endsAt = endsAt;
-  }
-  if (endsAt.getTime() <= startsAt.getTime()) {
-    return jsonError("endsAt must be after startsAt", 400);
-  }
+    const patch: Partial<typeof contests.$inferInsert> = { updatedAt: now };
 
-  await db.transaction(async (tx) => {
+    if (b.title !== undefined) {
+      if (typeof b.title !== "string" || b.title.trim().length === 0) {
+        return jsonError("title must be non-empty", 400);
+      }
+      if (b.title.trim().length > 200) return jsonError("title too long", 400);
+      patch.title = b.title.trim();
+    }
+    if (b.description !== undefined) {
+      if (typeof b.description !== "string") return jsonError("description must be a string", 400);
+      if (b.description.length > 5000) return jsonError("description too long", 400);
+      patch.description = b.description;
+    }
+    if (b.inviteCode !== undefined) {
+      if (b.inviteCode === null) {
+        patch.inviteCode = null;
+        patch.inviteCodeHash = null;
+      } else if (
+        typeof b.inviteCode !== "string" ||
+        b.inviteCode.trim().length === 0 ||
+        b.inviteCode.trim().length > 64
+      ) {
+        return jsonError("inviteCode must be a string 1..64 chars or null", 400);
+      } else {
+        // Store hashed only; clear any legacy plaintext (rotation).
+        patch.inviteCode = null;
+        patch.inviteCodeHash = hashInviteCode(b.inviteCode.trim());
+      }
+    }
+
+    let startsAt = contest.startsAt;
+    let endsAt = contest.endsAt;
+    if (b.startsAt !== undefined) {
+      if (typeof b.startsAt !== "string") return jsonError("startsAt must be an ISO string", 400);
+      startsAt = new Date(b.startsAt);
+      if (Number.isNaN(startsAt.getTime())) return jsonError("startsAt must be a valid date", 400);
+      patch.startsAt = startsAt;
+    }
+    if (b.endsAt !== undefined) {
+      if (typeof b.endsAt !== "string") return jsonError("endsAt must be an ISO string", 400);
+      endsAt = new Date(b.endsAt);
+      if (Number.isNaN(endsAt.getTime())) return jsonError("endsAt must be a valid date", 400);
+      patch.endsAt = endsAt;
+    }
+    if (endsAt.getTime() <= startsAt.getTime()) {
+      return jsonError("endsAt must be after startsAt", 400);
+    }
+
     await tx.update(contests).set(patch).where(and(
       eq(contests.id, contest.id),
       eq(contests.organizationId, grant.context.organizationId),
@@ -275,26 +223,24 @@ async function handlePATCH(
       entityId: contest.id,
       metadata: { count: Object.keys(patch).filter((field) => field !== "updatedAt").length },
     });
-  });
-  return NextResponse.json({ id: contest.id, status: current });
-}
-
-/** Admin: delete a draft contest (links + registrations cascade). */
-async function handleDELETE(
-  _req: NextRequest,
-  ctx: { params: Promise<{ id: string }> },
-) {
-  const grant = await requireContestManager();
-  if (!grant.ok) return grant.response;
-
-  const { id: idRaw } = await ctx.params;
-  const contest = await findContest(idRaw, grant.context.organizationId);
-  if (!contest) return jsonError("contest not found", 404);
-  if (contest.status !== "draft") {
-    return jsonError("only draft contests can be deleted", 400);
+    return NextResponse.json({ id: contest.id, status: current });
+    });
   }
 
-  await db.transaction(async (tx) => {
+  /** Admin: delete a draft contest (links + registrations cascade). */
+  async function handleDELETE(
+    _req: NextRequest,
+    ctx: { params: Promise<{ id: string }> },
+  ) {
+    const grant = await requireContestManager();
+    if (!grant.ok) return grant.response;
+
+    const { id: idRaw } = await ctx.params;
+  return withLockedContest(idRaw, grant.context.organizationId, async (tx, contest) => {
+    if (contest.status !== "draft") {
+      return jsonError("only draft contests can be deleted", 400);
+    }
+
     await tx.delete(contests).where(and(
       eq(contests.id, contest.id),
       eq(contests.organizationId, grant.context.organizationId),
@@ -306,10 +252,10 @@ async function handleDELETE(
       entityType: "contest",
       entityId: contest.id,
     });
-  });
-  return NextResponse.json({ deleted: true });
-}
+    return NextResponse.json({ deleted: true });
+    });
+  }
 
-export const GET = withApiGuard(handleGET);
-export const PATCH = withApiGuard(handlePATCH);
-export const DELETE = withApiGuard(handleDELETE);
+  export const GET = withApiGuard(handleGET);
+  export const PATCH = withApiGuard(handlePATCH);
+  export const DELETE = withApiGuard(handleDELETE);

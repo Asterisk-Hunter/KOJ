@@ -11,7 +11,7 @@ export type ClarificationRecord = {
 };
 
 export function canManageContestCommunication(viewer: ClarificationViewer): boolean {
-  return !viewer.suspended && (viewer.role === "admin" || viewer.role === "setter");
+  return viewer.userId !== null && !viewer.suspended && (viewer.role === "admin" || viewer.role === "setter");
 }
 
 export function canReadClarification(viewer: ClarificationViewer, record: ClarificationRecord): boolean {

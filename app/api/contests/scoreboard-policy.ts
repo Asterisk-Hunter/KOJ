@@ -12,6 +12,18 @@ export function getScoreboardFreezeAt(
   return autoFreezeAt;
 }
 
+/** Explicit freezing must not reveal results already hidden by an active freeze. */
+export function getManualFreezeAt(
+  mode: FreezeMode,
+  manualFrozenAt: Date | null,
+  startsAt: Date,
+  endsAt: Date,
+  now: Date,
+): Date {
+  const current = getScoreboardFreezeAt(mode, manualFrozenAt, startsAt, endsAt);
+  return current !== null && current <= now ? current : now;
+}
+
 export function selectRevealedSubmissionIds(
   submissions: readonly { id: number; submittedAt: Date }[],
   freezeAt: Date | null,

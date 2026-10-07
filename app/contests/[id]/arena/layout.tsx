@@ -2,7 +2,8 @@ import { auth } from "@clerk/nextjs/server";
 import { and, eq } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
 import { db } from "@/db";
-import { contestRegistrations, contests } from "@/db/schema";
+import { contestRegistrations, contestVirtualRegistrations, contests } from "@/db/schema";
+import { canStartVirtualAttempt, isOfficialContestActive, isVirtualAttemptActive } from "@/app/api/contests/participation-policy";
 import { resolveOrganizationContext } from "@/lib/organizations";
 
 export const runtime = "nodejs";
@@ -44,11 +45,15 @@ export default async function ArenaLayout({
 
   if (!contest) notFound();
 
-  const now = Date.now();
-  const isLive = contest.status === "live" &&
-    now >= contest.startsAt.getTime() &&
-    now < contest.endsAt.getTime();
-  if (!isLive) redirect(`/contests/${encodeURIComponent(id)}`);
+  const now = new Date();
+  if (canStartVirtualAttempt(contest, now)) {
+    const [attempt] = await db.select({ startedAt: contestVirtualRegistrations.startedAt, endsAt: contestVirtualRegistrations.endsAt })
+      .from(contestVirtualRegistrations)
+      .where(and(eq(contestVirtualRegistrations.contestId, contest.id), eq(contestVirtualRegistrations.userId, userId))).limit(1);
+    if (attempt && now >= attempt.startedAt && isVirtualAttemptActive(now, attempt.endsAt)) return children;
+    redirect(`/contests/${encodeURIComponent(id)}`);
+  }
+  if (!isOfficialContestActive(contest, now)) redirect(`/contests/${encodeURIComponent(id)}`);
 
   const registrations = await db
     .select({ contestId: contestRegistrations.contestId })

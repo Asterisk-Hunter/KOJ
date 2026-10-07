@@ -3,10 +3,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { contestProblems, contestRegistrations, contests, problems } from "@/db/schema";
+import { contestProblems, contestRegistrations, contestVirtualRegistrations, contests, problems } from "@/db/schema";
 import { MAX_INTERACTIVE_RUN_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 import { parseOutputComparator, parseOutputTolerance } from "@/app/api/admin/problems/comparator";
 import { resolveOrganizationContext } from "@/lib/organizations";
+import { consumeRateBudget } from "@/app/api/rate-limit";
+import { getArenaParticipation } from "@/app/api/contests/participation-policy";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,9 +28,9 @@ type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
 interface SingleRunBody {
   language: string;
   code: string;
-  input?: string;
-  expectedOutput?: string;
-  cases?: Array<{ stdin: string; expectedOutput: string }>;
+  input?: unknown;
+  expectedOutput?: unknown;
+  cases?: unknown;
   timeLimitMs?: number;
   memoryMb?: number;
   outputComparator?: unknown;
@@ -38,9 +40,6 @@ interface SingleRunBody {
   contestId?: unknown;
 }
 
-// In-memory rate limiting map for interactive testing: user ID -> last run timestamp
-const recentRuns = new Map<string, number>();
-const INTERACTIVE_RATE_LIMIT_MS = 2500; // 2.5s cooldown between runs
 
 function jsonError(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
@@ -55,26 +54,6 @@ async function handlePOST(req: NextRequest) {
   if (!organization) return jsonError("organization not found", 404);
   if (organization.suspended) return jsonError("account suspended", 403);
 
-  // Security check: Verify account is not suspended
-  // Rate limiting check
-  const now = Date.now();
-  const lastRun = recentRuns.get(userId);
-  if (lastRun && now - lastRun < INTERACTIVE_RATE_LIMIT_MS) {
-    const remainingSec = Math.ceil((INTERACTIVE_RATE_LIMIT_MS - (now - lastRun)) / 1000);
-    return NextResponse.json(
-      { error: `Please wait ${remainingSec}s before running again.` },
-      { status: 429, headers: { "Retry-After": String(remainingSec) } },
-    );
-  }
-  recentRuns.set(userId, now);
-
-  // Clean old entries periodically
-  if (recentRuns.size > 2000) {
-    const threshold = now - 60000;
-    for (const [uid, ts] of recentRuns.entries()) {
-      if (ts < threshold) recentRuns.delete(uid);
-    }
-  }
 
   const parsed = await readBoundedJsonObject(req, MAX_INTERACTIVE_RUN_BODY_BYTES, "invalid json");
   if (!parsed.ok) return parsed.response;
@@ -101,6 +80,14 @@ async function handlePOST(req: NextRequest) {
   if (relativeTolerance === null) return jsonError("relativeTolerance must be between 0 and 1", 400);
 
   let checkerCode: string | null = null;
+  let accessWindow: { startsAt: Date; endsAt: Date } | null = null;
+  if (b.contestId !== undefined && b.contestId !== null &&
+      (typeof b.contestId !== "number" || !Number.isSafeInteger(b.contestId) || b.contestId <= 0)) {
+    return jsonError("contestId must be a positive integer or null", 400);
+  }
+  if (b.contestId !== undefined && b.contestId !== null && b.problemId === undefined) {
+    return jsonError("problemId is required with contestId", 400);
+  }
   if (b.problemId !== undefined) {
     if (typeof b.problemId !== "number" || !Number.isInteger(b.problemId) || b.problemId <= 0) {
       return jsonError("problemId must be a positive integer", 400);
@@ -121,7 +108,7 @@ async function handlePOST(req: NextRequest) {
       .limit(1);
     const problem = problemRows[0];
     if (!problem || problem.status === "draft") return jsonError("problem not found", 404);
-    if (problem.status === "contest_active") {
+    if (problem.status === "contest_active" || (b.contestId !== undefined && b.contestId !== null)) {
       if (typeof b.contestId !== "number" || !Number.isInteger(b.contestId) || b.contestId <= 0) {
         return jsonError("contestId is required for contest problems", 400);
       }
@@ -134,25 +121,23 @@ async function handlePOST(req: NextRequest) {
         ))
         .limit(1);
       const contest = contestRows[0];
-      if (
-        !contest ||
-        contest.status !== "live" ||
-        Date.now() < new Date(contest.startsAt).getTime() ||
-        Date.now() >= contest.endsAt.getTime()
-      ) {
-        return jsonError("contest is not available", 403);
+      if (!contest) return jsonError("contest is not available", 403);
+      const [attempt] = contest.status === "ended" || contest.status === "archived"
+        ? await db.select({ startedAt: contestVirtualRegistrations.startedAt, endsAt: contestVirtualRegistrations.endsAt })
+          .from(contestVirtualRegistrations).where(and(
+            eq(contestVirtualRegistrations.contestId, b.contestId), eq(contestVirtualRegistrations.userId, userId),
+          )).limit(1)
+        : [];
+      const participation = getArenaParticipation(contest, attempt ?? null, new Date());
+      if (!participation) return jsonError("contest is not available or virtual participation expired", 403);
+      if (participation === "official") {
+        const registrations = await db.select({ userId: contestRegistrations.userId }).from(contestRegistrations)
+          .where(and(eq(contestRegistrations.contestId, b.contestId), eq(contestRegistrations.userId, userId))).limit(1);
+        if (registrations.length === 0) return jsonError("not registered for contest", 403);
+        accessWindow = { startsAt: contest.startsAt, endsAt: contest.endsAt };
+      } else if (attempt) {
+        accessWindow = { startsAt: attempt.startedAt, endsAt: attempt.endsAt };
       }
-      const registrations = await db
-        .select({ userId: contestRegistrations.userId })
-        .from(contestRegistrations)
-        .where(
-          and(
-            eq(contestRegistrations.contestId, b.contestId),
-            eq(contestRegistrations.userId, userId),
-          ),
-        )
-        .limit(1);
-      if (registrations.length === 0) return jsonError("not registered for contest", 403);
       const problemLinks = await db
         .select({ problemId: contestProblems.problemId })
         .from(contestProblems)
@@ -190,30 +175,39 @@ async function handlePOST(req: NextRequest) {
   // hidden-test content, so it is always flagged as a sample — otherwise the judge
   // redacts stdout and the runner shows "(no stdout)" beside a passing verdict.
   let judgeCases: Array<{ stdin: string; expected_stdout: string; is_sample: boolean }>;
-  const isMultiCase = Array.isArray(b.cases) && b.cases.length > 0;
+  const isMultiCase = b.cases !== undefined;
   let customExpectedProvided = false;
 
-  if (isMultiCase && b.cases) {
+  if (isMultiCase) {
+    if (!Array.isArray(b.cases) || b.cases.length === 0) {
+      return jsonError("cases must be a non-empty array", 400);
+    }
     // Multi-case run (e.g. running against all sample test cases)
     if (b.cases.length > 10) {
       return jsonError("maximum 10 sample test cases allowed in interactive run", 400);
     }
+    judgeCases = [];
     for (let i = 0; i < b.cases.length; i++) {
-      const c = b.cases[i];
-      if (typeof c.stdin === "string" && Buffer.byteLength(c.stdin, "utf8") > 64 * 1024) {
+      const c: unknown = b.cases[i];
+      if (!c || typeof c !== "object" || Array.isArray(c) ||
+          !("stdin" in c) || typeof c.stdin !== "string" ||
+          !("expectedOutput" in c) || typeof c.expectedOutput !== "string") {
+        return jsonError(`test case #${i + 1} must have string stdin and expectedOutput`, 400);
+      }
+      if (Buffer.byteLength(c.stdin, "utf8") > 64 * 1024) {
         return jsonError(`test case #${i + 1} stdin exceeds 64KB limit`, 400);
       }
-      if (typeof c.expectedOutput === "string" && Buffer.byteLength(c.expectedOutput, "utf8") > 64 * 1024) {
+      if (Buffer.byteLength(c.expectedOutput, "utf8") > 64 * 1024) {
         return jsonError(`test case #${i + 1} expected output exceeds 64KB limit`, 400);
       }
+      judgeCases.push({ stdin: c.stdin, expected_stdout: c.expectedOutput, is_sample: true });
     }
-    judgeCases = b.cases.map((c) => ({
-      stdin: typeof c.stdin === "string" ? c.stdin : "",
-      expected_stdout: typeof c.expectedOutput === "string" ? c.expectedOutput : "",
-      is_sample: true,
-    }));
   } else {
     // Single custom test run
+    if ((b.input !== undefined && typeof b.input !== "string") ||
+        (b.expectedOutput !== undefined && typeof b.expectedOutput !== "string")) {
+      return jsonError("input and expectedOutput must be strings", 400);
+    }
     const input = typeof b.input === "string" ? b.input : "";
     const expectedOutput = typeof b.expectedOutput === "string" ? b.expectedOutput : "";
     customExpectedProvided = expectedOutput.trim().length > 0;
@@ -225,6 +219,16 @@ async function handlePOST(req: NextRequest) {
       return jsonError("expected output exceeds 64KB limit", 400);
     }
     judgeCases = [{ stdin: input, expected_stdout: expectedOutput, is_sample: true }];
+  }
+
+  const budget = await consumeRateBudget({ scope: "interactive-cooldown", identity: userId, limit: 1, windowSeconds: 2.5 });
+  if (!budget.allowed) {
+    return NextResponse.json({ error: `Please wait ${budget.retryAfter}s before running again.` },
+      { status: 429, headers: { "Retry-After": String(budget.retryAfter) } });
+  }
+  const dispatchAt = new Date();
+  if (accessWindow && (dispatchAt < accessWindow.startsAt || dispatchAt >= accessWindow.endsAt)) {
+    return jsonError("contest participation time expired", 403);
   }
 
   const fastApiUrl =
