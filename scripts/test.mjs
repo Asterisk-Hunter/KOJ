@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -20,7 +20,14 @@ const typescriptTests = [
 ];
 const typescriptResult = spawnSync(
   process.execPath,
-  ["--experimental-strip-types", "--test", ...typescriptTests],
+  [
+    "--experimental-strip-types",
+    "--experimental-test-module-mocks",
+    "--import",
+    pathToFileURL(path.join(root, "scripts", "ts-test-hooks.mjs")).href,
+    "--test",
+    ...typescriptTests,
+  ],
   { cwd: root, stdio: "inherit" },
 );
 
