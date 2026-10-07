@@ -12,6 +12,13 @@ type AdminUser = {
   createdAt: string;
 };
 
+type SyncPlan = {
+  checked: number;
+  directoryUsers: number;
+  missing: number;
+  planToken: string;
+};
+
 const inputCls =
   "bg-kjsurface border border-kjborder rounded px-3 py-2 text-sm font-mono text-kjtext";
 
@@ -26,6 +33,8 @@ export default function UsersSection() {
   const [total, setTotal] = useState<number | null>(null);
   const [degraded, setDegraded] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [syncPlan, setSyncPlan] = useState<SyncPlan | null>(null);
+  const [syncConfirmation, setSyncConfirmation] = useState("");
   const reqId = useRef(0);
 
   // Immediate fetch (used after mutations). Typing goes through the
@@ -65,24 +74,82 @@ export default function UsersSection() {
     return () => clearTimeout(t);
   }, [load]);
 
-  async function handleSync() {
+  async function handleSyncPreview() {
+    setSyncing(true);
+    setSyncPlan(null);
+    setSyncConfirmation("");
+    setNotice(null);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/users/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const j = (await res.json().catch(() => null)) as {
+        status?: string;
+        checked?: number;
+        directoryUsers?: number;
+        missing?: number;
+        planToken?: string;
+        error?: string;
+      } | null;
+      if (!res.ok) throw new Error(j?.error ?? `failed (${res.status})`);
+      if (
+        j?.status !== "preview" ||
+        typeof j.checked !== "number" ||
+        typeof j.directoryUsers !== "number" ||
+        typeof j.missing !== "number" ||
+        typeof j.planToken !== "string"
+      ) {
+        throw new Error("invalid reconciliation preview");
+      }
+      if (j.missing === 0) {
+        setNotice(`Directory is in sync: ${j.checked} Neon users checked against ${j.directoryUsers} Clerk users.`);
+      } else {
+        setSyncPlan({
+          checked: j.checked,
+          directoryUsers: j.directoryUsers,
+          missing: j.missing,
+          planToken: j.planToken,
+        });
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function handleConfirmSync() {
+    if (!syncPlan || syncConfirmation !== `DELETE OR ANONYMIZE ${syncPlan.missing} USERS`) return;
     setSyncing(true);
     setNotice(null);
     setError(null);
     try {
-      const res = await fetch("/api/admin/users/sync", { method: "POST" });
+      const res = await fetch("/api/admin/users/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmation: syncConfirmation, planToken: syncPlan.planToken }),
+      });
       const j = (await res.json().catch(() => null)) as {
+        status?: string;
         checked?: number;
         removed?: number;
         anonymized?: number;
         error?: string;
       } | null;
       if (!res.ok) throw new Error(j?.error ?? `failed (${res.status})`);
+      if (j?.status !== "applied") throw new Error("invalid reconciliation result");
+      setSyncPlan(null);
+      setSyncConfirmation("");
       setNotice(
-        `Directory synced: ${j?.checked ?? 0} checked, ${j?.removed ?? 0} removed, ${j?.anonymized ?? 0} anonymized.`,
+        `Directory reconciled: ${j.checked ?? 0} checked, ${j.removed ?? 0} removed, ${j.anonymized ?? 0} anonymized.`,
       );
       await load();
     } catch (e) {
+      setSyncPlan(null);
+      setSyncConfirmation("");
       setError(e instanceof Error ? e.message : "sync failed");
     } finally {
       setSyncing(false);
@@ -144,12 +211,12 @@ export default function UsersSection() {
           />
           <button
             type="button"
-            onClick={() => void handleSync()}
+            onClick={() => void handleSyncPreview()}
             disabled={syncing}
-            title="Reconcile with Clerk: purge FK-free deleted users, anonymize the rest"
+            title="Preview users missing from the complete Clerk directory"
             className={`${inputCls} text-xs uppercase tracking-widest hover:text-kjprimary disabled:opacity-50 cursor-pointer`}
           >
-            {syncing ? "Syncing…" : "Sync"}
+            {syncing ? "Checking…" : "Preview sync"}
           </button>
           <select
             value={roleFilter}
@@ -174,6 +241,43 @@ export default function UsersSection() {
         <p className="mx-5 mt-4 border border-red-500/20 bg-red-500/10 text-red-400 rounded p-3 text-xs font-mono">
           {error}
         </p>
+      )}
+
+      {syncPlan && (
+        <div className="mx-5 mt-4 border border-red-500/30 bg-red-500/10 rounded p-4 text-xs font-mono">
+          <p className="text-red-300">
+            {syncPlan.missing} of {syncPlan.checked} Neon users are absent from the current Clerk directory
+            ({syncPlan.directoryUsers} users). Applying this plan will delete or anonymize those records.
+          </p>
+          <p className="mt-2 text-red-300">
+            If the Clerk instance was switched or is misconfigured, stop here. Type DELETE OR ANONYMIZE {syncPlan.missing} USERS to continue.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <input
+              value={syncConfirmation}
+              onChange={(event) => setSyncConfirmation(event.target.value)}
+              placeholder={`DELETE OR ANONYMIZE ${syncPlan.missing} USERS`}
+              aria-label="Type the reconciliation confirmation phrase"
+              className={`${inputCls} min-w-64`}
+            />
+            <button
+              type="button"
+              onClick={() => void handleConfirmSync()}
+              disabled={syncing || syncConfirmation !== `DELETE OR ANONYMIZE ${syncPlan.missing} USERS`}
+              className={`${inputCls} text-red-300 border-red-500/40 disabled:opacity-50 cursor-pointer`}
+            >
+              {syncing ? "Applying…" : "Confirm reconciliation"}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setSyncPlan(null); setSyncConfirmation(""); }}
+              disabled={syncing}
+              className={`${inputCls} text-kjtext-muted disabled:opacity-50 cursor-pointer`}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
       )}
 
       {degraded && !loading && (
