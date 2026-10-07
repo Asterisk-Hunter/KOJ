@@ -1,4 +1,16 @@
-## 2026-10-07 — product-readiness continuation
+## 2026-10-07 — deployed readiness checkpoint
+
+Branch `feat/product-haul` is committed and pushed through `aa29fcb`. The VM source is pinned to that revision in GCS, staged as a release, and active through `/opt/koj/source`; Docker, the API, and the worker are active after a clean startup. Cloud Run `koj-api` serves revision `koj-api-00004-58z` with database and execution readiness. Vercel production is aliased to `https://koj.chandrateja.dev`; its web code predates only subsequent API/operations changes. The public health endpoint reports `db:true`.
+
+The deployed Docker host probe passed all seven languages and isolation/resource checks. A Cloud Run-to-VM C submission canary returned accepted without an infrastructure failure. Vercel Cron was manually triggered and its production route returned 200. Live judge-worker heartbeat was fresh and the queue empty at verification. Local release checks passed: `npm test` (Python 372 passed, 13 skipped, 38 deselected, plus TypeScript suites), lint, typecheck, and build. Linux Docker tests passed before the later boot-only change.
+
+Cloud Monitoring has enabled Cloud Run API 5xx and judge-VM CPU policies attached to an email channel for the owner-approved GCP account. Alert delivery and worker/queue freshness alerting remain unverified or absent. Redis remains optional and is not required for queue correctness.
+
+**Launch gates remain:** production Clerk is `domain_pending` and the public sign-in still uses development keys. Five Cloudflare DNS records and production OAuth setup are outstanding. The owner approved preserving nine development accounts, their organization memberships, roles, and submission history; do not switch keys or run the admin Sync until each old-to-new Clerk ID is verified and the Neon references are migrated. Clerk does not support direct development-to-production user transfer, so account ownership and the supported import/re-registration path need confirmation. No authenticated registration → submission → verdict → standings rehearsal, measured contest load, worker-freshness alert, or alert-delivery test has been completed. Do not declare the product live-contest ready yet.
+
+---
+
+## 2026-10-07 — product-readiness continuation (historical, superseded above)
 
 Branch `feat/product-haul` still contains the previous agent's uncommitted audit patch plus this continuation. Preserve it; do not reset the worktree. Local unit tests, lint, typecheck, and production build passed during review, but rerun all four after final edits before committing. The Docker Linux test image passed 391 tests (20 skipped); a disposable Postgres queue passed 20 integration tests, including worker SIGKILL lease recovery. No production schema write or deployment occurred.
 
