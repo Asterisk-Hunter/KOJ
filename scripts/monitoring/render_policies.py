@@ -11,8 +11,17 @@ def quoted_filter(value: str) -> str:
     return json.dumps(value)
 
 
-def render_policies(project_id: str, api_service: str, worker_pool: str, channel_id: str) -> dict[str, dict]:
-    channel = f"projects/{project_id}/notificationChannels/{channel_id}"
+def render_policies(
+    project_id: str,
+    api_service: str,
+    worker_instance_id: str,
+    channel_id: str | None,
+) -> dict[str, dict]:
+    channels = (
+        [f"projects/{project_id}/notificationChannels/{channel_id}"]
+        if channel_id
+        else []
+    )
 
     return {
         "api-5xx.json": {
@@ -47,33 +56,40 @@ def render_policies(project_id: str, api_service: str, worker_pool: str, channel
                     },
                 }
             ],
-            "notificationChannels": [channel],
+            "notificationChannels": channels,
             "enabled": True,
         },
-        "worker-errors.json": {
-            "displayName": "KOJ Cloud Run worker: error log",
+        "worker-vm-cpu.json": {
+            "displayName": "KOJ judge VM: sustained CPU utilization",
             "documentation": {
-                "content": "A KOJ judge worker emitted an ERROR log. Inspect the matching Cloud Logging entry and admin queue/worker observability before retrying jobs.",
+                "content": "The KOJ judge VM has sustained CPU utilization above 90%. Check VM and Docker resource usage, then inspect admin queue and worker observability. This policy does not verify worker process or Postgres queue freshness.",
                 "mimeType": "text/markdown",
             },
             "combiner": "OR",
             "conditions": [
                 {
-                    "displayName": "Judge worker error log entry",
-                    "conditionMatchedLog": {
+                    "displayName": "Judge VM CPU above 90% for five minutes",
+                    "conditionThreshold": {
                         "filter": (
-                            'resource.type = "cloud_run_workerpool" AND '
-                            f"resource.labels.workerpool_name = {quoted_filter(worker_pool)} AND "
-                            f"resource.labels.project_id = {quoted_filter(project_id)} AND severity >= ERROR"
-                        )
+                            'resource.type = "gce_instance" AND '
+                            'metric.type = "compute.googleapis.com/instance/cpu/utilization" AND '
+                            f"resource.labels.instance_id = {quoted_filter(worker_instance_id)} AND "
+                            f"resource.labels.project_id = {quoted_filter(project_id)}"
+                        ),
+                        "aggregations": [
+                            {
+                                "alignmentPeriod": "300s",
+                                "perSeriesAligner": "ALIGN_MEAN",
+                            }
+                        ],
+                        "comparison": "COMPARISON_GT",
+                        "thresholdValue": 0.9,
+                        "duration": "300s",
+                        "trigger": {"count": 1},
                     },
                 }
             ],
-            "notificationChannels": [channel],
-            "alertStrategy": {
-                "notificationRateLimit": {"period": "300s"},
-                "autoClose": "1800s",
-            },
+            "notificationChannels": channels,
             "enabled": True,
         },
     }
@@ -83,8 +99,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", required=True, help="Google Cloud project ID")
     parser.add_argument("--api-service", required=True, help="Cloud Run HTTP service name")
-    parser.add_argument("--worker-pool", required=True, help="Cloud Run worker pool name")
-    parser.add_argument("--notification-channel", required=True, help="Existing Monitoring channel ID")
+    parser.add_argument("--worker-instance-id", required=True, help="Numeric Compute Engine instance ID")
+    parser.add_argument("--notification-channel", help="Existing Monitoring channel ID")
     parser.add_argument("--output-dir", type=Path, required=True, help="Directory for rendered policy JSON")
     args = parser.parse_args()
 
@@ -92,7 +108,7 @@ def main() -> None:
     for filename, policy in render_policies(
         args.project,
         args.api_service,
-        args.worker_pool,
+        args.worker_instance_id,
         args.notification_channel,
     ).items():
         path = args.output_dir / filename
