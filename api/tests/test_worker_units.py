@@ -321,6 +321,7 @@ def test_run_requires_a_database_url(monkeypatch):
 
 
 def test_run_registers_and_unregisters_around_the_poll_loop(monkeypatch):
+    monkeypatch.setattr(worker, "validate_local_toolchains", lambda: None)
     monkeypatch.setattr(settings, "DATABASE_URL", "postgresql://user:pw@db/koj")
     monkeypatch.setattr(worker.db, "init_pool", lambda: None)
     monkeypatch.setattr(worker.db, "close_pool", _Recorder())

@@ -93,9 +93,10 @@ def test_heartbeat_renews_a_live_lease(monkeypatch):
     job = queue.ClaimedJob(id=4, submission_id=9, attempt=2, max_attempts=5)
 
     assert queue.heartbeat_worker("worker-1", job, 30) is True
-    assert "RETURNING id" in cursor.queries[0][0]
-    assert cursor.queries[0][1] == (30, 4, "worker-1", 2)
-    assert cursor.queries[1][1] == ("busy", 4, 4, "worker-1")
+    assert cursor.queries[0] == ("SELECT id FROM judge_jobs WHERE id = %s FOR NO KEY UPDATE", (4,))
+    assert "RETURNING id" in cursor.queries[1][0]
+    assert cursor.queries[1][1] == (30, 4, "worker-1", 2)
+    assert cursor.queries[2][1] == ("busy", 4, 4, "worker-1")
 
 
 def test_heartbeat_reports_a_lost_lease_without_touching_the_worker(monkeypatch):
@@ -103,7 +104,7 @@ def test_heartbeat_reports_a_lost_lease_without_touching_the_worker(monkeypatch)
     job = queue.ClaimedJob(id=4, submission_id=9, attempt=2, max_attempts=5)
 
     assert queue.heartbeat_worker("worker-1", job, 30) is False
-    assert len(cursor.queries) == 1
+    assert len(cursor.queries) == 2
 
 
 def test_mark_worker_stopping_swallows_database_errors(monkeypatch):
@@ -153,11 +154,12 @@ def test_complete_job_fences_on_the_exact_lease(monkeypatch):
     job = queue.ClaimedJob(id=11, submission_id=22, attempt=2, max_attempts=5)
 
     assert queue.complete_job("worker-1", job, _result()) is False
-    fence_query, fence_params = cursor.queries[0]
+    assert cursor.queries[0] == ("SELECT id FROM judge_jobs WHERE id = %s FOR NO KEY UPDATE", (11,))
+    fence_query, fence_params = cursor.queries[1]
     assert "status = 'leased' AND leased_by = %s AND attempts = %s" in fence_query
-    assert "lease_expires_at > NOW()" in fence_query
+    assert "lease_expires_at > clock_timestamp()" in fence_query
     assert fence_params == (11, "worker-1", 2)
-    assert len(cursor.queries) == 1
+    assert len(cursor.queries) == 2
 
 
 def test_complete_job_writes_the_verdict_and_releases_the_worker(monkeypatch):
@@ -173,12 +175,12 @@ def test_complete_job_writes_the_verdict_and_releases_the_worker(monkeypatch):
     )
 
     assert queue.complete_job("worker-1", job, _result(case)) is True
-    submission_params = cursor.queries[1][1]
+    submission_params = cursor.queries[2][1]
     assert submission_params[:4] == ("accepted", 1, 1, 7)
     stored = json.loads(submission_params[6])
     assert stored[0]["stdout"] == "x" * 2048
     assert submission_params[7] == 22
-    assert cursor.queries[2][1] == ("worker-1",)
+    assert cursor.queries[3][1] == ("worker-1",)
 
 
 def test_serialize_cases_caps_the_sample_at_one_hundred(monkeypatch):
@@ -201,13 +203,13 @@ def test_retry_job_requeues_with_backoff(monkeypatch):
     job = queue.ClaimedJob(id=11, submission_id=22, attempt=2, max_attempts=5)
 
     assert queue.retry_job("worker-1", job, "sandbox down", total_tests=3) is True
-    _, job_params = cursor.queries[0]
+    _, job_params = cursor.queries[1]
     assert job_params[0] == "queued"
     assert job_params[1] == queue.retry_delay_seconds(2)
     assert job_params[2] is None
-    _, submission_params = cursor.queries[1]
+    _, submission_params = cursor.queries[2]
     assert submission_params == ("pending", 3, queue._INFRASTRUCTURE_ERROR_MESSAGE, None, 22)
-    assert cursor.queries[2][1] == ("worker-1",)
+    assert cursor.queries[3][1] == ("worker-1",)
 
 
 def test_retry_job_buries_the_final_attempt(monkeypatch):
@@ -215,10 +217,10 @@ def test_retry_job_buries_the_final_attempt(monkeypatch):
     job = queue.ClaimedJob(id=11, submission_id=22, attempt=5, max_attempts=5)
 
     assert queue.retry_job("worker-1", job, "sandbox down") is True
-    _, job_params = cursor.queries[0]
+    _, job_params = cursor.queries[1]
     assert job_params[0] == "dead"
     assert job_params[2] is not None
-    _, submission_params = cursor.queries[1]
+    _, submission_params = cursor.queries[2]
     assert submission_params[0] == "runtime_error"
     assert submission_params[4] is not None
 
@@ -228,17 +230,39 @@ def test_retry_job_refuses_a_stale_lease(monkeypatch):
     job = queue.ClaimedJob(id=11, submission_id=22, attempt=1, max_attempts=5)
 
     assert queue.retry_job("worker-1", job, "sandbox down") is False
-    assert len(cursor.queries) == 1
+    assert len(cursor.queries) == 2
 
 
 def test_mark_job_unavailable_buries_the_job_and_frees_the_worker(monkeypatch):
-    cursor = _install(monkeypatch, _Cursor())
+    cursor = _install(monkeypatch, _Cursor(fetchone_rows=[(11,)]))
     job = queue.ClaimedJob(id=11, submission_id=22, attempt=1, max_attempts=5)
 
     assert queue.mark_job_unavailable("worker-1", job) is None
-    assert "status = 'dead'" in cursor.queries[0][0]
-    assert "'submission is no longer judgeable'" in cursor.queries[0][0]
-    assert cursor.queries[1][1] == ("worker-1",)
+    assert "status = 'dead'" in cursor.queries[1][0]
+    assert "'submission is no longer judgeable'" in cursor.queries[1][0]
+    assert cursor.queries[2][1] == ("worker-1",)
+
+
+@pytest.mark.parametrize("operation", ["heartbeat", "complete", "retry", "unavailable"])
+def test_job_lock_failure_cannot_issue_any_write(monkeypatch, operation):
+    cursor = _install(monkeypatch, _Cursor())
+    job = queue.ClaimedJob(id=11, submission_id=22, attempt=2, max_attempts=5)
+
+    def lock_timeout(query, params=()):
+        cursor.queries.append((query, params))
+        raise RuntimeError("synthetic row lock timeout")
+
+    monkeypatch.setattr(cursor, "execute", lock_timeout)
+    with pytest.raises(RuntimeError, match="synthetic row lock timeout"):
+        if operation == "heartbeat":
+            queue.heartbeat_worker("worker-1", job, 30)
+        elif operation == "complete":
+            queue.complete_job("worker-1", job, _result())
+        elif operation == "retry":
+            queue.retry_job("worker-1", job, "sandbox down")
+        else:
+            queue.mark_job_unavailable("worker-1", job)
+    assert cursor.queries == [("SELECT id FROM judge_jobs WHERE id = %s FOR NO KEY UPDATE", (11,))]
 
 
 def test_finalize_exhausted_jobs_counts_buried_submissions(monkeypatch):
@@ -248,6 +272,7 @@ def test_finalize_exhausted_jobs_counts_buried_submissions(monkeypatch):
     query, params = cursor.queries[0]
     assert "attempts >= max_attempts" in query
     assert "judge_infra_error = true" in query
+    assert "FOR UPDATE SKIP LOCKED LIMIT 100" in query
     assert params == ()
 
 

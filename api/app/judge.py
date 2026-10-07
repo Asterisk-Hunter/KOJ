@@ -2,14 +2,14 @@
 
 Supported v1 languages: python, c, c++, java (SRS REQ-JUDGE-02).
 
-Backends selected by JUDGE_SANDBOX_MODE (see api/DEPLOYMENT_CONTRACT.md):
+Backends selected by JUDGE_SANDBOX_MODE (see api/README.md):
 
 * `docker` — container sandbox. Requires a Docker daemon on the judge host;
   without it judging fails closed with `runtime_error` + `infra_error=True`
   so callers never blame the contestant.
 * `cloudrun` — Cloud Run Preview sandbox launcher with a separate toolchain
   rootfs, default-denied egress, and no inherited parent credentials.
-* `rlimit` — host-toolchain process limits for trusted local development only.
+* `rlimit` — host-toolchain process limits for the trusted-college deployment.
 * `auto` (default) — Docker or Cloud Run launcher, otherwise fails closed.
 
 Docker sandbox (fixed server-side flags, never user-controlled):
@@ -30,6 +30,7 @@ here prints request bodies.
 
 from __future__ import annotations
 
+import ctypes
 import json
 import logging
 import math
@@ -126,6 +127,12 @@ _CXX_HARDEN_FLAGS = [
 # Robust Solution-class check (word-boundary; comment/string stripped
 # in _java_has_solution_class so `// class Solution` cannot spoof it).
 _JAVA_SOLUTION_CLASS_RE = re.compile(r"\bclass\s+Solution\b")
+_COMPILER_INFRA_ERROR_RE = re.compile(
+    r"^(?:[^\s:]+(?::\d+)*:\s*)?(?:(?:fatal )?error:\s*)?"
+    r"(?:resource temporarily unavailable|cannot allocate memory|internal compiler error|"
+    r"failed to create thread|unable to create native thread)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
 _SPECIAL_CHECKER_TIMEOUT_S = 2.0
 _CLOUDRUN_CLI = Path("/usr/local/gcp/bin/sandbox")
 _CLOUDRUN_ROOTFS = Path("/opt/koj-sandbox-root")
@@ -238,7 +245,7 @@ def _read_bounded_stream(
     output_limit_exceeded: threading.Event,
 ) -> None:
     while True:
-        block = stream.read(64 * 1024)
+        block = stream.read1(64 * 1024)
         if not block:
             return
         previous_size = total_bytes[0]
@@ -276,6 +283,9 @@ def _run_bounded_process(
     preexec_fn: Callable[[], None] | None = None,
     spawn_lock: threading.Lock | None = None,
 ) -> ProcessResult:
+    _enable_child_subreaper()
+    deadline = time.monotonic() + timeout_s
+
     def start_process() -> subprocess.Popen[bytes]:
         return subprocess.Popen(
             argv,
@@ -317,16 +327,28 @@ def _run_bounded_process(
             daemon=True,
         ),
     ]
-    for reader in readers:
-        reader.start()
     input_writer = threading.Thread(
         target=_write_process_input,
         args=(process.stdin, stdin_text),
         daemon=True,
     )
-    input_writer.start()
+    try:
+        for reader in readers:
+            reader.start()
+        input_writer.start()
+    except RuntimeError as error:
+        _kill_process_group(process)
+        process.wait()
+        _reap_process_group(process.pid)
+        for stream, reader in zip((stdout_stream, stderr_stream), readers):
+            if reader.ident is not None:
+                reader.join(timeout=2)
+            if not reader.is_alive():
+                stream.close()
+        if process.stdin is not None:
+            process.stdin.close()
+        raise SandboxUnavailable("failed to start process IO threads") from error
 
-    deadline = time.monotonic() + timeout_s
     timed_out = False
     while process.poll() is None:
         if output_limit_exceeded.is_set():
@@ -338,9 +360,16 @@ def _run_bounded_process(
             break
         time.sleep(0.01)
     returncode = process.wait()
+    # The session leader may exit while descendants still hold the pipes or
+    # consume resources. Reap its group on successful exits as well as timeouts.
+    _kill_process_group(process)
+    _reap_process_group(process.pid)
     input_writer.join(timeout=1)
     for reader in readers:
         reader.join(timeout=2)
+    for stream, reader in zip((stdout_stream, stderr_stream), readers):
+        if not reader.is_alive():
+            stream.close()
 
     stdout = bytes(stdout_buffer).decode("utf-8", errors="replace")
     stderr = bytes(stderr_buffer).decode("utf-8", errors="replace")
@@ -874,7 +903,7 @@ def _run_cloudrun(
 # rlimit backend (host toolchain)
 #
 # SRS §2.5 constraint 3: process-level isolation via resource.setrlimit instead
-# of containers, sufficient only for trusted local development. Never use this
+# of containers, accepted for the trusted-college deployment. Never use this
 # mode to execute arbitrary public submissions.
 #
 # Enforced per run: RLIMIT_CPU (soft = wall budget, hard = soft + 1s so a CPU
@@ -883,7 +912,7 @@ def _run_cloudrun(
 # off, a wall-clock timeout, and a new process session per run so a timeout
 # kills the whole group.
 #
-# Not provided: filesystem and network namespaces (see DEPLOYMENT_CONTRACT.md
+# Not provided: filesystem and network namespaces (see docs/threat-model.md
 # §11). Contestant code sees the service user's filesystem and can reach the
 # network, so the docker backend remains the hardened path where a Docker host
 # exists.
@@ -971,6 +1000,21 @@ def _shared_go_cache() -> Path:
     return _go_cache_dir
 
 
+def validate_local_toolchains() -> None:
+    """Reject a broken worker image before it consumes queue attempts."""
+    if resource is None:
+        raise SandboxUnavailable("rlimit requires a POSIX host")
+    _enable_child_subreaper()
+    if not Path(__file__).with_name("rlimit_exec.py").is_file():
+        raise SandboxUnavailable("resource limit launcher is missing")
+    missing = sorted({
+        binary for binaries in _LOCAL_TOOLCHAIN.values() for binary in binaries
+        if shutil.which(binary) is None
+    })
+    if missing:
+        raise SandboxUnavailable(f"worker toolchains unavailable: {', '.join(missing)}")
+
+
 def warm_go_cache() -> None:
     """Compile a throwaway program so Go's standard library is cached once.
 
@@ -983,7 +1027,7 @@ def warm_go_cache() -> None:
         workdir = Path(tmp)
         (workdir / "warm.go").write_text("package main\n\nfunc main() {}\n", encoding="utf-8")
         try:
-            _local_run(
+            proc = _local_run(
                 None,
                 workdir,
                 [
@@ -996,10 +1040,13 @@ def warm_go_cache() -> None:
                     "warm",
                     "warm.go",
                 ],
-                _LOCAL_COMPILE_MIN_MB,
+                0,  # Go reserves a large virtual address space, just as in _local_compile.
                 COMPILE_TIMEOUT_S,
                 fsize_bytes=_LOCAL_COMPILE_FSIZE_BYTES,
             )
+            if proc.returncode != 0 or proc.output_limit_exceeded:
+                logger.warning("go build cache warm-up failed exit=%s", proc.returncode)
+                return
             logger.info("go build cache warmed at %s", _shared_go_cache())
         except Exception:  # noqa: BLE001 - warm-up is best effort
             logger.warning("go build cache warm-up failed", exc_info=True)
@@ -1037,36 +1084,48 @@ def _local_run_memory_mb(language: str, requested: int) -> int:
     return _clamp_memory_mb(requested)
 
 
-def _limit_preexec(cpu_s: int, memory_mb: int, nproc: int, fsize_bytes: int):
-    """Build the child-side hook that installs the rlimit caps.
 
-    `memory_mb <= 0` leaves RLIMIT_AS unset (see _local_run_memory_mb);
-    `nproc <= 0` leaves RLIMIT_NPROC unset (allowance unknown);
-    `fsize_bytes <= 0` leaves RLIMIT_FSIZE unset (compile steps, where the
-    linker legitimately writes binaries larger than the run-time output bound).
-    """
+_subreaper_enabled = False
+_SUBREAPER_LOCK = threading.Lock()
 
-    def _apply() -> None:  # pragma: no cover - runs in the forked child
-        resource.setrlimit(resource.RLIMIT_CPU, (cpu_s, cpu_s + 1))
-        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-        if fsize_bytes > 0:
-            resource.setrlimit(resource.RLIMIT_FSIZE, (fsize_bytes, fsize_bytes))
-        if memory_mb > 0:
-            cap = memory_mb * 1024 * 1024
-            resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
-        if nproc > 0:
-            resource.setrlimit(resource.RLIMIT_NPROC, (nproc, nproc))
-        _, current_hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-        file_limit = min(256, current_hard) if current_hard != resource.RLIM_INFINITY else 256
-        resource.setrlimit(resource.RLIMIT_NOFILE, (file_limit, file_limit))
 
-    return _apply
+def _enable_child_subreaper() -> None:
+    """Adopt descendants so a Python PID 1 cannot accumulate sandbox zombies."""
+    global _subreaper_enabled
+    if sys.platform != "linux" or _subreaper_enabled:
+        return
+    with _SUBREAPER_LOCK:
+        if _subreaper_enabled:
+            return
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+            raise SandboxUnavailable("child process reaping unavailable")
+        _subreaper_enabled = True
+
+
+def _reap_process_group(pgid: int) -> None:
+    if sys.platform != "linux" or not _subreaper_enabled:
+        return
+    deadline = time.monotonic() + 2
+    while True:
+        try:
+            pid, _status = os.waitpid(-pgid, os.WNOHANG)
+        except ChildProcessError:
+            return
+        except InterruptedError:
+            continue
+        if pid == 0:
+            if time.monotonic() >= deadline:
+                raise SandboxUnavailable("sandbox descendants did not exit")
+            time.sleep(0.01)
 
 
 def _kill_process_group(proc: subprocess.Popen[bytes]) -> None:
     """SIGKILL the run's whole process group (best effort)."""
     try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        # start_new_session makes the child's PID its PGID. getpgid(pid)
+        # fails once the leader has exited, even if descendants are still alive.
+        os.killpg(proc.pid, signal.SIGKILL)
     except (AttributeError, OSError):
         try:
             proc.kill()
@@ -1106,20 +1165,34 @@ def _local_run(
         raise SandboxUnavailable("rlimit sandbox unavailable on this platform")
     cpu_s = max(1, math.ceil(timeout_s))
     env = _local_process_environment(host_workdir)
-    argv = [str(part) for part in inner_cmd]
+    marker = f"koj-rlimit-{uuid.uuid4().hex}"
+    argv = [
+        sys.executable, "-I", "-S", str(Path(__file__).with_name("rlimit_exec.py")),
+        "--cpu-seconds", str(cpu_s), "--memory-mb", str(memory_mb),
+        "--file-bytes", str(fsize_bytes), "--nproc", str(_uid_process_allowance()),
+        "--marker", marker, "--", *[str(part) for part in inner_cmd],
+    ]
     try:
-        return _run_bounded_process(
+        result = _run_bounded_process(
             argv,
             timeout_s,
             stdin_text,
             cwd=str(host_workdir),
             env=env,
-            preexec_fn=_limit_preexec(
-                cpu_s, memory_mb, _uid_process_allowance(), fsize_bytes
-            ),
-            spawn_lock=_FORK_LOCK,
         )
-    except subprocess.TimeoutExpired:
+        if f"{marker}\n" not in result.stderr or f"{marker}:failed\n" in result.stderr:
+            raise SandboxUnavailable("process resource setup or execution unavailable")
+        return ProcessResult(
+            result.returncode, result.stdout,
+            result.stderr.replace(f"{marker}\n", "", 1), result.output_limit_exceeded,
+        )
+    except subprocess.TimeoutExpired as error:
+        stderr = error.stderr or ""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        if f"{marker}\n" not in stderr:
+            raise SandboxUnavailable("process resource setup timed out") from error
+        error.stderr = stderr.replace(f"{marker}\n", "", 1)
         raise
     except OSError as e:
         raise SandboxUnavailable(f"failed to start sandboxed process: {e}") from e
@@ -1167,6 +1240,12 @@ def _local_compile(
         if proc.output_limit_exceeded:
             return "compiler output exceeded the 1 MiB limit"
         if proc.returncode != 0:
+            if proc.returncode < 0 and not _is_cpu_limit_kill(proc.returncode):
+                raise SandboxUnavailable("compiler terminated by a signal")
+            # Compiler stderr also echoes contestant source. A phrase inside
+            # that source is not evidence of a judge resource failure.
+            if _COMPILER_INFRA_ERROR_RE.search(proc.stderr):
+                raise SandboxUnavailable("compiler resources unavailable")
             return (proc.stderr or "").strip() or f"compilation failed (exit {proc.returncode})"
         return None
 
@@ -1525,7 +1604,7 @@ def _is_oom(language: str, stderr: str, returncode: int | None = None) -> bool:
     # Cgroup OOM kills surface as docker exit 137 (128+SIGKILL) or -9.
     # --rm removes the container so post-mortem `docker inspect`
     # OOMKilled is unavailable; the exit code plus stderr heuristics
-    # below are the OOM signal (documented in DEPLOYMENT_CONTRACT.md).
+    # below are the OOM signal (documented in docs/threat-model.md).
     if returncode in (137, -9):
         return True
     lowered = stderr.lower()
@@ -1578,7 +1657,7 @@ def execute_judge(req: JudgeRequest, *, lock_wait_seconds: float = 0.0) -> Judge
 
 
 def _budget_exceeded_response(total: int) -> JudgeResponse:
-    return _sandbox_unavailable_response("60-second aggregate wall budget exceeded", total)
+    return _sandbox_unavailable_response("aggregate wall budget exceeded", total)
 
 
 def _execute_judge(
@@ -1588,7 +1667,18 @@ def _execute_judge(
         # Caller should have already returned 422, but keep as safety
         raise ValueError("Unsupported language")
 
-    deadline = time.monotonic() + _JUDGE_WALL_BUDGET_S
+    # A valid 100-case problem can legitimately take more than 60 seconds.
+    # Bound the whole job by its supported case count and per-stage budgets,
+    # rather than retrying slow-but-valid submissions as infrastructure failures.
+    checker_budget = (
+        min(_SPECIAL_CHECKER_TIMEOUT_S, max(0.1, req.time_limit_ms / 1000))
+        if req.checker_code is not None else 0
+    )
+    wall_budget = max(
+        _JUDGE_WALL_BUDGET_S,
+        COMPILE_TIMEOUT_S + len(req.cases) * (req.time_limit_ms / 1000 + 2 + checker_budget) + 5,
+    )
+    deadline = time.monotonic() + wall_budget
     with (
         tempfile.TemporaryDirectory(prefix="koj-judge-") as tmp,
         tempfile.TemporaryDirectory(prefix="koj-checker-") as checker_tmp,

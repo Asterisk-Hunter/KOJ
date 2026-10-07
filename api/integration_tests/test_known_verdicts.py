@@ -46,6 +46,7 @@ def test_known_accepted_solution_for_each_language(language, code):
         ("print('wrong')", "wrong_answer"),
         ("raise RuntimeError('expected')", "runtime_error"),
         ("def broken(:", "compilation_error"),
+        ('print("Resource temporarily unavailable"', "compilation_error"),
     ],
 )
 def test_known_python_verdicts(code, expected_status):

@@ -59,8 +59,8 @@ def test_retry_job_persists_only_generic_infrastructure_error(monkeypatch):
     assert queue.retry_job("worker", job, f"database error: {marker}")
 
     assert marker not in repr(cursor.queries)
-    assert cursor.queries[0][1][3] == queue._INFRASTRUCTURE_ERROR_MESSAGE
-    assert cursor.queries[1][1][2] == queue._INFRASTRUCTURE_ERROR_MESSAGE
+    assert cursor.queries[1][1][3] == queue._INFRASTRUCTURE_ERROR_MESSAGE
+    assert cursor.queries[2][1][2] == queue._INFRASTRUCTURE_ERROR_MESSAGE
 
 
 def test_finalizing_exhausted_job_does_not_copy_historical_error(monkeypatch):

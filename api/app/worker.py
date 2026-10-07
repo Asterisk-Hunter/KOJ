@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from . import db, queue
 from .config import settings
-from .judge import JudgeCase, JudgeRequest, JudgeResponse, execute_judge, resolve_sandbox_backend, warm_go_cache
+from .judge import JudgeCase, JudgeRequest, JudgeResponse, execute_judge, resolve_sandbox_backend, validate_local_toolchains, warm_go_cache
 from .cloudrun_jobs import JobConfig, JobOutcome, run_job
 
 logging.basicConfig(
@@ -72,6 +72,8 @@ def _process_job(worker_id: str, job: queue.ClaimedJob) -> None:
             _process_cloudrun_job(worker_id, job, lease_lost)
             return
         submission = queue.load_submission(job.submission_id)
+        if lease_lost.is_set():
+            return
         if submission is None:
             queue.mark_job_unavailable(worker_id, job)
             logger.warning("job no longer judgeable job=%s submission=%s", job.id, job.submission_id)
@@ -153,6 +155,13 @@ def _process_cloudrun_job(
 def run() -> None:
     if not settings.DATABASE_URL:
         raise RuntimeError("DATABASE_URL is not configured")
+    backend = resolve_sandbox_backend()
+    if backend == "unavailable":
+        raise RuntimeError("No judge backend configured; select JUDGE_SANDBOX_MODE explicitly")
+    if backend == "rlimit":
+        validate_local_toolchains()
+    elif backend == "cloudrun":
+        JobConfig.from_environment()
     db.init_pool()
     worker_id = f"{socket.gethostname()}-{uuid.uuid4().hex[:12]}"
     stop = threading.Event()
@@ -172,6 +181,9 @@ def run() -> None:
         while not stop.is_set():
             try:
                 queue.finalize_exhausted_jobs()
+            except Exception:
+                logger.exception("exhausted job recovery failed worker=%s", worker_id)
+            try:
                 job = queue.claim_job(worker_id, settings.JUDGE_LEASE_SECONDS)
             except Exception:
                 logger.exception("queue poll failed worker=%s", worker_id)

@@ -1,0 +1,44 @@
+# Template only; replace placeholders before an operator deploys it.
+# https://docs.cloud.google.com/run/docs/deploy-worker-pools
+# https://docs.cloud.google.com/run/docs/configuring/workerpools/manual-scaling
+# Worker pools have no public URL and do not autoscale. One requested instance
+# stays active and is billed even while idle. Increase capacity after load tests.
+apiVersion: run.googleapis.com/v1
+kind: WorkerPool
+metadata:
+  name: koj-judge-worker
+  annotations:
+    run.googleapis.com/manualInstanceCount: '1'
+spec:
+  template:
+    spec:
+      serviceAccountName: REPLACE_WITH_WORKER_SERVICE_ACCOUNT
+      containers:
+        - name: judge-worker
+          image: REPLACE_WITH_IMMUTABLE_JUDGE_IMAGE_DIGEST
+          command: ['python']
+          args: ['-m', 'app.worker']
+          resources:
+            limits:
+              cpu: '2'
+              memory: 2Gi
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: REPLACE_WITH_WORKER_DATABASE_SECRET_NAME
+                  key: REPLACE_WITH_PINNED_SECRET_VERSION
+            - name: DATABASE_TLS_VERIFY
+              value: 'true'
+            - name: JUDGE_SANDBOX_MODE
+              value: rlimit
+            - name: JUDGE_HTTP_EXECUTION_ENABLED
+              value: 'false'
+            - name: JUDGE_LEASE_SECONDS
+              value: '120'
+            - name: JUDGE_WORKER_POLL_SECONDS
+              value: '1'
+# No ingress/port probe: the queue process does not run an HTTP server.
+# Successful deployment is not proof of worker health. Monitor judge_workers
+# last_seen_at, queue age, dead attempts and infrastructure errors. Validate
+# termination/reclaim behavior and memory headroom on the actual Cloud Run host.

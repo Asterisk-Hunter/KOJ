@@ -105,12 +105,16 @@ def test_init_pool_probes_readiness_and_reuses_the_pool(monkeypatch):
     assert conn.cursor_obj.queries == [("SELECT 1", ())]
     assert captured["min_size"] == 1 and captured["max_size"] == 10
     assert captured["check"] is Pool.check_connection
+    assert captured["kwargs"]["connect_timeout"] == 5
+    assert captured["kwargs"]["options"] == "-c statement_timeout=5000 -c lock_timeout=2000"
 
     db.init_pool()
     assert db._pool is not None
 
 
 def test_init_pool_does_not_cache_a_pool_that_fails_readiness(monkeypatch):
+    closed = []
+
     class Pool:
         check_connection = staticmethod(lambda _conn: True)
 
@@ -120,12 +124,16 @@ def test_init_pool_does_not_cache_a_pool_that_fails_readiness(monkeypatch):
         def connection(self):
             raise psycopg.OperationalError("no route to host")
 
+        def close(self):
+            closed.append(True)
+
     monkeypatch.setattr(db, "ConnectionPool", Pool)
     monkeypatch.setattr(db, "_pool", None)
 
     with pytest.raises(psycopg.OperationalError):
         db.init_pool()
     assert db._pool is None
+    assert closed == [True]
 
 
 def test_close_pool_is_best_effort(monkeypatch):
@@ -149,6 +157,7 @@ def test_acquire_conn_retries_once_when_the_socket_died(monkeypatch):
     assert db._acquire_conn() is healthy
     assert dead.closed is True
     assert db._pool.checkouts == [dead, healthy]
+    assert db._pool.returned == [dead]
 
 
 def test_release_conn_returns_to_pool_and_closes_on_failure(monkeypatch):

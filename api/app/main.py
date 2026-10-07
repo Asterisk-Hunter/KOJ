@@ -29,7 +29,7 @@ from .upstream import JudgeUpstream, JudgeUpstreamUnavailable
 
 # Never log request bodies or case stdin/expected/stdout. Uvicorn access
 # logging records method/path/status only (no bodies) by default — keep
-# it that way (see api/DEPLOYMENT_CONTRACT.md).
+# it that way (see api/README.md).
 
 logging.basicConfig(
     level=logging.INFO,

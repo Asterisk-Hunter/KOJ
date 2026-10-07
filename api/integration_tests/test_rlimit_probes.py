@@ -1,5 +1,7 @@
 """Safe, bounded probes for the guarantees and limits of rlimit mode."""
 
+import json
+import os
 import sys
 import subprocess
 import tempfile
@@ -45,3 +47,22 @@ def test_file_growth_is_capped_in_the_temporary_workdir():
 
     assert result.returncode != 0
     assert file_size <= _LOCAL_FSIZE_BYTES
+
+
+def test_exited_leader_descendants_are_killed_and_reaped():
+    # Children hold the output pipes open after their parent exits. A Python
+    # worker running as PID 1 must reap them, not just send a group SIGKILL.
+    code = (
+        "import json, subprocess, sys\n"
+        "children = [subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(10)']) for _ in range(3)]\n"
+        "print(json.dumps([child.pid for child in children]), flush=True)\n"
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        for _ in range(4):
+            result = _local_run(None, Path(directory), [sys.executable, "-c", code], 128, 3)
+            assert result.returncode == 0
+            for pid in json.loads(result.stdout):
+                with pytest.raises(ChildProcessError):
+                    os.waitpid(pid, os.WNOHANG)
+                with pytest.raises(ProcessLookupError):
+                    os.kill(pid, 0)

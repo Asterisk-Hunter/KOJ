@@ -35,7 +35,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 
-ENV FASTAPI_HOST=0.0.0.0
+# Explicit owner-approved trusted-college backend; auto must not select the
+# experimental Cloud Run sandbox launcher for this worker image.
+ENV FASTAPI_HOST=0.0.0.0 JUDGE_SANDBOX_MODE=rlimit
 
 RUN groupadd --system --gid 10001 koj \
     && useradd --system --uid 10001 --gid koj --home-dir /home/koj --create-home --shell /usr/sbin/nologin koj

@@ -36,7 +36,12 @@ def init_pool() -> None:
         conninfo=dsn,
         min_size=1,
         max_size=10,
-        kwargs={"autocommit": True, **_tls_kwargs()},
+        kwargs={
+            "autocommit": True,
+            "connect_timeout": 5,
+            "options": "-c statement_timeout=5000 -c lock_timeout=2000",
+            **_tls_kwargs(),
+        },
         timeout=5.0,
         open=True,
         # Neon free tier suspends/kills idle connections (~500 s).
@@ -47,9 +52,13 @@ def init_pool() -> None:
         # automatically via _getconn_with_check_loop.
         check=ConnectionPool.check_connection,
     )
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1")
+    try:
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+    except Exception:
+        pool.close()
+        raise
     _pool = pool
 
 
@@ -84,6 +93,8 @@ def _acquire_conn() -> psycopg.Connection:
             conn.close()
         except Exception:  # noqa: BLE001
             pass
+        # Closing a checked-out socket does not return its pool slot.
+        _release_conn(conn)
         conn = _pool.getconn()
     return conn
 
@@ -132,7 +143,13 @@ def get_connection() -> Generator[psycopg.Connection, None, None]:
             _release_conn(conn)
         return
     dsn: str = str(settings.DATABASE_URL)
-    conn = psycopg.connect(dsn, autocommit=True, **_tls_kwargs())
+    conn = psycopg.connect(
+        dsn,
+        autocommit=True,
+        connect_timeout=5,
+        options="-c statement_timeout=5000 -c lock_timeout=2000",
+        **_tls_kwargs(),
+    )
     try:
         yield conn
     finally:

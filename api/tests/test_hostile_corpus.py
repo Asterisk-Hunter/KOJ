@@ -143,7 +143,7 @@ _CASES = [
     HostileCase(
         name="stdout_flood_javascript",
         language="javascript",
-        code='for (;;) { process.stdout.write("x".repeat(4096)); }\n',
+        code='const fs = require("fs"); for (;;) { fs.writeSync(1, "x".repeat(4096)); }\n',
         expected="runtime_error",
     ),
     HostileCase(
@@ -164,9 +164,8 @@ _CASES = [
         code="fn main() { loop {} }\n",
         expected="time_limit_exceeded",
     ),
-    # Task-slot bombs run last: RLIMIT_NPROC stays exhausted until the surviving
-    # children exit, which briefly starves later compilations. The parent must
-    # fail (exit 42) rather than spin forever.
+    # Task-slot bombs must terminate and be reaped before later compilations.
+    # Exit 42 distinguishes an exhausted task allowance from a successful run.
     HostileCase(
         name="fork_bomb_python",
         language="python",
@@ -195,7 +194,8 @@ def _toolchain_usable(binary: str) -> bool:
     env = _local_process_environment(Path(tempfile.gettempdir()))
     try:
         probe = subprocess.run(
-            [binary, "--version"], capture_output=True, timeout=10, env=env
+            [binary, "version" if binary == "go" else "--version"],
+            capture_output=True, timeout=10, env=env
         )
     except (OSError, subprocess.SubprocessError):
         return False

@@ -7,6 +7,8 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from psycopg import Cursor
+
 from . import db
 from .config import settings
 from .judge import CaseResult, JudgeCase, JudgeResponse
@@ -64,6 +66,13 @@ def register_worker(worker_id: str, hostname: str) -> None:
             )
 
 
+def _lock_job(cur: Cursor, job_id: int) -> None:
+    # UPDATE can evaluate its expiry predicate before waiting for a row lock.
+    # Lock first, then fence in a fresh statement. NO KEY UPDATE also permits
+    # worker foreign-key checks (KEY SHARE); never lock a worker before its job.
+    cur.execute("SELECT id FROM judge_jobs WHERE id = %s FOR NO KEY UPDATE", (job_id,))
+
+
 def heartbeat_worker(
     worker_id: str,
     job: ClaimedJob | None,
@@ -73,11 +82,12 @@ def heartbeat_worker(
         with conn.transaction():
             with conn.cursor() as cur:
                 if job is not None:
+                    _lock_job(cur, job.id)
                     cur.execute(
-                        "UPDATE judge_jobs SET lease_expires_at = NOW() + (%s * INTERVAL '1 second'), "
+                        "UPDATE judge_jobs SET lease_expires_at = clock_timestamp() + (%s * INTERVAL '1 second'), "
                         "heartbeat_at = NOW(), updated_at = NOW() "
                         "WHERE id = %s AND status = 'leased' AND leased_by = %s "
-                        "AND attempts = %s AND lease_expires_at > NOW() RETURNING id",
+                        "AND attempts = %s AND lease_expires_at > clock_timestamp() RETURNING id",
                         (lease_seconds, job.id, worker_id, job.attempt),
                     )
                     if cur.fetchone() is None:
@@ -124,7 +134,7 @@ def claim_job(worker_id: str, lease_seconds: int) -> ClaimedJob | None:
                     "  FOR UPDATE SKIP LOCKED LIMIT 1"
                     ") "
                     "UPDATE judge_jobs AS job SET status = 'leased', attempts = job.attempts + 1, "
-                    "leased_by = %s, lease_expires_at = NOW() + (%s * INTERVAL '1 second'), "
+                    "leased_by = %s, lease_expires_at = clock_timestamp() + (%s * INTERVAL '1 second'), "
                     "heartbeat_at = NOW(), updated_at = NOW() "
                     "FROM candidate WHERE job.id = candidate.id "
                     "RETURNING job.id, job.submission_id, job.attempts, job.max_attempts",
@@ -246,11 +256,12 @@ def complete_job(worker_id: str, job: ClaimedJob, result: JudgeResponse) -> bool
     with db.get_connection() as conn:
         with conn.transaction():
             with conn.cursor() as cur:
+                _lock_job(cur, job.id)
                 cur.execute(
                     "UPDATE judge_jobs SET status = 'completed', leased_by = NULL, "
                     "lease_expires_at = NULL, completed_at = NOW(), updated_at = NOW(), last_error = NULL "
                     "WHERE id = %s AND status = 'leased' AND leased_by = %s AND attempts = %s "
-                    "AND lease_expires_at > NOW() RETURNING submission_id",
+                    "AND lease_expires_at > clock_timestamp() RETURNING submission_id",
                     (job.id, worker_id, job.attempt),
                 )
                 row = cur.fetchone()
@@ -287,11 +298,12 @@ def retry_job(worker_id: str, job: ClaimedJob, _message: str, total_tests: int =
     with db.get_connection() as conn:
         with conn.transaction():
             with conn.cursor() as cur:
+                _lock_job(cur, job.id)
                 cur.execute(
                     "UPDATE judge_jobs SET status = %s, available_at = NOW() + (%s * INTERVAL '1 second'), "
                     "leased_by = NULL, lease_expires_at = NULL, completed_at = %s, last_error = %s, "
                     "updated_at = NOW() WHERE id = %s AND status = 'leased' AND leased_by = %s "
-                    "AND attempts = %s AND lease_expires_at > NOW() RETURNING submission_id",
+                    "AND attempts = %s AND lease_expires_at > clock_timestamp() RETURNING submission_id",
                     (
                         next_status,
                         delay_seconds,
@@ -309,7 +321,7 @@ def retry_job(worker_id: str, job: ClaimedJob, _message: str, total_tests: int =
                 cur.execute(
                     "UPDATE submissions SET status = %s, passed_tests = 0, total_tests = %s, "
                     "execution_time_ms = 0, error_message = %s, completed_at = %s, "
-                    "judge_infra_error = true "
+                    "judge_infra_error = true, case_results = NULL "
                     "WHERE id = %s AND status IN ('pending', 'running')",
                     (
                         submission_status,
@@ -331,13 +343,16 @@ def mark_job_unavailable(worker_id: str, job: ClaimedJob) -> None:
     with db.get_connection() as conn:
         with conn.transaction():
             with conn.cursor() as cur:
+                _lock_job(cur, job.id)
                 cur.execute(
                     "UPDATE judge_jobs SET status = 'dead', leased_by = NULL, lease_expires_at = NULL, "
                     "completed_at = NOW(), updated_at = NOW(), last_error = 'submission is no longer judgeable' "
                     "WHERE id = %s AND status = 'leased' AND leased_by = %s AND attempts = %s "
-                    "AND lease_expires_at > NOW()",
+                    "AND lease_expires_at > clock_timestamp() RETURNING id",
                     (job.id, worker_id, job.attempt),
                 )
+                if cur.fetchone() is None:
+                    return
                 cur.execute(
                     "UPDATE judge_workers SET status = 'idle', active_job_id = NULL, "
                     "last_seen_at = NOW() WHERE id = %s",
@@ -350,14 +365,16 @@ def finalize_exhausted_jobs() -> int:
         with conn.transaction():
             with conn.cursor() as cur:
                 cur.execute(
-                    "WITH exhausted AS ("
-                    "  UPDATE judge_jobs SET status = 'dead', leased_by = NULL, lease_expires_at = NULL, "
-                    "  completed_at = NOW(), updated_at = NOW(), "
-                    "  last_error = 'Judge infrastructure temporarily unavailable.' "
-                    "  WHERE attempts >= max_attempts AND ("
+                    "WITH candidates AS ("
+                    "  SELECT id FROM judge_jobs WHERE attempts >= max_attempts AND ("
                     "    (status = 'queued' AND available_at <= NOW()) OR "
                     "    (status = 'leased' AND lease_expires_at <= NOW())"
-                    "  ) RETURNING submission_id"
+                    "  ) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 100"
+                    "), exhausted AS ("
+                    "  UPDATE judge_jobs AS job SET status = 'dead', leased_by = NULL, lease_expires_at = NULL, "
+                    "  completed_at = NOW(), updated_at = NOW(), "
+                    "  last_error = 'Judge infrastructure temporarily unavailable.' "
+                    "  FROM candidates WHERE job.id = candidates.id RETURNING job.submission_id"
                     ") "
                     "UPDATE submissions AS submission SET status = 'runtime_error', "
                     "error_message = 'Judge infrastructure temporarily unavailable.', "

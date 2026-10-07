@@ -146,8 +146,9 @@ class Settings(BaseSettings):
         default="auto",
         description=(
             "Sandbox backend. 'docker' = container backend only (fails closed without "
-            "a Docker daemon, see api/DEPLOYMENT_CONTRACT.md). 'rlimit' = host-toolchain "
-            "backend with resource.setrlimit CPU/AS/NPROC/FSIZE limits (development only). "
+            "a Docker daemon, see api/README.md). 'rlimit' = host-toolchain "
+            "backend with CPU/AS/NPROC/FSIZE limits for the owner-approved trusted-college "
+            "deployment only; no filesystem or network isolation. "
             "'cloudrun' = Cloud Run sandbox launcher. 'auto' = Docker or Cloud Run "
             "when available, otherwise fail closed."
         ),

@@ -11,6 +11,7 @@ os.environ.update(
     {
         "DATABASE_URL": "postgresql://probe:probe@127.0.0.1/koj_probe",
         "JUDGE_INTERNAL_SECRET": "probe-secret-must-not-enter-container",
+        "KOJ_HOST_ENV_PROBE": "koj-host-env-probe-marker",
         "JUDGE_SANDBOX_MODE": "docker",
         "JUDGE_MAX_CONCURRENT": "1",
     }
@@ -88,9 +89,27 @@ assert 'Seccomp:\\t2' in process_status
 assert 'CapEff:\\t0000000000000000' in process_status
 assert os.getenv('DATABASE_URL') is None
 assert os.getenv('JUDGE_INTERNAL_SECRET') is None
+host_environment_marker = b'KOJ_HOST_ENV_PROBE=koj-host-env-probe-marker'
+assert host_environment_marker not in pathlib.Path('/proc/self/environ').read_bytes()
+for process in pathlib.Path('/proc').iterdir():
+    if process.name.isdecimal():
+        try:
+            environment = (process / 'environ').read_bytes()
+        except OSError:
+            continue
+        assert host_environment_marker not in environment
 process_one_environment = pathlib.Path('/proc/1/environ').read_bytes()
 assert b'DATABASE_URL=' not in process_one_environment
 assert b'JUDGE_INTERNAL_SECRET=' not in process_one_environment
+for docker_socket in ('/var/run/docker.sock', '/run/docker.sock'):
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(0.5)
+            connection.connect(docker_socket)
+    except OSError:
+        pass
+    else:
+        raise AssertionError('Docker daemon socket is accessible')
 assert not pathlib.Path({str(parent_path)!r}).exists()
 root = next(line for line in pathlib.Path('/proc/mounts').read_text().splitlines() if line.split()[1] == '/')
 assert 'ro,' in root or root.endswith(' ro')
