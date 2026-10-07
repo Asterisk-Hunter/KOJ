@@ -279,6 +279,18 @@ def test_cloudrun_dispatch_exception_retries_unless_the_lease_is_gone(monkeypatc
     assert retry.calls == []
 
 
+def test_cloudrun_dispatch_swallows_a_failing_retry_write(monkeypatch):
+    monkeypatch.setattr(worker.JobConfig, "from_environment", staticmethod(lambda: object()))
+    monkeypatch.setattr(worker, "run_job", lambda *_args: JobOutcome.FAILED)
+
+    def failing_retry(*_args):
+        raise RuntimeError("database gone")
+
+    monkeypatch.setattr(queue, "retry_job", failing_retry)
+
+    worker._process_cloudrun_job("worker-1", _job(), __import__("threading").Event())
+
+
 def test_keep_lease_alive_flags_a_lost_lease(monkeypatch):
     monkeypatch.setattr(queue, "heartbeat_worker", lambda *_args: False)
     lost = __import__("threading").Event()

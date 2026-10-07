@@ -122,6 +122,13 @@ def test_judge_slot_helpers_survive_broken_semaphores(monkeypatch):
     monkeypatch.setattr(main, "_JUDGE_SEMAPHORE", BrokenRelease())
     main._release_judge_slot()
 
+    class OverReleased:
+        def release(self):
+            raise ValueError("semaphore released too many times")
+
+    monkeypatch.setattr(main, "_JUDGE_SEMAPHORE", OverReleased())
+    main._release_judge_slot()
+
     monkeypatch.setattr(main, "_JUDGE_SEMAPHORE", _Semaphore(allow=False))
     main._release_judge_slot()
 
@@ -418,7 +425,7 @@ def test_body_limit_replays_the_buffered_body_and_tolerates_bad_headers(monkeypa
     scope = _judge_scope()
     scope["headers"].append((b"content-length", b"not-a-number"))
 
-    sent = _call_middleware(middleware, scope, [_body(b"{}")])
+    sent = _call_middleware(middleware, scope, [{"type": "http.nonsense"}, _body(b"{}")])
 
     assert sent.status == 204
     assert app.bodies == [b"{}"]

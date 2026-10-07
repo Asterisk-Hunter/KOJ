@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import types
 from datetime import datetime, timezone
 
 import pytest
@@ -186,6 +187,46 @@ def test_run_ignores_a_task_whose_lease_was_lost(monkeypatch, cloudrun_ready):
 
     assert onejobrunner.run(_args()) == 0
     assert load.calls == []
+
+
+def test_run_discards_a_result_whose_lease_died_mid_execution(monkeypatch, cloudrun_ready):
+    events = []
+
+    class Event:
+        def __init__(self):
+            self.flag = False
+
+        def set(self):
+            self.flag = True
+
+        def is_set(self):
+            return self.flag
+
+        def wait(self, _timeout=None):
+            return self.flag
+
+    def make_event():
+        event = Event()
+        events.append(event)
+        return event
+
+    monkeypatch.setattr(
+        onejobrunner, "threading", types.SimpleNamespace(Event=make_event, Thread=threading.Thread)
+    )
+    monkeypatch.setattr(onejobrunner, "_keep_lease_alive", lambda *_args: None)
+    monkeypatch.setattr(onejobrunner, "_is_current_lease", lambda *_args: True)
+    monkeypatch.setattr(queue, "load_submission", lambda _id: _submission())
+
+    def execute(_submission):
+        events[1].set()  # lease_lost, created after heartbeat_stop
+        return _judge_response()
+
+    monkeypatch.setattr(onejobrunner, "_execute_local_submission", execute)
+    complete = _Recorder()
+    monkeypatch.setattr(queue, "complete_job", complete)
+
+    assert onejobrunner.run(_args()) == 1
+    assert complete.calls == []
 
 
 def test_run_buries_an_unavailable_submission(monkeypatch, cloudrun_ready):

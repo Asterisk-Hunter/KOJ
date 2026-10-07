@@ -118,6 +118,13 @@ def test_mark_worker_stopping_swallows_database_errors(monkeypatch):
     queue.mark_worker_stopping("worker-1")
 
 
+def test_load_submission_returns_none_when_the_row_vanished(monkeypatch):
+    cursor = _install(monkeypatch, _Cursor(fetchone_rows=[None]))
+
+    assert queue.load_submission(12) is None
+    assert "REPEATABLE READ READ ONLY" in cursor.queries[0][0]
+
+
 def test_claim_job_leases_with_skip_locked_and_marks_the_submission_running(monkeypatch):
     cursor = _install(monkeypatch, _Cursor(fetchone_rows=[(11, 22, 2, 5)]))
     job = queue.claim_job("worker-1", 30)
