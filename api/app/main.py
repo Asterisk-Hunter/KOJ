@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from . import db
+from . import db, monitoring
 from .config import settings
 from .judge import (
     SUPPORTED_LANGUAGES,
@@ -220,6 +220,19 @@ def ready(x_judge_secret: str | None = Header(default=None, alias="X-Judge-Secre
             "sandbox": resolve_sandbox_backend(),
         },
         status_code=200 if ready_ok else 503,
+    )
+
+
+@app.get("/ready/judge")
+def judge_readiness(
+    x_judge_secret: str | None = Header(default=None, alias="X-Judge-Secret"),
+) -> JSONResponse:
+    if not _judge_authorized(x_judge_secret):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    healthy = monitoring.judge_health()
+    return JSONResponse(
+        content={"status": "ok" if healthy else "degraded"},
+        status_code=200 if healthy else 503,
     )
 
 

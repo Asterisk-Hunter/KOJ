@@ -16,6 +16,7 @@ def render_policies(
     api_service: str,
     worker_instance_id: str,
     channel_id: str | None,
+    worker_check_id: str | None = None,
 ) -> dict[str, dict]:
     channels = (
         [f"projects/{project_id}/notificationChannels/{channel_id}"]
@@ -23,7 +24,7 @@ def render_policies(
         else []
     )
 
-    return {
+    policies = {
         "api-5xx.json": {
             "displayName": "KOJ Cloud Run API: elevated 5xx responses",
             "documentation": {
@@ -93,6 +94,45 @@ def render_policies(
             "enabled": True,
         },
     }
+    if worker_check_id:
+        policies["worker-freshness.json"] = {
+            "displayName": "KOJ judge worker: heartbeat or queue stale",
+            "documentation": {
+                "content": (
+                    "The authenticated /ready/judge probe failed. It reports degraded when no idle/busy worker "
+                    "has checked in within 180 seconds, when a due queued job has been eligible for 300 seconds, or "
+                    "when Neon cannot be queried. Check koj-worker.service, Neon connectivity, and the KOJ queue."
+                ),
+                "mimeType": "text/markdown",
+            },
+            "combiner": "OR",
+            "conditions": [
+                {
+                    "displayName": "Judge readiness uptime check failing",
+                    "conditionThreshold": {
+                        "filter": (
+                            'metric.type = "monitoring.googleapis.com/uptime_check/check_passed" AND '
+                            f"metric.label.check_id = {quoted_filter(worker_check_id)} AND "
+                            'resource.type = "uptime_url"'
+                        ),
+                        "aggregations": [
+                            {
+                                "alignmentPeriod": "600s",
+                                "perSeriesAligner": "ALIGN_NEXT_OLDER",
+                                "crossSeriesReducer": "REDUCE_COUNT_FALSE",
+                            }
+                        ],
+                        "comparison": "COMPARISON_GT",
+                        "thresholdValue": 1,
+                        "duration": "300s",
+                        "trigger": {"count": 1},
+                    },
+                }
+            ],
+            "notificationChannels": channels,
+            "enabled": True,
+        }
+    return policies
 
 
 def main() -> None:
@@ -101,6 +141,7 @@ def main() -> None:
     parser.add_argument("--api-service", required=True, help="Cloud Run HTTP service name")
     parser.add_argument("--worker-instance-id", required=True, help="Numeric Compute Engine instance ID")
     parser.add_argument("--notification-channel", help="Existing Monitoring channel ID")
+    parser.add_argument("--worker-check-id", help="Check ID returned when creating the /ready/judge uptime check")
     parser.add_argument("--output-dir", type=Path, required=True, help="Directory for rendered policy JSON")
     args = parser.parse_args()
 
@@ -110,6 +151,7 @@ def main() -> None:
         args.api_service,
         args.worker_instance_id,
         args.notification_channel,
+        args.worker_check_id,
     ).items():
         path = args.output_dir / filename
         path.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")

@@ -32,3 +32,19 @@ def test_rendered_alerts_can_be_created_without_notification_channels():
     policies = render_policies("demo-project", "koj-api", "123456", None)
 
     assert all(policy["notificationChannels"] == [] for policy in policies.values())
+
+
+def test_worker_freshness_policy_targets_uptime_check_without_internal_secret():
+    policies = render_policies(
+        "demo-project", "koj-api", "123456", "channel-1", "koj-judge-readiness"
+    )
+    policy = policies["worker-freshness.json"]
+    condition = policy["conditions"][0]["conditionThreshold"]
+
+    assert 'metric.type = "monitoring.googleapis.com/uptime_check/check_passed"' in condition["filter"]
+    assert 'metric.label.check_id = "koj-judge-readiness"' in condition["filter"]
+    assert condition["duration"] == "300s"
+    assert policy["notificationChannels"] == [
+        "projects/demo-project/notificationChannels/channel-1"
+    ]
+    assert "JUDGE_INTERNAL_SECRET" not in json.dumps(policy)
