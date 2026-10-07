@@ -27,12 +27,12 @@ Status reflects the checked-in implementation. Live service status and remaining
 
 ## Security boundary
 
-Cloud Run uses rlimit mode, which limits process resources but does not isolate filesystem or network access. KOJ's supported deployment is trusted-college only, not arbitrary public multi-tenant execution. See docs/threat-model.md.
+The public-contest target uses restricted Docker containers on a dedicated Linux judge VM; Cloud Run provides the compatibility/control API. The `rlimit` worker-pool example is a trusted-audience fallback without filesystem or network isolation. See `docs/threat-model.md`.
 
 ## Not implemented
 
 - Interactive problem protocol, problem package export/validation, broad adversarial sandbox suite, full route-by-role authorization matrix, and coverage reporting.
-- Measured load/capacity report, deployed external alerting, production Cloud Run verification, or a real IIIT Kottayam contest write-up.
+- Measured load/capacity report, deployed external alerting, verified Vercel/Neon/worker readiness, or a real IIIT Kottayam contest write-up.
 - Plagiarism reports are advisory candidates and require human review; they do not establish misconduct.
 
-Do not claim capacity or uptime figures until measured on the deployed Cloud Run/Neon stack.
+Do not claim capacity or uptime figures until measured on the deployed VM/Neon stack.

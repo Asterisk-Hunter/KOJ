@@ -25,7 +25,8 @@ npm test
 GitHub Actions runs lint, typecheck, production build, TypeScript/Python unit
 tests, a migration apply against an empty PostgreSQL database, and a Linux
 judge-image job. The judge-image job runs the known-verdict corpus across the
-seven supported languages and bounded `rlimit` probes.
+seven supported languages and bounded `rlimit` probes. These probes do not
+exercise the public target's Docker boundary on the actual judge VM.
 
 The integration corpus can also be run on Linux with the same compiler
 toolchains as the judge image:
@@ -48,7 +49,7 @@ python -m pytest -q -m integration integration_tests
 - The known-verdict corpus checks accepted output for Python, C, C++, Java, Go,
   Rust, and JavaScript, plus Python wrong-answer, runtime-error,
   compilation-error, and time-limit outcomes.
-- Linux `rlimit` probes exercise wall-time termination and file-growth caps.
+- Linux `rlimit` probes exercise wall-time termination and file-growth caps. The Docker boundary still requires `scripts/deployment/verify-docker-host.py` on the target VM.
 - Empty-database migration CI catches migration syntax/order failures, but does
   not establish which historical migrations have already run on live Neon.
 
@@ -60,10 +61,12 @@ deploy policies.
 
 ## Limitations and required operational evidence
 
-The sandbox tests run `rlimit`, which is the intended Cloud Run mode. They do
-not establish filesystem or network isolation; those are not provided by
-`rlimit`. No production database migration, deployed Cloud Run smoke test,
-contest, or load benchmark is run by CI. Before a real contest, record a
-deployment smoke test, worker-failure recovery, queue p95 latency, throughput,
-and participant/submission counts. Do not publish capacity or uptime numbers
-until measured on the target stack.
+The CI sandbox tests run `rlimit`; they do not establish the Docker boundary
+on the production VM. Empty-database migrations do not verify the live Neon
+ledger. The 2026-10-07 audit checked the live ledger, worker heartbeat, Docker
+host probe, and Cloud Run-to-VM direct judge canary outside CI; see
+`docs/status.md`. No authenticated submission/contest rehearsal or load
+benchmark is run by CI. Before a real contest, deploy the current revision,
+rerun those checks, complete an authenticated submission canary, and record
+queue latency and throughput under rehearsal load. Do not publish capacity or
+uptime numbers until measured on the target stack.

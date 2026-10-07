@@ -16,14 +16,14 @@ Vercel Next.js routes
                                                          ▲
                                       SQL / lease / heartbeat / verdict
                                                          │
-                                      Cloud Run worker pool
-                                      python -m app.worker
+                                      Compute Engine judge VM
+                                      Docker-backed worker
                                              │
                                       compile + bounded judge run
 
-Cloud Run FastAPI compatibility API provides health and legacy HTTP routes only.
+Cloud Run FastAPI compatibility/control API provides health and compatibility HTTP routes. The judge VM runs the pull worker and private Docker-backed judge API.
 
-Cloud Run's worker pool uses explicit instance scaling and does not expose a public HTTP endpoint. The worker pulls from Postgres; the web app does not make judging a part of the submission request.
+The VM worker pulls from Postgres; the web app does not make judging a part of the submission request. A Cloud Run worker-pool `rlimit` example remains for trusted-audience use only and is not the public-contest target.
 
 ## Submission lifecycle
 
@@ -43,13 +43,13 @@ App Router pages and Route Handlers run on Vercel. Authorization is enforced in 
 
 ### FastAPI and worker
 
-FastAPI provides health and compatibility endpoints. Normal queue work runs with python -m app.worker. Each worker processes one job at a time. The worker uses psycopg and shares the Neon schema with Drizzle.
+FastAPI provides health and compatibility endpoints. Normal queue work runs as `python -m app.worker` on the dedicated judge VM. The worker uses psycopg and shares the Neon schema with Drizzle.
 
 ### Judge pipeline
 
 The pipeline writes sources to a per-submission temporary directory, compiles where needed, runs each case in a fresh process, compares normalized output or invokes an optional per-problem Python checker, redacts hidden-case output, and aggregates a verdict. The checker receives a JSON object on stdin with `input`, `expected_output`, and `actual_output`; exit 0 means accept, exit 1 means reject, and another exit or timeout is an infrastructure failure. Checker source is loaded from the database, not supplied by contestants, and runs with bounded resources in the configured judge backend. Stdout/stderr capture is bounded and process groups are terminated on timeout.
 
-Cloud Run uses rlimit: process limits, bounded output, file growth and descriptor caps, and wall timeout. It has no filesystem or network namespace. See docs/threat-model.md. Docker mode offers a stronger container setup on a dedicated Linux host with Docker, cgroups, and the seccomp profile provisioned.
+The public target uses Docker containers with cgroups, namespaces, and the provisioned seccomp profile on the dedicated Linux judge VM. The optional Cloud Run `rlimit` fallback applies process limits, bounded output, file growth and descriptor caps, and wall timeout, but has no filesystem or network namespace. See `docs/threat-model.md`.
 
 ### Postgres queue
 
@@ -63,10 +63,12 @@ Submission and contest events are read from Postgres with bounded SSE streams. R
 
 - Vercel: Next.js frontend and route handlers.
 - Cloud Run service: FastAPI health and compatibility endpoints.
-- Cloud Run worker pool: pull worker, with explicit instance count.
+- Compute Engine `koj-judge` VM: Docker-backed pull worker and private judge API.
 - Neon: application and queue database.
 
-Configuration and rollout steps are in docs/deployment.md and api/DEPLOYMENT_CONTRACT.md.
+Configuration and rollout steps are in `docs/deployment.md` and `api/README.md`.
+
+The observed project inventory on 2026-10-07 showed the Cloud Run control API Ready and the `koj-judge` VM RUNNING, with no Cloud Run worker pool listed in `asia-southeast1`. This does not prove worker service health, current deployed code, database readiness, or capacity.
 
 ## Contest and administration
 
@@ -74,4 +76,4 @@ Contest controls persist manual freeze state and support full or incremental rev
 
 ## Remaining architecture work
 
-Interactive problem protocol and problem-package import/export/validation are not implemented. The load harness and monitoring policy templates exist, but no benchmark has been run and no alert policy has been deployed. Do not claim filesystem/network isolation or measured capacity for Cloud Run rlimit deployments.
+Interactive problem protocol and problem-package import/export/validation are not implemented. The load harness and monitoring policy templates exist, but no benchmark has been run. The live project had no Cloud Monitoring alert policies or notification channels at the 2026-10-07 inventory; the worker alert template still targets a Cloud Run worker pool and does not match the VM deployment. Do not claim capacity until measured on the target VM/Neon stack.

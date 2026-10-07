@@ -2,12 +2,23 @@
 
 ## Intended use
 
-KOJ is designed for a trusted-college contest audience, not arbitrary public
-multi-tenant code execution. Submissions are untrusted and run in a separate
-Cloud Run worker pool process. The judge image runs as non-root UID/GID 10001,
-which reduces the privileges available to the service and its child processes.
-Cloud Run deployments use the `rlimit` backend because they cannot launch
-nested Docker sandboxes.
+KOJ accepts untrusted contest submissions. The public-contest target is a
+dedicated Linux judge VM: a host-side worker holds restricted database
+credentials, and each contestant run uses the `docker` backend in a separate
+container. Cloud Run hosts the compatibility/control API. A Cloud Run worker
+pool using `rlimit` is a trusted-audience fallback, not the public target.
+
+## Docker-mode controls
+
+- Containers have no network, a read-only root, non-root UID, dropped
+  capabilities, no new privileges, a pinned seccomp profile, and no host Docker
+  socket mount.
+- CPU, memory, process count, writable tmpfs, output, and wall time are bounded.
+- The host-side worker uses a separate restricted database role. The API and
+  worker services keep their environment files root-owned.
+- `scripts/deployment/verify-docker-host.py` probes the boundary on the target
+  VM. Its success does not establish aggregate capacity or exclude a container
+  escape; the kernel, Docker daemon, and host patching remain trusted.
 
 ## Controls in `rlimit` mode
 
@@ -22,7 +33,7 @@ nested Docker sandboxes.
 - Hidden-test stdout and stderr are redacted; source and test data are not
   written to application logs.
 
-## Residual risks
+## Residual risks in `rlimit` mode
 
 `rlimit` is not a security boundary equivalent to Docker namespaces or a
 dedicated judge VM. Running as non-root reduces available OS privileges, but
@@ -35,9 +46,8 @@ does not make same-UID execution safe for hostile public users.
 
 Do not grant the Cloud Run runtime identity unrelated project permissions.
 Keep the worker pool private, use only trusted college participants, and do
-not deploy this mode as a public judge for arbitrary users. For that threat
-model, move judging to a dedicated Linux host with container or namespace
-isolation and separately scoped credentials.
+not deploy this mode as a public judge for arbitrary users. The Docker VM is
+the intended boundary for that threat model; validate each deployed revision.
 
 ## Not defended against
 
@@ -47,6 +57,6 @@ isolation and separately scoped credentials.
   `rlimit` mode.
 - Accurate per-process memory accounting for all supported runtimes.
 
-The CI probes exercise bounded execution and known verdicts. They do not
-demonstrate filesystem or network isolation, and must not be described as
-proof that `rlimit` safely contains hostile code.
+The CI `rlimit` probes exercise bounded execution and known verdicts, not
+filesystem or network isolation. The VM Docker probe tests the configured
+boundary on one host revision; neither test proves absolute sandbox security.

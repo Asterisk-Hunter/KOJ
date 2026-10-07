@@ -4,9 +4,9 @@ This file routes contributors; docs/status.md tracks implementation status. AGEN
 
 ## Project
 
-KOJ (Kottayam Online Judge) is a contest hosting platform and problem archive for IIIT Kottayam. The app uses Next.js 16, React 19, TypeScript, Tailwind v4, Drizzle ORM on Neon Postgres, and Clerk. The judge is a separate FastAPI service on Cloud Run, and the queue is a Postgres pull queue with Cloud Run workers.
+KOJ (Kottayam Online Judge) is a contest hosting platform and problem archive for IIIT Kottayam. The app uses Next.js 16, React 19, TypeScript, Tailwind v4, Drizzle ORM on Neon Postgres, and Clerk. Vercel hosts the Next.js app, Cloud Run hosts the FastAPI compatibility/control API, and a dedicated Compute Engine VM runs the Postgres pull worker and Docker-backed judge.
 
-The owner has resolved the hosting and queue questions in docs/KOJ_ Plan to Make It a Solid Project.md: Cloud Run-first, explicit rlimit mode for a trusted college audience, a Postgres pull queue, and Vercel Cron for orphan recovery. See docs/threat-model.md before enabling untrusted submissions.
+The public-contest target recorded in `docs/deployment.md` is a dedicated Linux judge VM with Docker isolation, a Cloud Run control API, a Postgres pull queue, and Vercel Cron for orphan recovery. Cloud Run `rlimit` is a trusted-audience fallback only. See `docs/threat-model.md` before enabling untrusted submissions.
 
 ## Read order
 
@@ -23,10 +23,11 @@ Before framework-specific changes, read the applicable guide in node_modules/nex
 
 - Vercel hosts the Next.js app. The submission handler writes a pending submission and judge job in one database transaction.
 - Neon Postgres stores submissions, queue state, leases, retries, and worker liveness.
-- Cloud Run hosts the FastAPI compatibility service and a worker pool running `python -m app.worker`. Each worker pulls jobs from Postgres with `SKIP LOCKED`, keeps expiring leases alive via heartbeats, retries bounded infrastructure failures, and fences stale attempts from persisting results.
-- Cloud Run uses rlimit mode. It bounds process resources and output but does not isolate filesystem or network access; KOJ is not a public multi-tenant judge in this configuration.
+- Cloud Run hosts the FastAPI compatibility/control API. The dedicated Compute Engine judge VM runs `python -m app.worker` and the Docker-backed judge API. The worker pulls jobs from Postgres with `SKIP LOCKED`, keeps expiring leases alive via heartbeats, retries bounded infrastructure failures, and fences stale attempts from persisting results.
+- The public-contest target runs contestant code in restricted Docker containers on the judge VM. The optional Cloud Run worker-pool example uses `rlimit`, which does not isolate filesystem or network access and is suitable only for trusted participants.
 - SSE reads status from Postgres. Redis is not part of judging or verdict delivery; it is optional for selected read-side caches.
 - Vercel Cron invokes the daily orphan-submission recovery endpoint. Queue leases are the primary worker-failure recovery mechanism.
+- Live inventory on 2026-10-07 found the Cloud Run control API Ready and one judge VM RUNNING, but did not verify the VM worker service, Neon readiness, deployed Vercel app, or end-to-end judging. See `docs/status.md`.
 
 ## Key facts
 
@@ -34,7 +35,7 @@ Before framework-specific changes, read the applicable guide in node_modules/nex
 - ClerkProvider belongs inside body, never wrapping html; sign-in/sign-up routes are catch-alls.
 - Admin and setter checks use Clerk identity plus Neon roles; Clerk Organizations are not used.
 - Public proxy matchers do not replace handler or server-page authorization. The problem-authoring page and contest arena enforce access on the server.
-- The worker and web app need Neon access. Contestant child processes receive a minimal environment, but rlimit has no filesystem or network namespace.
+- The worker and web app need Neon access. The public target places contestant processes in Docker containers without host credentials; `rlimit` fallback does not provide that boundary.
 - Never read, write, or commit environment secrets. Only tracked `.env.example` files are templates.
 
 ## Commands

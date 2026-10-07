@@ -15,7 +15,8 @@ Both Next.js and the FastAPI service connect to the same Neon database. The Fast
 ### Production
 
 - **Vercel** — Next.js app, route handlers, and cron target.
-- **Cloud Run** — FastAPI health/compatibility API and the pull worker pool.
+- **Cloud Run** — FastAPI compatibility/control API.
+- **Compute Engine `koj-judge` VM** — always-on Postgres pull worker and private Docker-backed judge API.
 - **Neon Postgres** — application and durable judge queue data.
 
 ## Infrastructure
@@ -23,9 +24,9 @@ Both Next.js and the FastAPI service connect to the same Neon database. The Fast
 ```
 Vercel (Next.js) ── transactional submission + job insert ──► Neon Postgres
                                                                   ▲
-Cloud Run worker pool ───── claim with SKIP LOCKED ────────────┘
+Judge VM worker ────────── claim with SKIP LOCKED ────────────┘
      │
-     └── judges with the configured sandbox backend
+     └── judges each run inside a restricted Docker container
 Browser ◄── SSE status reads from Postgres ── Vercel
 ```
 
@@ -68,11 +69,13 @@ The admin view reports queue depth and age, worker liveness, infrastructure fail
 
 Never commit `.env*` files. Only `.env.example` and `api/.env.example` are tracked.
 
-## Cloud Run
+## Judge deployment
 
-Cloud Run uses `rlimit` mode, which limits process resources but does not isolate filesystem or network access. KOJ's supported deployment is trusted-college only, not arbitrary public multi-tenant execution. Set `JUDGE_SANDBOX_MODE=rlimit` explicitly on Cloud Run workers and follow [the threat model](docs/threat-model.md).
+The public-contest target is the dedicated Linux VM with `JUDGE_SANDBOX_MODE=docker`. `scripts/deployment/startup.sh` provisions separate API and worker services, a pinned sandbox image, a host seccomp profile, and separate restricted database credentials. Each contestant run gets a container with no network, a read-only root, dropped capabilities, and cgroup limits. Run `scripts/deployment/verify-docker-host.py` on the actual VM before enabling submissions; also rehearse queue recovery and measure mixed-language throughput. See [the threat model](threat-model.md) and `api/README.md` for the security contract.
 
-See `api/DEPLOYMENT_CONTRACT.md` for the FastAPI deployment contract, and `scripts/deployment/` for the Cloud Run service and worker startup files.
+The example Cloud Run worker pool in `scripts/deployment/` uses `rlimit`, which has no filesystem or network isolation and is **not** the public-contest target. It is not deployed in the current project. Do not point public submissions at it. The Cloud Run control API's `/health` only proves HTTP liveness; `/ready`, a recent `judge_workers` heartbeat, and a completed canary are separate launch checks.
+
+Before updating the VM, verify its running source revision and the live Drizzle migration ledger. The startup script installs a pinned source archive and sandbox image; updating Git or Cloud Run alone does not update the VM worker. Deploy and roll back source/image revisions together, then rerun the Docker host probe and a real submission canary. Never run `db:push` against production.
 
 ## Cron
 

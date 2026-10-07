@@ -4,7 +4,7 @@
 
 **KOJ (Kottayam Online Judge)** is a contest hosting platform with an integrated problem archive, built for IIIT Kottayam students and the competitive programming community.
 
-> **Current status:** Durable judging uses a Postgres pull queue with Cloud Run workers. See `docs/status.md` for implemented features and work that still requires live infrastructure or owner coordination.
+> **Current status:** Durable judging uses a Postgres pull queue with a Docker-backed worker on a dedicated Linux VM; Cloud Run hosts the FastAPI control API. See `docs/status.md` for observed live inventory and checks that remain unverified.
 
 ## Problem Statement
 
@@ -33,7 +33,7 @@ Codeforces is excellent but not self-hostable. We need institutional control, gu
 2. Keep judging separate from the web layer and deliver work through durable Postgres jobs with leases and retries
 3. Create a problem lifecycle system where contest problems transition to a public archive post-contest (`draft → contest_active → published`)
 4. Stream submission and contest status through bounded SSE views polling Postgres; Redis is only an optional read-side cache
-5. Measure queue throughput and latency on the deployed Cloud Run/Neon stack before making capacity claims
+5. Measure queue throughput and latency on the deployed VM/Neon stack before making capacity claims
 
 ### Educational (for SE course)
 1. Demonstrate full software engineering process: requirements specification, design with UML, testing strategy, project management

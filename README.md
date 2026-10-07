@@ -6,11 +6,11 @@ Contest hosting platform with an integrated problem archive for IIIT Kottayam.
 
 ## What it is
 
-A self-hosted contest hosting platform and problem archive under college control. A contestant registers, submits code, and gets a persisted verdict; problems and contests live in Neon Postgres; judging runs as durable Postgres jobs pulled by Cloud Run workers.
+A self-hosted contest hosting platform and problem archive under college control. A contestant registers, submits code, and gets a persisted verdict; problems and contests live in Neon Postgres; judging runs as durable Postgres jobs pulled by a worker on a dedicated Linux VM.
 
-The web app (Next.js on Vercel) inserts a submission and its judge job atomically. Cloud Run workers claim jobs with `SELECT ... FOR UPDATE SKIP LOCKED`, keep expiring leases alive via heartbeats, retry bounded infrastructure failures, and fence stale attempts from persisting verdicts. SSE streams poll Postgres for status. Redis is optional for read-side caches only.
+The web app (Next.js on Vercel) inserts a submission and its judge job atomically. A worker on the dedicated Compute Engine judge VM claims jobs with `SELECT ... FOR UPDATE SKIP LOCKED`, keeps expiring leases alive via heartbeats, retries bounded infrastructure failures, and fences stale attempts from persisting verdicts. Cloud Run hosts the FastAPI compatibility/control API. SSE streams poll Postgres for status. Redis is optional for read-side caches only.
 
-The judge supports Python, C, C++, Java, Go, Rust, and JavaScript. Problems use exact output comparison by default or an optional finite numeric-token comparator; an optional Python special checker per problem runs through the configured sandbox backend. Cloud Run uses `rlimit` mode, which limits process resources but has no filesystem or network namespace — the supported deployment is trusted-college only, not arbitrary public code execution. See [the threat model](docs/threat-model.md).
+The judge supports Python, C, C++, Java, Go, Rust, and JavaScript. Problems use exact output comparison by default or an optional finite numeric-token comparator; an optional Python special checker per problem runs through the configured sandbox backend. The public-contest target runs each submission in a restricted Docker container on the judge VM. The Cloud Run `rlimit` worker-pool example is only for a trusted audience and does not isolate filesystem or network access. See [the threat model](docs/threat-model.md).
 
 ## Stack
 
@@ -78,12 +78,12 @@ Runs as a separate process. See `api/README.md` for details.
 cd api
 python -m venv .venv
 .venv\Scripts\activate           # Windows (source .venv/bin/activate on macOS/Linux)
-pip install -r api/requirements.txt
-cp api/.env.example api/.env       # set DATABASE_URL to the same Neon URL
+pip install -r requirements-dev.txt
+cp .env.example .env               # set DATABASE_URL to the same Neon URL
 uvicorn app.main:app --reload --port 8000
 ```
 
-Then <http://127.0.0.1:8000/health> and <http://127.0.0.1:8000/docs>.
+Then use <http://127.0.0.1:8000/health>. The API docs route requires `API_EXPOSE_DOCS=true`.
 
 ## Scripts
 
@@ -104,4 +104,4 @@ Then <http://127.0.0.1:8000/health> and <http://127.0.0.1:8000/docs>.
 - `.env*` is gitignored. Never commit secrets.
 - Tailwind v4 has no `tailwind.config.js`; theming lives in `app/globals.css` under `@theme inline { ... }`.
 - The FastAPI service is intentionally separate from Next.js. Run it as a second process.
-- Cloud Run judging uses `rlimit`, which limits process resources but does not isolate filesystem or network access. The supported deployment is trusted-college only. See [the threat model](docs/threat-model.md) before opening submissions to untrusted public users.
+- The API health endpoint reports HTTP liveness only. See [deployment](docs/deployment.md) and [status](docs/status.md) for required worker, database, and canary checks; do not infer capacity from a running VM.
