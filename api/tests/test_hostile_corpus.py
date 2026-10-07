@@ -2,7 +2,8 @@
 
 Each case runs a hostile program through `execute_judge` in rlimit mode and
 pins the verdict the backend must produce. Non-Python cases skip when their
-toolchain is absent; Python cases always run where the backend exists. No
+toolchain is missing or unusable; Python cases always run where the backend
+exists. No
 containers, network egress, or database are involved.
 
 rlimit mode does not isolate the filesystem or the network (docs/context.md),
@@ -14,12 +15,22 @@ to denial and this file is where that becomes visible.
 from __future__ import annotations
 
 import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass
+from functools import cache
+from pathlib import Path
 
 import pytest
 
 from app.config import settings
-from app.judge import JudgeCase, JudgeRequest, JudgeResponse, execute_judge
+from app.judge import (
+    JudgeCase,
+    JudgeRequest,
+    JudgeResponse,
+    _local_process_environment,
+    execute_judge,
+)
 
 try:
     import resource  # noqa: F401  # POSIX-only, like the rlimit backend itself
@@ -76,13 +87,6 @@ _CASES = [
         code="blocks = []\nwhile True:\n    blocks.append(bytearray(8 * 1024 * 1024))\n",
         expected="memory_limit_exceeded",
     ),
-    # RLIMIT_NPROC refuses further tasks; the parent must fail, not spin forever.
-    HostileCase(
-        name="fork_bomb_python",
-        language="python",
-        code="import os\n\ntry:\n    while True:\n        os.fork()\nexcept OSError:\n    raise SystemExit(42)\n",
-        expected="runtime_error",
-    ),
     # Documented gap: rlimit has no filesystem namespace.
     HostileCase(
         name="read_etc_passwd_python",
@@ -131,12 +135,6 @@ _CASES = [
         expected_stdout="escaped\n",
     ),
     HostileCase(
-        name="fork_bomb_c",
-        language="c",
-        code="#include <unistd.h>\nint main(void) { for (;;) { if (fork() < 0) return 42; } }\n",
-        expected="runtime_error",
-    ),
-    HostileCase(
         name="infinite_loop_cpp",
         language="c++",
         code="int main() { for (;;) {} }\n",
@@ -166,17 +164,52 @@ _CASES = [
         code="fn main() { loop {} }\n",
         expected="time_limit_exceeded",
     ),
+    # Task-slot bombs run last: RLIMIT_NPROC stays exhausted until the surviving
+    # children exit, which briefly starves later compilations. The parent must
+    # fail (exit 42) rather than spin forever.
+    HostileCase(
+        name="fork_bomb_python",
+        language="python",
+        code="import os\n\ntry:\n    while True:\n        os.fork()\nexcept OSError:\n    raise SystemExit(42)\n",
+        expected="runtime_error",
+    ),
+    HostileCase(
+        name="fork_bomb_c",
+        language="c",
+        code="#include <unistd.h>\nint main(void) { for (;;) { if (fork() < 0) return 42; } }\n",
+        expected="runtime_error",
+    ),
 ]
+
+
+@cache
+def _toolchain_usable(binary: str) -> bool:
+    """Probe the binary the way a judge run will see it.
+
+    A binary on PATH is not enough: rustup ships shims that fail once the
+    sandbox drops HOME/RUSTUP_HOME, and those must skip rather than
+    compile-error.
+    """
+    if shutil.which(binary) is None:
+        return False
+    env = _local_process_environment(Path(tempfile.gettempdir()))
+    try:
+        probe = subprocess.run(
+            [binary, "--version"], capture_output=True, timeout=10, env=env
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return probe.returncode == 0
 
 
 def _case_param(case: HostileCase) -> pytest.ParameterSet:
     binary = _TOOLCHAIN.get(case.language)
-    marks = (
-        pytest.mark.skipif(shutil.which(binary) is None, reason=f"{binary} toolchain not installed")
-        if binary
-        else []
+    if binary is None or not _HAS_RLIMIT:
+        return pytest.param(case, id=case.name)
+    marker = pytest.mark.skipif(
+        not _toolchain_usable(binary), reason=f"{binary} toolchain not usable"
     )
-    return pytest.param(case, id=case.name, marks=marks)
+    return pytest.param(case, id=case.name, marks=[marker])
 
 
 @pytest.fixture(autouse=True)
