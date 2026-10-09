@@ -45,6 +45,8 @@ try {
       "GRANT SELECT (id, status) ON public.submissions TO koj_judge_api",
       "GRANT INSERT ON public.judge_jobs TO koj_judge_api",
       "GRANT SELECT (status, submission_id) ON public.judge_jobs TO koj_judge_api",
+      "GRANT SELECT (status, available_at) ON public.judge_jobs TO koj_judge_api",
+      "GRANT SELECT (status, last_seen_at) ON public.judge_workers TO koj_judge_api",
       "GRANT USAGE, SELECT ON SEQUENCE public.judge_jobs_id_seq TO koj_judge_api",
     ] },
   ];
