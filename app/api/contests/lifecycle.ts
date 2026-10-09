@@ -1,6 +1,8 @@
-import { and, eq, inArray, lte, not } from "drizzle-orm";
+import { and, asc, eq, inArray, lte, not } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contests, problems, type Contest } from "@/db/schema";
+
+type LifecycleExecutor = Pick<typeof db, "select" | "update">;
 
 export type ContestStatus = "draft" | "live" | "ended" | "archived";
 
@@ -20,7 +22,7 @@ export function deriveContestUiStatus(
 ): ContestUiStatus {
   if (dbStatus === "archived" || dbStatus === "ended") return "Finished";
   if (dbStatus === "live") {
-    if (now >= startsAt && now <= endsAt) return "Active";
+    if (now >= startsAt && now < endsAt) return "Active";
     if (now < startsAt) return "Registration Open";
     return "Finished";
   }
@@ -31,7 +33,7 @@ export function deriveContestUiStatus(
     if (diff <= sevenDays) return "Registration Open";
     return "Upcoming";
   }
-  if (now >= startsAt && now <= endsAt) return "Registration Open";
+  if (now >= startsAt && now < endsAt) return "Registration Open";
   return "Finished";
 }
 
@@ -68,14 +70,18 @@ export function nextStatuses(from: ContestStatus): ContestStatus[] {
 }
 
 /** Linked `draft` problems go `contest_active` when their contest is published. */
-export async function lockLinkedProblems(contestId: number, now: Date): Promise<void> {
-  const links = await db
+export async function lockLinkedProblems(
+  contestId: number,
+  now: Date,
+  executor: LifecycleExecutor = db,
+): Promise<void> {
+  const links = await executor
     .select({ problemId: contestProblems.problemId })
     .from(contestProblems)
     .where(eq(contestProblems.contestId, contestId));
   const ids = [...new Set(links.map((l) => l.problemId))];
   if (ids.length === 0) return;
-  await db
+  await executor
     .update(problems)
     .set({ status: "contest_active", updatedAt: now })
     .where(and(inArray(problems.id, ids), eq(problems.status, "draft")));
@@ -86,9 +92,10 @@ export async function lockLinkedProblems(contestId: number, now: Date): Promise<
 export async function releaseLinkedProblems(
   contestIds: number[],
   now: Date,
+  executor: LifecycleExecutor = db,
 ): Promise<void> {
   if (contestIds.length === 0) return;
-  const links = await db
+  const links = await executor
     .select({ problemId: contestProblems.problemId })
     .from(contestProblems)
     .where(inArray(contestProblems.contestId, contestIds));
@@ -96,7 +103,7 @@ export async function releaseLinkedProblems(
   if (ids.length === 0) return;
 
   // Find problems still linked to another live contest (exclude the ending contest ids)
-  const stillContested = await db
+  const stillContested = await executor
     .select({ problemId: contestProblems.problemId })
     .from(contestProblems)
     .innerJoin(contests, eq(contestProblems.contestId, contests.id))
@@ -111,24 +118,34 @@ export async function releaseLinkedProblems(
   const releasable = ids.filter((id) => !stillContestedIds.has(id));
   if (releasable.length === 0) return;
 
-  await db
+  await executor
     .update(problems)
     .set({ status: "published", updatedAt: now })
     .where(and(inArray(problems.id, releasable), eq(problems.status, "contest_active")));
 }
 
 /** Reverse of publish: linked `contest_active` problems return to `draft` on unpublish. */
-export async function revertLinkedProblems(contestId: number, now: Date): Promise<void> {
-  const links = await db
+export async function revertLinkedProblems(
+  contestId: number,
+  now: Date,
+  executor: LifecycleExecutor = db,
+): Promise<void> {
+  const links = await executor
     .select({ problemId: contestProblems.problemId })
     .from(contestProblems)
     .where(eq(contestProblems.contestId, contestId));
   const ids = [...new Set(links.map((l) => l.problemId))];
   if (ids.length === 0) return;
-  await db
+  const stillContested = await executor.select({ problemId: contestProblems.problemId })
+    .from(contestProblems).innerJoin(contests, eq(contestProblems.contestId, contests.id))
+    .where(and(inArray(contestProblems.problemId, ids), eq(contests.status, "live"), not(eq(contests.id, contestId))));
+  const retained = new Set(stillContested.map((link) => link.problemId));
+  const revertible = ids.filter((id) => !retained.has(id));
+  if (revertible.length === 0) return;
+  await executor
     .update(problems)
     .set({ status: "draft", updatedAt: now })
-    .where(and(inArray(problems.id, ids), eq(problems.status, "contest_active")));
+    .where(and(inArray(problems.id, revertible), eq(problems.status, "contest_active")));
 }
 
 /**
@@ -142,30 +159,31 @@ export async function revertLinkedProblems(contestId: number, now: Date): Promis
  *
  * @returns number of contests transitioned
  */
-export async function settleExpiredContests(now: Date = new Date()): Promise<number> {
+export async function settleExpiredContests(organizationId: number, now: Date = new Date()): Promise<number> {
   return db.transaction(async (tx) => {
     const expired = await tx
+      .select({ id: contests.id })
+      .from(contests)
+      .where(and(
+        eq(contests.organizationId, organizationId),
+        eq(contests.status, "live"),
+        lte(contests.endsAt, now),
+      ))
+      .orderBy(asc(contests.endsAt), asc(contests.id))
+      .limit(100)
+      .for("update", { skipLocked: true });
+    if (expired.length === 0) return 0;
+    const expiredIds = expired.map((contest) => contest.id);
+    const updated = await tx
       .update(contests)
       .set({ status: "ended", updatedAt: now })
-      .where(and(eq(contests.status, "live"), lte(contests.endsAt, now)))
+      .where(and(
+        eq(contests.organizationId, organizationId),
+        eq(contests.status, "live"),
+        inArray(contests.id, expiredIds),
+      ))
       .returning({ id: contests.id });
-    if (expired.length === 0) return 0;
-    const links = await tx
-      .select({ problemId: contestProblems.problemId })
-      .from(contestProblems)
-      .where(
-        inArray(
-          contestProblems.contestId,
-          expired.map((e) => e.id),
-        ),
-      );
-    const ids = [...new Set(links.map((l) => l.problemId))];
-    if (ids.length > 0) {
-      await tx
-        .update(problems)
-        .set({ status: "published", updatedAt: now })
-        .where(and(inArray(problems.id, ids), eq(problems.status, "contest_active")));
-    }
-    return expired.length;
+    await releaseLinkedProblems(updated.map((contest) => contest.id), now, tx);
+    return updated.length;
   });
 }

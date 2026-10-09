@@ -1,0 +1,17 @@
+# Build against the exact locally built production image, not a second toolchain.
+ARG JUDGE_IMAGE=koj-judge:local
+FROM ${JUDGE_IMAGE}
+
+USER root
+COPY requirements.txt requirements-dev.txt /tmp/koj-test-deps/
+RUN pip install --no-cache-dir -r /tmp/koj-test-deps/requirements-dev.txt
+COPY conftest.py pytest.ini Dockerfile Dockerfile.control ./
+COPY tests ./tests
+COPY integration_tests ./integration_tests
+USER 10001:10001
+
+ENTRYPOINT ["python", "-m", "pytest"]
+# Repo-wide static checks need scripts/monitoring and scripts/deployment
+# mounted read-only at /scripts/*; they are outside this api-only build context.
+# With those mounts, override CMD with: -q -p no:cacheprovider tests integration_tests
+CMD ["-q", "-p", "no:cacheprovider", "--ignore=tests/test_monitoring_policy_render.py", "--ignore=tests/test_deployment_contract.py", "tests", "integration_tests"]

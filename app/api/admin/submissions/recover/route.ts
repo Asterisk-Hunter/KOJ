@@ -1,7 +1,8 @@
+import { withApiGuard } from "@/app/api/guard";
 import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/app/api/admin/authz";
-import { readBoundedJson, MAX_RECOVER_BODY_BYTES } from "@/app/api/body-guard";
+import { readBoundedJsonObject, MAX_RECOVER_BODY_BYTES } from "@/app/api/body-guard";
 import {
   recoverStaleRunningSubmissions,
   STALE_RUNNING_AFTER_MS,
@@ -11,22 +12,20 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * POST /api/admin/submissions/recover — mark stale `pending`/`running`
- * submissions terminal. Auth: Clerk admin session OR `x-cron-secret`
- * matching `CRON_SECRET` (for schedulers, which have no user session).
+ * Recover old submissions that predate durable queue insertion. Auth:
+ * Clerk admin session or a scheduler bearer token matching `CRON_SECRET`.
  *
- * DEPLOYMENT NOTE: no cron is wired in this repo. To schedule, add a Vercel
- * Cron (or Cloud Scheduler) hitting `POST /api/admin/submissions/recover`
- * every 5–10 min with header `x-cron-secret: $CRON_SECRET`, and set
- * `CRON_SECRET` on the Next deployment. Without it, invoke manually with an
- * admin session. Optional body: `{ "staleAfterMinutes": 5..120 }`
- * (default 10). Re-invoke until `recovered` is 0 (bounded batches).
+ * Vercel Cron calls GET. Admins can call POST with an optional
+ * `{ "staleAfterMinutes": 5..120 }` body (default 10).
  */
 
 function cronAuthorized(req: NextRequest): boolean {
   const expected = process.env.CRON_SECRET ?? "";
   if (!expected) return false;
-  const provided = req.headers.get("x-cron-secret") ?? "";
+  const authorization = req.headers.get("authorization") ?? "";
+  const provided = authorization.startsWith("Bearer ")
+    ? authorization.slice("Bearer ".length)
+    : req.headers.get("x-cron-secret") ?? "";
   if (!provided) return false;
   const a = Buffer.from(provided, "utf8");
   const b = Buffer.from(expected, "utf8");
@@ -34,21 +33,22 @@ function cronAuthorized(req: NextRequest): boolean {
   return timingSafeEqual(a, b);
 }
 
-export async function POST(req: NextRequest) {
+async function handleRecovery(req: NextRequest, allowBody: boolean) {
   if (!cronAuthorized(req)) {
     const grant = await requireAdmin();
     if (!grant.ok) return grant.response;
   }
 
   let staleAfterMs = STALE_RUNNING_AFTER_MS;
-  const rawLength = req.headers.get("content-length");
-  const hasBody =
+  const rawLength = allowBody ? req.headers.get("content-length") : null;
+  const hasBody = allowBody && (
     req.headers.get("transfer-encoding") !== null ||
-    (rawLength !== null && Number(rawLength) > 0);
+    (rawLength !== null && Number(rawLength) > 0)
+  );
   if (hasBody) {
-    const parsed = await readBoundedJson(req, MAX_RECOVER_BODY_BYTES);
+    const parsed = await readBoundedJsonObject(req, MAX_RECOVER_BODY_BYTES);
     if (!parsed.ok) return parsed.response;
-    const b = parsed.value as Record<string, unknown>;
+    const b = parsed.value;
     if (b.staleAfterMinutes !== undefined) {
       const n =
         typeof b.staleAfterMinutes === "string"
@@ -67,3 +67,15 @@ export async function POST(req: NextRequest) {
   const result = await recoverStaleRunningSubmissions(new Date(), staleAfterMs);
   return NextResponse.json(result);
 }
+
+async function handleGET(req: NextRequest) {
+  if (!cronAuthorized(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  return handleRecovery(req, false);
+}
+
+async function handlePOST(req: NextRequest) {
+  return handleRecovery(req, true);
+}
+
+export const GET = withApiGuard(handleGET);
+export const POST = withApiGuard(handlePOST);

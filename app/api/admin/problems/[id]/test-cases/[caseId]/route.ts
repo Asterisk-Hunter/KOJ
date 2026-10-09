@@ -1,14 +1,19 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contests, problemTestCases, problems } from "@/db/schema";
 import { jsonError, requireSetter } from "@/app/api/admin/authz";
-import { readBoundedJson, MAX_TEST_CASE_BODY_BYTES } from "@/app/api/body-guard";
+import { readBoundedJsonObject, MAX_TEST_CASE_BODY_BYTES } from "@/app/api/body-guard";
+import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
+import {
+  MAX_TEST_CASE_FILE_BYTES,
+  testCaseLimitMessage,
+  testCaseLimitViolation,
+} from "@/app/api/admin/problems/limits";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const MAX_FILE_BYTES = 10 * 1024 * 1024; // REQ-PROB-03
 
 async function findCase(problemId: number, caseIdRaw: string) {
   const caseId = Number(caseIdRaw);
@@ -28,6 +33,7 @@ async function guard(
   caseIdRaw: string,
   userId: string,
   dbRole: string | null,
+  organizationId: number,
 ) {
   const problemId = Number(problemIdRaw);
   if (!Number.isInteger(problemId) || problemId <= 0) {
@@ -36,7 +42,10 @@ async function guard(
   const problemRows = await db
     .select()
     .from(problems)
-    .where(eq(problems.id, problemId))
+    .where(and(
+      eq(problems.id, problemId),
+      eq(problems.organizationId, organizationId),
+    ))
     .limit(1);
   if (problemRows.length === 0) {
     return { error: jsonError("problem not found", 404), problem: null, testCase: null };
@@ -53,7 +62,10 @@ async function guard(
     .select({ status: contests.status })
     .from(contestProblems)
     .innerJoin(contests, eq(contestProblems.contestId, contests.id))
-    .where(eq(contestProblems.problemId, problem.id));
+    .where(and(
+      eq(contestProblems.problemId, problem.id),
+      eq(contestProblems.organizationId, organizationId),
+    ));
   if (links.some((l) => l.status === "live")) {
     return {
       error: jsonError("test cases are locked while the contest is live", 403),
@@ -65,7 +77,7 @@ async function guard(
 }
 
 /** Setter+: edit one test case. */
-export async function PATCH(
+async function handlePATCH(
   req: NextRequest,
   ctx: { params: Promise<{ id: string; caseId: string }> },
 ) {
@@ -73,21 +85,21 @@ export async function PATCH(
   if (!grant.ok) return grant.response;
 
   const { id: idRaw, caseId: caseIdRaw } = await ctx.params;
-  const g = await guard(idRaw, caseIdRaw, grant.userId, grant.dbRole);
+  const g = await guard(idRaw, caseIdRaw, grant.userId, grant.dbRole, grant.context.organizationId);
   if (g.error || !g.testCase) return g.error ?? jsonError("test case not found", 404);
 
   // Bounded body: 413 before parsing (fields cap at 10MB each; the cap
   // leaves room for JSON overhead). Field validation below is unchanged.
-  const parsed = await readBoundedJson(req, MAX_TEST_CASE_BODY_BYTES);
+  const parsed = await readBoundedJsonObject(req, MAX_TEST_CASE_BODY_BYTES);
   if (!parsed.ok) return parsed.response;
-  const b = parsed.value as Record<string, unknown>;
+  const b = parsed.value;
   const patch: Partial<typeof problemTestCases.$inferInsert> = {};
 
   if (b.input !== undefined) {
     if (typeof b.input !== "string" || b.input.length === 0) {
       return jsonError("input must be non-empty", 400);
     }
-    if (Buffer.byteLength(b.input, "utf8") > MAX_FILE_BYTES) {
+    if (Buffer.byteLength(b.input, "utf8") > MAX_TEST_CASE_FILE_BYTES) {
       return jsonError("input exceeds 10MB (REQ-PROB-03)", 400);
     }
     patch.input = b.input;
@@ -96,7 +108,7 @@ export async function PATCH(
     if (typeof b.expectedOutput !== "string" || b.expectedOutput.length === 0) {
       return jsonError("expectedOutput must be non-empty", 400);
     }
-    if (Buffer.byteLength(b.expectedOutput, "utf8") > MAX_FILE_BYTES) {
+    if (Buffer.byteLength(b.expectedOutput, "utf8") > MAX_TEST_CASE_FILE_BYTES) {
       return jsonError("expectedOutput exceeds 10MB (REQ-PROB-03)", 400);
     }
     patch.expectedOutput = b.expectedOutput;
@@ -112,12 +124,59 @@ export async function PATCH(
     patch.position = b.position;
   }
 
-  await db.update(problemTestCases).set(patch).where(eq(problemTestCases.id, g.testCase.id));
+  const result = await db.transaction(async (tx) => {
+    const [lockedProblem] = await tx
+      .select({ id: problems.id })
+      .from(problems)
+      .where(and(eq(problems.id, g.problem?.id ?? -1), eq(problems.organizationId, grant.context.organizationId)))
+      .for("update");
+    if (!lockedProblem) return { ok: false as const, error: "problem not found", status: 404 as const };
+    const [currentCase] = await tx
+      .select({ input: problemTestCases.input, expectedOutput: problemTestCases.expectedOutput })
+      .from(problemTestCases)
+      .where(and(eq(problemTestCases.id, g.testCase.id), eq(problemTestCases.problemId, lockedProblem.id)))
+      .for("update");
+    if (!currentCase) return { ok: false as const, error: "test case not found", status: 404 as const };
+    if (patch.input !== undefined || patch.expectedOutput !== undefined) {
+      const [usage] = await tx
+        .select({
+          count: sql<number>`count(*)`.mapWith(Number),
+          bytes: sql<number>`COALESCE(sum(octet_length(${problemTestCases.input}) + octet_length(${problemTestCases.expectedOutput})), 0)`.mapWith(Number),
+        })
+        .from(problemTestCases)
+        .where(eq(problemTestCases.problemId, lockedProblem.id));
+      const replacement = {
+        input: patch.input ?? currentCase.input,
+        expectedOutput: patch.expectedOutput ?? currentCase.expectedOutput,
+      };
+      const violation = testCaseLimitViolation(
+        usage?.count ?? 0,
+        usage?.bytes ?? 0,
+        [replacement],
+        [currentCase],
+      );
+      if (violation) return { ok: false as const, error: testCaseLimitMessage(violation), status: 400 as const };
+    }
+    await tx.update(problemTestCases).set(patch).where(and(
+      eq(problemTestCases.id, g.testCase.id),
+      eq(problemTestCases.problemId, lockedProblem.id),
+    ));
+    await recordAdminAuditEvent(tx, {
+      organizationId: grant.context.organizationId,
+      actorId: grant.userId,
+      action: "problem.test_case_updated",
+      entityType: "problem",
+      entityId: g.problem?.id,
+      metadata: { fields: Object.keys(patch).join(",") },
+    });
+    return { ok: true as const };
+  });
+  if (!result.ok) return jsonError(result.error, result.status);
   return NextResponse.json({ id: g.testCase.id, updated: true });
 }
 
 /** Setter+: delete one test case. */
-export async function DELETE(
+async function handleDELETE(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string; caseId: string }> },
 ) {
@@ -125,9 +184,21 @@ export async function DELETE(
   if (!grant.ok) return grant.response;
 
   const { id: idRaw, caseId: caseIdRaw } = await ctx.params;
-  const g = await guard(idRaw, caseIdRaw, grant.userId, grant.dbRole);
+  const g = await guard(idRaw, caseIdRaw, grant.userId, grant.dbRole, grant.context.organizationId);
   if (g.error || !g.testCase) return g.error ?? jsonError("test case not found", 404);
 
-  await db.delete(problemTestCases).where(eq(problemTestCases.id, g.testCase.id));
+  await db.transaction(async (tx) => {
+    await tx.delete(problemTestCases).where(eq(problemTestCases.id, g.testCase.id));
+    await recordAdminAuditEvent(tx, {
+      organizationId: grant.context.organizationId,
+      actorId: grant.userId,
+      action: "problem.test_case_deleted",
+      entityType: "problem",
+      entityId: g.problem?.id,
+    });
+  });
   return NextResponse.json({ deleted: true });
 }
+
+export const PATCH = withApiGuard(handlePATCH);
+export const DELETE = withApiGuard(handleDELETE);

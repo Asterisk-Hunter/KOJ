@@ -60,11 +60,21 @@ const navLinks = [
     label: "Submissions",
     icon: <span className="font-mono text-xs">#</span>,
   },
+  {
+    href: "/organizations",
+    signedOutHref: "/organizations",
+    label: "Organizations",
+    icon: (
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 21h18M5 21V7l8-4v18m6 0V11l-6-4M9 9v.01M9 12v.01M9 15v.01M9 18v.01M15 13v.01M15 16v.01M15 19v.01" />
+      </svg>
+    ),
+  },
 ];
 
 export default function Navigation() {
   const pathname = usePathname();
-  const { isSignedIn } = useAuth();
+  const { isLoaded, isSignedIn } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [authMe, setAuthMe] = useState<AuthMeResponse | null>(null);
 
@@ -93,7 +103,7 @@ export default function Navigation() {
 
           {/* Desktop links */}
           <div className="hidden md:flex items-center gap-6">
-            {navLinks.map((link) => {
+            {navLinks.filter((link) => link.href !== "/organizations" || isSignedIn).map((link) => {
               const href = hasServerSession ? link.href : link.signedOutHref;
               const isActive = pathname === href || (link.href !== "/dashboard" && pathname.startsWith(`${link.href}/`));
               return (
@@ -115,7 +125,7 @@ export default function Navigation() {
 
             {/* Desktop auth controls */}
           <div className="hidden md:flex items-center gap-4">
-            {!isSignedIn ? (
+            {!isLoaded ? null : !isSignedIn ? (
               <>
                 <SignInButton mode="modal">
                   <button className="text-kjtext-muted hover:text-kjprimary font-mono text-xs uppercase tracking-widest transition-colors cursor-pointer">
@@ -169,7 +179,7 @@ export default function Navigation() {
       {/* Mobile slide-down */}
       {mobileOpen && (
         <div className="md:hidden bg-kjsurface border-b border-kjborder px-4 pb-4 pt-2">
-          {navLinks.map((link) => {
+          {navLinks.filter((link) => link.href !== "/organizations" || isSignedIn).map((link) => {
             const href = hasServerSession ? link.href : link.signedOutHref;
             const isActive = pathname === href || (link.href !== "/dashboard" && pathname.startsWith(`${link.href}/`));
             return (
@@ -189,7 +199,7 @@ export default function Navigation() {
             );
           })}
           <div className="flex flex-col gap-3 pt-3 mt-2 border-t border-kjborder">
-            {!isSignedIn ? (
+            {!isLoaded ? null : !isSignedIn ? (
               <>
                 <SignInButton mode="modal">
                   <button

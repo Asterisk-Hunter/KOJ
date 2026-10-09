@@ -1,9 +1,12 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
-import { asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { contestProblems, contestRegistrations, contests, problems } from "@/db/schema";
 import { ensureUserRow, jsonError, requireContestManager } from "@/app/api/admin/authz";
+import { MAX_CONTEST_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 import { hashInviteCode } from "@/app/api/contests/invite-code";
+import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,29 +34,33 @@ async function uniqueSlug(base: string): Promise<string> {
 }
 
 /** Admin: list every contest (including drafts) with problem/participant counts. */
-export async function GET() {
+async function handleGET() {
   const grant = await requireContestManager();
   if (!grant.ok) return grant.response;
 
   const contestRows = await db
     .select()
     .from(contests)
+    .where(eq(contests.organizationId, grant.context.organizationId))
     .orderBy(asc(contests.startsAt));
+  const contestIds = contestRows.map((contest) => contest.id);
 
-  const problemCounts = await db
+  const problemCounts = contestIds.length === 0 ? [] : await db
     .select({
       contestId: contestProblems.contestId,
       count: sql<number>`count(*)`.mapWith(Number),
     })
     .from(contestProblems)
+    .where(inArray(contestProblems.contestId, contestIds))
     .groupBy(contestProblems.contestId);
 
-  const registrationCounts = await db
+  const registrationCounts = contestIds.length === 0 ? [] : await db
     .select({
       contestId: contestRegistrations.contestId,
       count: sql<number>`count(*)`.mapWith(Number),
     })
     .from(contestRegistrations)
+    .where(inArray(contestRegistrations.contestId, contestIds))
     .groupBy(contestRegistrations.contestId);
 
   const problemCountMap = new Map(problemCounts.map((r) => [r.contestId, r.count]));
@@ -80,17 +87,13 @@ export async function GET() {
  * Admin: create a contest (always starts as `draft`; publish via PATCH).
  * Optionally links `problemIds` — each must exist and be `draft` (BR-04).
  */
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const grant = await requireContestManager();
   if (!grant.ok) return grant.response;
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return jsonError("invalid json", 400);
-  }
-  const b = body as Record<string, unknown>;
+  const parsed = await readBoundedJsonObject(req, MAX_CONTEST_BODY_BYTES, "invalid json");
+  if (!parsed.ok) return parsed.response;
+  const b = parsed.value;
 
   const title = b.title;
   if (typeof title !== "string" || title.trim().length === 0) {
@@ -157,7 +160,10 @@ export async function POST(req: NextRequest) {
       const rows = await db
         .select({ id: problems.id, status: problems.status })
         .from(problems)
-        .where(inArray(problems.id, problemIds));
+        .where(and(
+          inArray(problems.id, problemIds),
+          eq(problems.organizationId, grant.context.organizationId),
+        ));
       if (rows.length !== problemIds.length) return jsonError("one or more problems not found", 404);
       for (const r of rows) {
         if (r.status !== "draft") return jsonError(`problem #${r.id} is not draft (BR-04)`, 400);
@@ -168,28 +174,47 @@ export async function POST(req: NextRequest) {
   const ready = await ensureUserRow(grant.userId);
   if (!ready) return jsonError("failed to resolve user", 500);
 
-  const inserted = await db
-    .insert(contests)
-    .values({
-      createdBy: grant.userId,
-      slug,
-      title: title.trim(),
-      description: descriptionRaw,
-      startsAt,
-      endsAt,
-      status: "draft",
-      // Invite codes are stored hashed only — never plaintext.
-      inviteCode: null,
-      inviteCodeHash: inviteCode === null ? null : hashInviteCode(inviteCode),
-    })
-    .returning({ id: contests.id });
+  const contestId = await db.transaction(async (tx) => {
+    const [inserted] = await tx
+      .insert(contests)
+      .values({
+        organizationId: grant.context.organizationId,
+        createdBy: grant.userId,
+        slug,
+        title: title.trim(),
+        description: descriptionRaw,
+        startsAt,
+        endsAt,
+        status: "draft",
+        // Invite codes are stored hashed only — never plaintext.
+        inviteCode: null,
+        inviteCodeHash: inviteCode === null ? null : hashInviteCode(inviteCode),
+      })
+      .returning({ id: contests.id });
 
-  const contestId = inserted[0].id;
-  if (problemIds.length > 0) {
-    await db.insert(contestProblems).values(
-      problemIds.map((problemId, i) => ({ contestId, problemId, position: i })),
-    );
-  }
+    if (problemIds.length > 0) {
+      await tx.insert(contestProblems).values(
+        problemIds.map((problemId, i) => ({
+          organizationId: grant.context.organizationId,
+          contestId: inserted.id,
+          problemId,
+          position: i,
+        })),
+      );
+    }
+    await recordAdminAuditEvent(tx, {
+      organizationId: grant.context.organizationId,
+      actorId: grant.userId,
+      action: "contest.created",
+      entityType: "contest",
+      entityId: inserted.id,
+      metadata: { count: problemIds.length },
+    });
+    return inserted.id;
+  });
 
   return NextResponse.json({ id: contestId, slug, status: "draft" }, { status: 201 });
 }
+
+export const GET = withApiGuard(handleGET);
+export const POST = withApiGuard(handlePOST);

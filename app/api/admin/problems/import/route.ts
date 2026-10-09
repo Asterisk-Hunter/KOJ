@@ -1,7 +1,15 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { problems, problemTestCases } from "@/db/schema";
 import { ensureUserRow, jsonError, requireSetter } from "@/app/api/admin/authz";
+import { MAX_PROBLEM_AUTHORING_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
+import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
+import {
+  MAX_PROBLEM_MEMORY_MB,
+  testCaseLimitMessage,
+  testCaseLimitViolation,
+} from "@/app/api/admin/problems/limits";
 import {
   extractAtCoderTaskId,
   extractCodeforcesId,
@@ -16,7 +24,7 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const grant = await requireSetter();
   if (!grant.ok) {
     return grant.response;
@@ -28,14 +36,13 @@ export async function POST(req: NextRequest) {
     return jsonError("user not found or could not be synced", 400);
   }
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return jsonError("invalid json payload", 400);
-  }
-
-  const b = body as Record<string, unknown>;
+  const parsedBody = await readBoundedJsonObject(
+    req,
+    MAX_PROBLEM_AUTHORING_BODY_BYTES,
+    "invalid json payload",
+  );
+  if (!parsedBody.ok) return parsedBody.response;
+  const b = parsedBody.value;
   const source = typeof b.source === "string" ? b.source.toLowerCase() : "auto";
   const rawInput = b.input;
   const autoCreate = Boolean(b.autoCreate);
@@ -284,12 +291,19 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  if (parsed.memoryLimitMb > MAX_PROBLEM_MEMORY_MB) {
+    return jsonError(`memoryLimitMb must be between 16 and ${MAX_PROBLEM_MEMORY_MB}`, 400);
+  }
+  const caseLimitViolation = testCaseLimitViolation(0, 0, parsed.testCases);
+  if (caseLimitViolation) return jsonError(testCaseLimitMessage(caseLimitViolation), 400);
+
   // If autoCreate is true, persist directly to Neon Postgres
   if (autoCreate) {
     const created = await db.transaction(async (tx) => {
       const inserted = await tx
         .insert(problems)
         .values({
+          organizationId: grant.context.organizationId,
           authorId: userId,
           title: parsed.title.slice(0, 500),
           statement: parsed.statement,
@@ -319,6 +333,15 @@ export async function POST(req: NextRequest) {
         );
       }
 
+      await recordAdminAuditEvent(tx, {
+        organizationId: grant.context.organizationId,
+        actorId: userId,
+        action: "problem.imported",
+        entityType: "problem",
+        entityId: problemId,
+        metadata: { count: parsed.testCases.length, status },
+      });
+
       return { id: problemId, testCaseCount: parsed.testCases.length };
     });
 
@@ -339,3 +362,5 @@ export async function POST(req: NextRequest) {
     problem: parsed,
   });
 }
+
+export const POST = withApiGuard(handlePOST);

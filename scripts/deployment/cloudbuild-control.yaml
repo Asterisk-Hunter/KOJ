@@ -1,0 +1,5 @@
+# Use the repository root as the submitted source context.
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ['build', '-f', 'api/Dockerfile.control', '-t', '${_IMAGE}', 'api']
+images: ['${_IMAGE}']

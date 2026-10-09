@@ -1,0 +1,8 @@
+# Use the repository root as the submitted source context.
+# This builds/publishes the seven-language image only; it does not deploy it.
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ['build', '-f', 'api/Dockerfile', '-t', '${_IMAGE}', 'api']
+images: ['${_IMAGE}']
+options:
+  logging: CLOUD_LOGGING_ONLY

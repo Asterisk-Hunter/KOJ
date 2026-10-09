@@ -1,9 +1,12 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
 import { desc, eq, ilike, inArray, or } from "drizzle-orm";
 import { clerkClient } from "@clerk/nextjs/server";
 import { db } from "@/db";
 import { users } from "@/db/schema";
 import { jsonError, requireAdmin, uniqueUsername } from "@/app/api/admin/authz";
+import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
+import { MAX_ADMIN_USER_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,7 +47,7 @@ function dirName(u: ClerkDirUser): string {
  * from Clerk and enriched with Neon role/suspended. `role` defaults to
  * `contestant` and `synced` is false until the row exists.
  */
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   const grant = await requireAdmin();
   if (!grant.ok) return grant.response;
 
@@ -148,17 +151,13 @@ export async function GET(req: NextRequest) {
  * Admin: change a user's role (REQ-AUTH-04 / BR-03) and/or suspended flag.
  * Refuses self-changes so an admin cannot lock themselves out.
  */
-export async function PATCH(req: NextRequest) {
+async function handlePATCH(req: NextRequest) {
   const grant = await requireAdmin();
   if (!grant.ok) return grant.response;
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return jsonError("invalid json", 400);
-  }
-  const b = body as Record<string, unknown>;
+  const parsed = await readBoundedJsonObject(req, MAX_ADMIN_USER_BODY_BYTES, "invalid json");
+  if (!parsed.ok) return parsed.response;
+  const b = parsed.value;
 
   const clerkId = b.clerkId;
   if (typeof clerkId !== "string" || clerkId.length === 0) {
@@ -198,26 +197,42 @@ export async function PATCH(req: NextRequest) {
   const email = dirEmail(cu) || `${clerkId}@placeholder.local`;
   const username = await uniqueUsername(dirName(cu) || clerkId, clerkId);
 
-  const updated = await db
-    .insert(users)
-    .values({
-      clerkId,
-      username,
-      email,
-      role: patch.role ?? "contestant",
-      suspended: patch.suspended ?? false,
-    })
-    .onConflictDoUpdate({
-      target: users.clerkId,
-      set: { ...patch },
-    })
-    .returning({
-      clerkId: users.clerkId,
-      username: users.username,
-      role: users.role,
-      suspended: users.suspended,
-    });
+  const updated = await db.transaction(async (tx) => {
+    const result = await tx
+      .insert(users)
+      .values({
+        clerkId,
+        username,
+        email,
+        role: patch.role ?? "contestant",
+        suspended: patch.suspended ?? false,
+      })
+      .onConflictDoUpdate({
+        target: users.clerkId,
+        set: { ...patch },
+      })
+      .returning({
+        clerkId: users.clerkId,
+        username: users.username,
+        role: users.role,
+        suspended: users.suspended,
+      });
+    if (result[0]) {
+      await recordAdminAuditEvent(tx, {
+        organizationId: null,
+        actorId: grant.userId,
+        action: "user.access_updated",
+        entityType: "user",
+        entityId: clerkId,
+        metadata: { role: result[0].role, suspended: result[0].suspended },
+      });
+    }
+    return result;
+  });
   if (updated.length === 0) return jsonError("user not found", 404);
 
   return NextResponse.json({ user: updated[0] });
 }
+
+export const GET = withApiGuard(handleGET);
+export const PATCH = withApiGuard(handlePATCH);

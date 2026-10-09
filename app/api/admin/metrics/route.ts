@@ -1,7 +1,8 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextResponse } from "next/server";
-import { and, desc, eq, gte, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { contests, submissions, users } from "@/db/schema";
+import { contests, judgeJobs, judgeWorkers, submissions, users } from "@/db/schema";
 import { requireAdmin } from "@/app/api/admin/authz";
 
 export const runtime = "nodejs";
@@ -11,13 +12,14 @@ export const dynamic = "force-dynamic";
  * Admin: judge + submission observability — verdict distribution
  * (all-time + last 24h), average judge latency, recent failures.
  */
-export async function GET() {
+async function handleGET() {
   const grant = await requireAdmin();
   if (!grant.ok) return grant.response;
 
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-  const [allTime, last24h, avgRow, failures, contestRow] = await Promise.all([
+  const workerSince = new Date(Date.now() - 2 * 60 * 1000);
+  const [allTime, last24h, avgRow, failures, contestRow, infraRows, totalRows, queueRows, oldestQueued, workers] = await Promise.all([
     db
       .select({
         status: submissions.status,
@@ -36,6 +38,8 @@ export async function GET() {
     db
       .select({
         avgMs: sql<number | null>`avg(${submissions.executionTimeMs})`.mapWith(Number),
+        p50Ms: sql<number | null>`percentile_cont(0.5) WITHIN GROUP (ORDER BY ${submissions.executionTimeMs})`,
+        p95Ms: sql<number | null>`percentile_cont(0.95) WITHIN GROUP (ORDER BY ${submissions.executionTimeMs})`,
         count: sql<number>`count(*)`.mapWith(Number),
       })
       .from(submissions)
@@ -69,6 +73,36 @@ export async function GET() {
       .select({ status: contests.status, count: sql<number>`count(*)`.mapWith(Number) })
       .from(contests)
       .groupBy(contests.status),
+    db
+      .select({ count: sql<number>`count(*)`.mapWith(Number) })
+      .from(submissions)
+      .where(and(eq(submissions.judgeInfraError, true), gte(submissions.submittedAt, since))),
+    db
+      .select({ count: sql<number>`count(*)`.mapWith(Number) })
+      .from(submissions)
+      .where(gte(submissions.submittedAt, since)),
+    db
+      .select({ status: judgeJobs.status, count: sql<number>`count(*)`.mapWith(Number) })
+      .from(judgeJobs)
+      .groupBy(judgeJobs.status),
+    db
+      .select({ createdAt: judgeJobs.createdAt })
+      .from(judgeJobs)
+      .where(eq(judgeJobs.status, "queued"))
+      .orderBy(asc(judgeJobs.createdAt))
+      .limit(1),
+    db
+      .select({
+        id: judgeWorkers.id,
+        hostname: judgeWorkers.hostname,
+        status: judgeWorkers.status,
+        activeJobId: judgeWorkers.activeJobId,
+        lastJobId: judgeWorkers.lastJobId,
+        lastSeenAt: judgeWorkers.lastSeenAt,
+      })
+      .from(judgeWorkers)
+      .where(gte(judgeWorkers.lastSeenAt, workerSince))
+      .orderBy(desc(judgeWorkers.lastSeenAt)),
   ]);
 
   const recentSubmissions = await db
@@ -102,6 +136,10 @@ export async function GET() {
       ),
     );
 
+  const queueByStatus = Object.fromEntries(queueRows.map((row) => [row.status, row.count]));
+  const infraFailures24h = infraRows[0]?.count ?? 0;
+  const submitted24h = totalRows[0]?.count ?? 0;
+
   return NextResponse.json({
     window: "24h",
     allTimeByStatus: byStatus,
@@ -111,7 +149,32 @@ export async function GET() {
       avgRow[0]?.avgMs === null || avgRow[0]?.avgMs === undefined
         ? null
         : Math.round(avgRow[0].avgMs),
+    p50ExecutionMsLast24h:
+      avgRow[0]?.p50Ms === null || avgRow[0]?.p50Ms === undefined
+        ? null
+        : Math.round(avgRow[0].p50Ms),
+    p95ExecutionMsLast24h:
+      avgRow[0]?.p95Ms === null || avgRow[0]?.p95Ms === undefined
+        ? null
+        : Math.round(avgRow[0].p95Ms),
     judgeUnavailableLast24h: judgeDown24h[0]?.count ?? 0,
+    infraFailures24h,
+    infraFailureRate24h: submitted24h === 0 ? 0 : infraFailures24h / submitted24h,
+    queue: {
+      byStatus: queueByStatus,
+      oldestQueuedWaitMs: oldestQueued[0]
+        ? Math.max(0, Date.now() - oldestQueued[0].createdAt.getTime())
+        : null,
+      activeWorkers: workers.filter((worker) => worker.status !== "stopping").length,
+      workers: workers.map((worker) => ({
+        id: worker.id,
+        hostname: worker.hostname,
+        status: worker.status,
+        activeJobId: worker.activeJobId,
+        lastJobId: worker.lastJobId,
+        lastSeenAt: worker.lastSeenAt.toISOString(),
+      })),
+    },
     contestsByStatus: Object.fromEntries(contestRow.map((r) => [r.status, r.count])),
     recentSubmissions: recentSubmissions.map((s) => ({
       id: s.id,
@@ -133,3 +196,5 @@ export async function GET() {
     })),
   });
 }
+
+export const GET = withApiGuard(handleGET);

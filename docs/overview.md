@@ -4,7 +4,7 @@
 
 **KOJ (Kottayam Online Judge)** is a contest hosting platform with an integrated problem archive, built for IIIT Kottayam students and the competitive programming community.
 
-> **Current status:** Sprint 1 backend is implemented on `feat/sprint1-backend` — see `docs/status.md` for the authoritative implementation status, seeded counts, and remaining work.
+> **Current status:** Durable judging uses a Postgres pull queue with a Docker-backed worker on a dedicated Linux VM; Cloud Run hosts the FastAPI control API. See `docs/status.md` for observed live inventory and checks that remain unverified.
 
 ## Problem Statement
 
@@ -29,18 +29,18 @@ Codeforces is excellent but not self-hostable. We need institutional control, gu
 ## Objectives
 
 ### Technical
-1. Build a working contest hosting platform that reliably judges code submissions (Python today, multi-language planned)
-2. Implement a distributed judging architecture (judge isolated from web layer) that demonstrates architectural patterns — Next route → FastAPI `/judge` (see `docs/status.md` for pipeline)
+1. Build a contest hosting platform that judges code submissions in seven languages
+2. Keep judging separate from the web layer and deliver work through durable Postgres jobs with leases and retries
 3. Create a problem lifecycle system where contest problems transition to a public archive post-contest (`draft → contest_active → published`)
-4. Real-time leaderboard via Redis cache/pub-sub → Next.js SSE — **planned, not implemented** (see `docs/status.md`); current leaderboard is computed on demand
-5. Support concurrent contest load (30 simultaneous submissions) without performance degradation
+4. Stream submission and contest status through bounded SSE views polling Postgres; Redis is only an optional read-side cache
+5. Measure queue throughput and latency on the deployed VM/Neon stack before making capacity claims
 
 ### Educational (for SE course)
 1. Demonstrate full software engineering process: requirements specification, design with UML, testing strategy, project management
 2. Justify every architectural decision with reference to functional or non-functional requirements
 3. Differentiate between architectural styles (layered, pipe-and-filter, event-driven, master-slave) with concrete examples from the codebase
 4. Document design tradeoffs: what we chose to include (process-level sandboxing) vs. what we explicitly didn't (production-grade VM isolation)
-5. Show testing taxonomy: unit, integration (bottom-up and top-down), validation, stress, alpha, beta, regression testing (strategy in `docs/testing.md`; no runner yet)
+5. Show testing taxonomy: unit, integration, validation, stress, alpha, beta, and regression testing (current local and CI checks are in `docs/testing.md`)
 
 ### Resume
 1. Ship a real product used by real people (actual college contests with real students)
@@ -56,7 +56,7 @@ Codeforces is excellent but not self-hostable. We need institutional control, gu
 |---|---|---|
 | **Contestant** | Registers for contests, submits code, views leaderboard, practices archived problems | Implemented (`user_role=contestant`) |
 | **Setter** | Creates problems, uploads test cases, sets time/memory limits, creates/edits/publishes contests | Implemented (`setter` in DB; problems via `requireSetter`, contests via `requireContestManager`) |
-| **Admin** | Manages users, controls visibility and publishing, deletes problems, observability | Implemented (`admin` in DB + `org:admin` in Clerk) |
+| **Admin** | Manages users, controls visibility and publishing, deletes problems, observability | Implemented (`admin` role in Neon; no Clerk Organizations gate) |
 
 ---
 
@@ -64,7 +64,7 @@ Codeforces is excellent but not self-hostable. We need institutional control, gu
 
 After a contest ends, problems automatically publish to a public practice archive. This turns one-off contests into cumulative institutional knowledge — a growing problem bank that models SPOJ or Codeforces's problem archive, but built and owned by the college.
 
-Status today: seed provides 8 published problems + 4 contests pre-linked (16 contest_problems). Auto-publish on contest end is part of the remaining contest CRUD work (see `docs/status.md`).
+Status today: seed provides 8 published problems + 4 contests pre-linked (16 contest_problems). Contest lifecycle handlers publish linked problems when contests end; live data and contest operation remain deployment checks.
 
 ---
 

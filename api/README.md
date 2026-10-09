@@ -1,118 +1,95 @@
-# KOJ API
+# KOJ Python judge and queue worker
 
-Minimal FastAPI service that lives alongside the Next.js app in this repo.
-It is a **separate process** from `next dev` and runs on its own port
-(default `8000`, while Next.js stays on `3000`).
+The FastAPI compatibility/control API and Postgres pull worker are separate
+processes from Next.js. Normal submissions enter the durable Postgres queue;
+they do not depend on an HTTP request staying alive.
 
-## 1. Create a virtualenv
+## Local setup
 
-Windows (PowerShell):
+From `api/`, create a virtual environment and install dependencies:
 
-```powershell
+```sh
 python -m venv .venv
-.venv\Scripts\activate
+python -m pip install -r requirements-dev.txt
 ```
 
-macOS / Linux:
+Activate the virtual environment using the command for your shell. Supply
+`DATABASE_URL` through the process environment or an untracked local `.env`.
+Never log settings or commit credentials. The development API runs with:
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-```
-
-## 2. Install dependencies
-
-```bash
-pip install -r api/requirements.txt
-```
-
-## 3. Configure environment
-
-Copy the example file and fill in your Neon connection string (the same
-`DATABASE_URL` used by the Next.js app in `.env.local`):
-
-Windows:
-
-```powershell
-copy api\.env.example api\.env
-```
-
-macOS / Linux:
-
-```bash
-cp api/.env.example api/.env
-```
-
-Then edit `api/.env`:
-
-```
-DATABASE_URL=postgresql://USER:PASSWORD@HOST/DB?sslmode=require
-FASTAPI_HOST=127.0.0.1
-FASTAPI_PORT=8000
-```
-
-> The `DATABASE_URL` placeholder is intentionally invalid — replace
-> `USER`, `PASSWORD`, `HOST`, and `DB` with your real Neon values.
-
-## 4. Run the service
-
-From inside the `api/` directory (so the relative `.env` file is found):
-
-```bash
-cd api
+```sh
 uvicorn app.main:app --reload --port 8000
 ```
 
-Then open:
+`GET /health` is a cheap liveness check. `GET /ready` requires
+`X-Judge-Secret` and checks database/backend readiness. API documentation
+routes are disabled unless `API_EXPOSE_DOCS=true`. Direct HTTP execution is
+disabled by default; the pull worker does not need it enabled.
 
-- <http://127.0.0.1:8000/>             — service index
-- <http://127.0.0.1:8000/health>       — liveness + DB readiness
-- <http://127.0.0.1:8000/docs>         — interactive Swagger UI
+## Production judge target
 
-## Notes
+The public-contest target is the dedicated Linux judge VM with
+`JUDGE_SANDBOX_MODE=docker`. It keeps database credentials in the host-side
+worker and runs contestant code in restricted containers. See
+`docs/threat-model.md` and `scripts/deployment/verify-docker-host.py`. Cloud Run
+hosts the compatibility/control API, not the queue worker. The `rlimit` backend
+is only a trusted-audience fallback: it does not isolate filesystem, network,
+or same-UID credentials. Do not substitute the experimental `cloudrun` launcher.
 
-- This service is **not** a Next.js route handler. It runs in its own
-  Python process — start it in a second terminal alongside `next dev`.
-- CORS is tight: `http://localhost:3000` plus `FRONTEND_URL` only
-  (explicit methods/headers, no credentials, never `*`, no self-origin).
-- Never commit `api/.env`; only `.env.example` is tracked.
+The VM provisions a pinned seven-language sandbox image and host-side API and
+worker services with `scripts/deployment/startup.sh`. The worker runs:
 
-## Judge sandbox (Docker-only, fail-closed)
+```sh
+python -m app.worker
+```
 
-Compilation and execution both run in per-case `docker run` containers
-with fixed flags: `--network none`, `--read-only`, non-root
-`--user 65534:65534`, `--cap-drop ALL`, `no-new-privileges`,
-repo-managed seccomp profile
-(`--security-opt seccomp=/etc/koj/seccomp-koj.json`, provisioned from
-`api/seccomp-koj.json`; missing/invalid profile fails closed),
-`--pids-limit`, `--memory`/`--memory-swap`, `--cpus`, file-write ulimit,
-read-only source mount (`/sandbox:ro`) plus a writable exec tmpfs at
-`/scratch` for build artifacts (C/C++ binaries, Java classes) and a
-noexec `/tmp`, per-run timeout with forced `docker rm -f` cleanup on
-every timeout/exception path, `--rm`, `--pull never`, full-UUID
-container names, and bounded stdout/stderr. C/C++ add
-stack-protector/FORTIFY hardening; Java requires `class Solution`
-(comment/string aware) with classes separated to `/scratch`. Exit
-137/-9 maps to `memory_limit_exceeded`. No request field can set
-images, mounts, or flags — images come only from
-`JUDGE_DOCKER_IMAGE_*` env vars (see `api/.env.example`).
+The Cloud Run worker image in `api/Dockerfile` selects `rlimit` explicitly and
+is not the public judge deployment. The smaller `Dockerfile.control` is not a
+judge-worker image. Supported languages are Python, C, C++, Java, Go, Rust,
+and JavaScript.
 
-Concurrency is bounded (`JUDGE_MAX_CONCURRENT`, default 4):
-saturated `/judge`/`/judge-async` callers get `503` + `Retry-After`
-instead of queueing. `/judge-async` accepts an optional
-`Idempotency-Key` header and dedupes by submission ID under a
-non-blocking advisory lock (duplicate after completion replays the
-stored status). Hidden test cases (`is_sample=false`, the default)
-get redacted stdout/stderr; infra failures persist as retryable
-`pending` + `judge_infra_error=true` (never a false contestant
-`runtime_error`; see `JudgeResponse.infra_error`). Full host,
-provisioning, and evidence matrix: `api/DEPLOYMENT_CONTRACT.md`.
+Production requirements to verify before a contest:
 
-The Docker host must have the daemon running, the seccomp profile
-provisioned, and all three images pre-pulled (`docker pull
-python:3.11-slim gcc:13-bookworm eclipse-temurin:17-jdk-jammy`, or
-your configured overrides). Without Docker, every judgment returns an
-infra-flagged error ("judge sandbox unavailable") — including on
-Cloud Run, which cannot run a Docker daemon. Production judging needs
-a VM/GCE host with Docker (or an equivalent container-isolated
-runner), not Cloud Run.
+- Keep the VM's `koj-worker.service` running and its heartbeat recent. A
+  request-driven HTTP service with idle CPU throttling or scale-to-zero cannot
+  reliably poll the queue. A running VM alone does not prove a healthy worker.
+- Inject a least-privilege Postgres DSN, apply the queue/worker migrations, and
+  verify TLS certificate/hostname validation. No migration or live connection
+  is performed by the unit tests.
+- Use `JUDGE_LEASE_SECONDS=120` (default) or another supported value. Workers
+  renew every third of the lease; lost/expired attempts cannot publish results.
+  Due expired leases are reclaimed with `SKIP LOCKED`; exhausted attempts are
+  finalized in bounded batches. Daily Vercel recovery is only an orphan backstop.
+- Provision enough VM memory for the compiler, host worker, and one sandbox
+  container. Docker cgroups provide the per-run memory ceiling; measure
+  aggregate memory and queue latency under mixed-language load.
+- Run the Linux integration corpus inside the built image, then run the Docker
+  boundary probes on the actual VM. Unit tests cannot establish host isolation.
+- Load-test queue wait times and worker counts, monitor dead jobs, infrastructure
+  errors and stale workers, and rehearse worker termination/lease recovery.
+  A long valid test set may run beyond 60 seconds: its aggregate budget now
+  follows the case count and per-case limit (up to roughly 24 minutes at the
+  supported maxima). Leases heartbeat throughout; drain/stop budgets must not
+  assume every job finishes within one minute.
+- Keep the VM and its judge API private, restrict its service account and
+  database role, and never mount the Docker socket into contestant containers.
+
+The `rlimit` fallback installs per-process CPU/address-space/task/file limits
+in a fresh interpreter. Docker mode uses container cgroups, seccomp, and
+namespaces. Output is bounded and hidden case output is redacted from
+returned/stored results.
+Infrastructure failures use bounded retries and public generic error messages,
+not contestant compilation/runtime blame.
+
+## Tests
+
+```sh
+python -m pytest -q tests
+python -m pytest -q -m integration integration_tests
+```
+
+The unit suite initializes only synthetic settings, does not read `.env`, and
+rejects unmocked Postgres connections. The integration suite needs Linux POSIX
+limits and all toolchains; Windows skips those checks. Neither command requires
+a real database. `requirements.txt` supplies runtime dependencies;
+`requirements-dev.txt` adds pytest, coverage, and HTTP test dependencies.

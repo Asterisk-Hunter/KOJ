@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      - run: python -m pip install -r api/requirements-test.txt
+      - run: npx next typegen
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      - run: npm run build
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_ZXhhbXBsZS5jb20k
+          CLERK_SECRET_KEY: sk_test_placeholder
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
+      - run: npm test
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
+          JUDGE_SANDBOX_MODE: rlimit
+
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: koj
+          POSTGRES_PASSWORD: koj
+          POSTGRES_DB: koj
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U koj -d koj"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run db:migrate
+        env:
+          DATABASE_URL: postgresql://koj:koj@localhost:5432/koj
+
+  sandbox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f api/Dockerfile -t koj-judge:test api
+      - name: Run rlimit verdict corpus and bounded probes
+        run: >-
+          docker run --rm
+          -e DATABASE_URL=postgresql://test:test@localhost:5432/test
+          -e JUDGE_SANDBOX_MODE=rlimit
+          -e PYTHONPATH=/srv
+          -v "${{ github.workspace }}/api:/tests:ro"
+          koj-judge:test
+          sh -c "python -m pip install --no-cache-dir -r /tests/requirements-test.txt && python -m pytest -p no:cacheprovider -c /tests/pytest.ini -q -m integration /tests/integration_tests"

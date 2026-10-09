@@ -1,13 +1,26 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { problems, problemTestCases } from "@/db/schema";
 import { ensureUserRow, jsonError, requireSetter } from "@/app/api/admin/authz";
+import {
+  DEFAULT_OUTPUT_TOLERANCE,
+  parseOutputComparator,
+  parseOutputTolerance,
+} from "@/app/api/admin/problems/comparator";
+import { parseCheckerCode } from "@/app/api/admin/problems/checker-code";
+import {
+  MAX_PROBLEM_MEMORY_MB,
+  MAX_TEST_CASES_PER_PROBLEM,
+  MAX_TEST_CASE_FILE_BYTES,
+  testCaseLimitMessage,
+  testCaseLimitViolation,
+} from "@/app/api/admin/problems/limits";
+import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
+import { MAX_PROBLEM_AUTHORING_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
-const MAX_CASES = 100;
 
 type Difficulty = "easy" | "medium" | "hard";
 
@@ -18,7 +31,7 @@ function validateDifficulty(v: unknown): Difficulty | null {
   return null;
 }
 
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const grant = await requireSetter();
   if (!grant.ok) {
     return grant.response;
@@ -30,13 +43,9 @@ export async function POST(req: NextRequest) {
     return jsonError("user not found or could not be synced", 400);
   }
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return jsonError("invalid json", 400);
-  }
-  const b = body as Record<string, unknown>;
+  const parsed = await readBoundedJsonObject(req, MAX_PROBLEM_AUTHORING_BODY_BYTES, "invalid json");
+  if (!parsed.ok) return parsed.response;
+  const b = parsed.value;
 
   const title = b.title;
   const statement = b.statement;
@@ -47,6 +56,13 @@ export async function POST(req: NextRequest) {
   const tagsRaw = b.tags;
   const timeRaw = b.timeLimitMs ?? b.time_limit_ms ?? b.timeLimit ?? b.time;
   const memoryRaw = b.memoryLimitMb ?? b.memory_limit_mb ?? b.memoryLimit ?? b.memory;
+  const comparatorRaw = b.outputComparator ?? "exact";
+  const absoluteToleranceRaw = b.absoluteTolerance ?? DEFAULT_OUTPUT_TOLERANCE;
+  const relativeToleranceRaw = b.relativeTolerance ?? DEFAULT_OUTPUT_TOLERANCE;
+  const checkerCodeResult = parseCheckerCode(b.checkerCode);
+  if (!checkerCodeResult.valid) {
+    return jsonError("checkerCode must be Python source no larger than 64 KiB", 400);
+  }
   const statusRaw = b.status;
 
   if (typeof title !== "string" || title.trim().length === 0) {
@@ -109,9 +125,16 @@ export async function POST(req: NextRequest) {
   } else {
     return jsonError("memoryLimitMb is required", 400);
   }
-  if (!Number.isInteger(memoryLimitMb) || memoryLimitMb < 16 || memoryLimitMb > 2048) {
-    return jsonError("memoryLimitMb must be between 16 and 2048", 400);
+  if (!Number.isInteger(memoryLimitMb) || memoryLimitMb < 16 || memoryLimitMb > MAX_PROBLEM_MEMORY_MB) {
+    return jsonError(`memoryLimitMb must be between 16 and ${MAX_PROBLEM_MEMORY_MB}`, 400);
   }
+
+  const outputComparator = parseOutputComparator(comparatorRaw);
+  if (!outputComparator) return jsonError("outputComparator must be exact or float", 400);
+  const absoluteTolerance = parseOutputTolerance(absoluteToleranceRaw);
+  if (absoluteTolerance === null) return jsonError("absoluteTolerance must be between 0 and 1", 400);
+  const relativeTolerance = parseOutputTolerance(relativeToleranceRaw);
+  if (relativeTolerance === null) return jsonError("relativeTolerance must be between 0 and 1", 400);
 
   const explanationRaw = b.explanation;
   let explanation: string | null = null;
@@ -132,8 +155,8 @@ export async function POST(req: NextRequest) {
     if (!Array.isArray(testCasesRaw)) {
       return jsonError("testCases must be an array", 400);
     }
-    if (testCasesRaw.length > MAX_CASES) {
-      return jsonError(`at most ${MAX_CASES} test cases per problem`, 400);
+    if (testCasesRaw.length > MAX_TEST_CASES_PER_PROBLEM) {
+      return jsonError(`at most ${MAX_TEST_CASES_PER_PROBLEM} test cases per problem`, 400);
     }
     for (let i = 0; i < testCasesRaw.length; i++) {
       const tc = testCasesRaw[i] as RawCase;
@@ -143,13 +166,13 @@ export async function POST(req: NextRequest) {
       if (typeof tc.input !== "string" || tc.input.length === 0) {
         return jsonError(`test case ${i + 1} input must be non-empty`, 400);
       }
-      if (Buffer.byteLength(tc.input, "utf8") > MAX_FILE_BYTES) {
+      if (Buffer.byteLength(tc.input, "utf8") > MAX_TEST_CASE_FILE_BYTES) {
         return jsonError(`test case ${i + 1} input exceeds 10MB`, 400);
       }
       if (typeof tc.expectedOutput !== "string" || tc.expectedOutput.length === 0) {
         return jsonError(`test case ${i + 1} expectedOutput must be non-empty`, 400);
       }
-      if (Buffer.byteLength(tc.expectedOutput, "utf8") > MAX_FILE_BYTES) {
+      if (Buffer.byteLength(tc.expectedOutput, "utf8") > MAX_TEST_CASE_FILE_BYTES) {
         return jsonError(`test case ${i + 1} expectedOutput exceeds 10MB`, 400);
       }
       const isSample = typeof tc.isSample === "boolean" ? tc.isSample : false;
@@ -166,6 +189,9 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  const caseLimitViolation = testCaseLimitViolation(0, 0, validatedCases);
+  if (caseLimitViolation) return jsonError(testCaseLimitMessage(caseLimitViolation), 400);
+
   // Publishing an unjudgeable problem would hand out free accepts for it.
   if (initialStatus === "published" && validatedCases.length === 0) {
     return jsonError("publish requires at least one test case", 400);
@@ -176,6 +202,7 @@ export async function POST(req: NextRequest) {
     const inserted = await tx
       .insert(problems)
       .values({
+        organizationId: grant.context.organizationId,
         authorId: userId,
         title: title.trim(),
         statement: (statement as string).trim(),
@@ -187,6 +214,10 @@ export async function POST(req: NextRequest) {
         tags,
         timeLimitMs,
         memoryLimitMb,
+        outputComparator,
+        absoluteTolerance,
+        relativeTolerance,
+        checkerCode: checkerCodeResult.checkerCode,
         status: initialStatus,
       })
       .returning({ id: problems.id });
@@ -205,8 +236,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    await recordAdminAuditEvent(tx, {
+      organizationId: grant.context.organizationId,
+      actorId: userId,
+      action: "problem.created",
+      entityType: "problem",
+      entityId: problemId,
+      metadata: { status: initialStatus, count: validatedCases.length },
+    });
+
     return { id: problemId, testCaseCount: validatedCases.length };
   });
 
   return NextResponse.json(result, { status: 201 });
 }
+
+export const POST = withApiGuard(handlePOST);

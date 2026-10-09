@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { auth } from "@clerk/nextjs/server";
-import { asc, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, sql } from "drizzle-orm";
+import { notFound } from "next/navigation";
+import { resolveOrganizationContext } from "@/lib/organizations";
 import { db } from "@/db";
 import {
   contestProblems,
@@ -8,7 +10,7 @@ import {
   contests,
   problems,
   submissions,
-  users,
+  organizationMemberships,
 } from "@/db/schema";
 import Navigation from "@/app/components/Navigation";
 import StatCard from "@/app/components/StatCard";
@@ -34,6 +36,9 @@ export default async function DashboardPage() {
     // resource-based auth (see AGENTS.md — createRouteMatcher is deprecated).
     return <Navigation />;
   }
+  const organization = await resolveOrganizationContext(userId);
+  if (!organization || organization.suspended) notFound();
+  const organizationId = organization.organizationId;
 
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
@@ -43,16 +48,16 @@ export default async function DashboardPage() {
       db
         .select({ count: sql<number>`count(*)`.mapWith(Number) })
         .from(problems)
-        .where(eq(problems.status, "published")),
+        .where(and(eq(problems.status, "published"), eq(problems.organizationId, organizationId))),
       db
         .select({ count: sql<number>`count(*)`.mapWith(Number) })
         .from(contests)
-        .where(eq(contests.status, "live")),
-      db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(users),
+        .where(and(eq(contests.status, "live"), eq(contests.organizationId, organizationId))),
+      db.select({ count: sql<number>`count(*)`.mapWith(Number) }).from(organizationMemberships).where(eq(organizationMemberships.organizationId, organizationId)),
       db
         .select({ count: sql<number>`count(*)`.mapWith(Number) })
         .from(submissions)
-        .where(gte(submissions.submittedAt, startOfToday)),
+        .where(and(gte(submissions.submittedAt, startOfToday), eq(submissions.organizationId, organizationId))),
     ]);
 
   const publishedProblemsCount = publishedProblemsRows[0]?.count ?? 0;
@@ -61,7 +66,7 @@ export default async function DashboardPage() {
   const submissionsTodayCount = submissionsTodayRows[0]?.count ?? 0;
 
   // Personal contestant statistics
-  const [userSubmissions, userAcceptedRows] = await Promise.all([
+  const [userSubmissions, userAcceptedRows, contestRegistrationsRows] = await Promise.all([
     db
       .select({
         id: submissions.id,
@@ -73,17 +78,22 @@ export default async function DashboardPage() {
       })
       .from(submissions)
       .leftJoin(problems, eq(submissions.problemId, problems.id))
-      .where(eq(submissions.userId, userId))
+      .where(and(eq(submissions.userId, userId), eq(submissions.organizationId, organizationId)))
       .orderBy(sql`${submissions.submittedAt} DESC`)
       .limit(6),
     db
-      .select({
+      .selectDistinct({
         problemId: submissions.problemId,
         difficulty: problems.difficulty,
       })
       .from(submissions)
       .leftJoin(problems, eq(submissions.problemId, problems.id))
-      .where(sql`${submissions.userId} = ${userId} AND ${submissions.status} = 'accepted'`),
+      .where(and(eq(submissions.userId, userId), eq(submissions.status, "accepted"), eq(submissions.organizationId, organizationId))),
+    db
+      .select({ count: sql<number>`count(*)`.mapWith(Number) })
+      .from(contestRegistrations)
+      .innerJoin(contests, eq(contestRegistrations.contestId, contests.id))
+      .where(and(eq(contestRegistrations.userId, userId), eq(contests.organizationId, organizationId))),
   ]);
 
   const solvedProblemMap = new Map<number, string>();
@@ -94,6 +104,33 @@ export default async function DashboardPage() {
   }
 
   const userSolvedTotal = solvedProblemMap.size;
+  const registeredContestsCount = contestRegistrationsRows[0]?.count ?? 0;
+
+  // First-run onboarding: hide each step once the user has done it once.
+  const onboardingSteps = [
+    {
+      done: organization.isMember,
+      title: "Join an organization",
+      detail: "Pick your branch or club to unlock contests and rankings.",
+      href: "/organizations",
+      cta: "Browse organizations",
+    },
+    {
+      done: userSolvedTotal > 0,
+      title: "Solve your first problem",
+      detail: "Write code in the browser editor and run it against sample cases.",
+      href: "/problems",
+      cta: "Open the archive",
+    },
+    {
+      done: registeredContestsCount > 0,
+      title: "Register for a contest",
+      detail: "Live ICPC-style standings, penalties, and a final-hour freeze.",
+      href: "/contests",
+      cta: "See contests",
+    },
+  ];
+  const onboardingDone = onboardingSteps.filter((step) => step.done).length;
   let userEasy = 0;
   let userMedium = 0;
   let userHard = 0;
@@ -106,7 +143,7 @@ export default async function DashboardPage() {
   const liveContests = await db
     .select()
     .from(contests)
-    .where(eq(contests.status, "live"))
+    .where(and(eq(contests.status, "live"), eq(contests.organizationId, organizationId)))
     .orderBy(asc(contests.endsAt))
     .limit(3);
 
@@ -164,7 +201,7 @@ export default async function DashboardPage() {
       <Navigation />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-16">
         {/* Hero Section */}
-        <section className="flex flex-col items-center text-center py-20 max-w-2xl mx-auto">
+        <section className="flex flex-col items-center text-center py-20 max-w-2xl mx-auto reveal">
           <h1 className="text-5xl font-mono font-bold text-kjprimary text-glow mb-4">KOJ</h1>
           <p className="uppercase font-mono tracking-[0.3em] text-kjtext-muted text-sm mb-4">
             Kottayam Online Judge
@@ -174,8 +211,52 @@ export default async function DashboardPage() {
           </p>
         </section>
 
+        {/* Onboarding (hidden once every step is done) */}
+        {onboardingDone < onboardingSteps.length && (
+          <section className="mb-16 reveal reveal-1">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <h2 className="uppercase font-mono tracking-widest text-sm text-kjprimary">Start Here</h2>
+                <div className="h-px w-24 bg-kjprimary/30" />
+              </div>
+              <span className="font-mono text-xs text-kjtext-muted">
+                {onboardingDone}/{onboardingSteps.length} complete
+              </span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {onboardingSteps.map((step) => (
+                <div
+                  key={step.title}
+                  className={`bg-kjsurface border rounded-lg p-5 card-lift ${
+                    step.done ? "border-kjprimary/30" : "border-kjborder"
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <span className={`font-mono text-sm ${step.done ? "text-kjprimary" : "text-kjtext-muted"}`}>
+                      {step.done ? "[x]" : "[ ]"}
+                    </span>
+                    {step.done && (
+                      <span className="font-mono text-[10px] uppercase tracking-widest text-kjprimary">done</span>
+                    )}
+                  </div>
+                  <p className="font-mono text-sm font-semibold text-kjtext mb-1.5">{step.title}</p>
+                  <p className="text-xs text-kjtext-muted mb-4">{step.detail}</p>
+                  {!step.done && (
+                    <Link
+                      href={step.href}
+                      className="inline-block font-mono text-xs text-kjprimary hover:underline"
+                    >
+                      {step.cta} →
+                    </Link>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         {/* Stats Grid */}
-        <section className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-16">
+        <section className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-16 reveal reveal-2">
           <StatCard label="TOTAL PROBLEMS" value={publishedProblemsCount} icon="{" accent />
           <StatCard label="ACTIVE CONTESTS" value={liveContestsCount} icon="C" accent />
           <StatCard label="REGISTERED USERS" value={usersCount} icon="@" accent />
@@ -183,7 +264,7 @@ export default async function DashboardPage() {
         </section>
 
         {/* Personal Progress Section (LeetCode/CF style) */}
-        <section className="mb-16">
+        <section className="mb-16 reveal reveal-3">
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
               <h2 className="uppercase font-mono tracking-widest text-sm text-kjprimary">
@@ -267,7 +348,7 @@ export default async function DashboardPage() {
         </section>
 
         {/* Active Contests */}
-        <section className="mb-20">
+        <section className="mb-20 reveal reveal-4">
           <div className="flex items-center gap-3 mb-6">
             <h2 className="uppercase font-mono tracking-widest text-sm text-kjtext-muted">
               Active Contests
@@ -293,7 +374,7 @@ export default async function DashboardPage() {
                 <Link
                   key={contest.id}
                   href={`/contests/${contest.slug}`}
-                  className="bg-kjsurface border border-kjborder rounded-lg p-5 hover:border-kjborder-bright transition-all duration-300"
+                  className="bg-kjsurface border border-kjborder rounded-lg p-5 hover:border-kjborder-bright card-lift transition-all duration-300"
                 >
                   <div className="flex items-center justify-between mb-3">
                     <span className="font-mono font-semibold text-kjtext">{contest.title}</span>

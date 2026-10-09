@@ -46,7 +46,6 @@ type PerProblemEntry = {
 
 type StandingRow = {
   rank: number;
-  userId: string;
   username: string;
   solvedCount: number;
   penalty: number;
@@ -79,8 +78,11 @@ export default function RankingsPage() {
   const [rankingsError, setRankingsError] = useState<string | null>(null);
   const [liveRefresh, setLiveRefresh] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [virtual, setVirtual] = useState(false);
 
-  const isLiveContest = data?.contest.status === "live";
+  const isStreamingContest = virtual
+    ? data?.contest.status === "ended" || data?.contest.status === "archived"
+    : data?.contest.status === "live";
 
   const fetchContests = useCallback(async () => {
     setContestsLoading(true);
@@ -151,7 +153,7 @@ export default function RankingsPage() {
     setRankingsLoading(true);
     setRankingsError(null);
     try {
-      const res = await fetch(`/api/rankings?contestId=${encodeURIComponent(contestId)}`, { cache: "no-store" });
+      const res = await fetch(`/api/rankings?contestId=${encodeURIComponent(contestId)}${virtual ? "&virtual=1" : ""}`, { cache: "no-store" });
       if (!res.ok) {
         const j = (await res.json().catch(() => null)) as { error?: string } | null;
         throw new Error(j?.error ?? `failed to fetch rankings (${res.status})`);
@@ -164,11 +166,12 @@ export default function RankingsPage() {
     } finally {
       setRankingsLoading(false);
     }
-  }, []);
+  }, [virtual]);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
       const p = new URLSearchParams(window.location.search).get("contestId");
+      setVirtual(new URLSearchParams(window.location.search).get("virtual") === "1");
       if (p && Number.isInteger(Number(p)) && Number(p) > 0) {
         setSelectedId(p);
       }
@@ -201,11 +204,11 @@ export default function RankingsPage() {
 
   // Live leaderboard: subscribe to SSE version ticker
   useEffect(() => {
-    if (!selectedId || !isLiveContest) {
+    if (!selectedId || !isStreamingContest) {
       setLiveRefresh(false);
       return;
     }
-    const es = new EventSource(`/api/contests/${encodeURIComponent(selectedId)}/events`);
+    const es = new EventSource(`/api/contests/${encodeURIComponent(selectedId)}/events${virtual ? "?virtual=1" : ""}`);
     let lastVersion: string | null = null;
     setLiveRefresh(true);
     es.addEventListener("version", (ev) => {
@@ -217,7 +220,7 @@ export default function RankingsPage() {
       es.close();
       setLiveRefresh(false);
     };
-  }, [selectedId, isLiveContest, fetchRankings]);
+  }, [selectedId, isStreamingContest, virtual, fetchRankings]);
 
   const filteredRows = useMemo(() => {
     if (!data) return [];
@@ -300,6 +303,9 @@ export default function RankingsPage() {
           </div>
 
           <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 text-[11px] font-mono text-kjtext-muted">
+              <input type="checkbox" checked={virtual} onChange={(event) => setVirtual(event.target.checked)} /> VIRTUAL
+            </label>
             {/* Freeze Badge */}
             {isFrozen && (
               <span className="flex items-center gap-1.5 border border-cyan-500/40 bg-cyan-500/10 text-cyan-300 rounded px-3 py-1.5 text-xs font-mono font-bold animate-pulse">
@@ -406,7 +412,7 @@ export default function RankingsPage() {
                 )}
                 {filteredRows.map((row) => (
                   <tr
-                    key={row.userId}
+                    key={row.rank}
                     className="border-b border-kjborder/60 hover:bg-kjsurface/50 transition-colors"
                   >
                     {/* Rank — sticky */}

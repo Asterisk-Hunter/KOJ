@@ -12,9 +12,11 @@ import ProblemManagerSection from "@/app/admin/ProblemManagerSection";
 import ProblemStudio from "@/app/admin/ProblemStudio";
 import SubmissionsSection from "@/app/admin/SubmissionsSection";
 import ObservabilitySection from "@/app/admin/ObservabilitySection";
+import AuditLogSection from "@/app/admin/AuditLogSection";
 
 type Summary = {
   role?: "admin" | "setter";
+  isPlatformAdmin?: boolean;
   counts: { users: number; problems: number; contests: number; submissions: number };
   recentProblems: Array<{ id: number; title: string; difficulty: string; status: string; createdAt: string }>;
 };
@@ -108,6 +110,17 @@ export default function AdminPage() {
             <StatCard label="TOTAL PROBLEMS" value={String(data.counts.problems)} icon="{}" accent />
             <StatCard label="TOTAL CONTESTS" value={String(data.counts.contests)} icon="C" accent />
             <StatCard label="SUBMISSIONS" value={String(data.counts.submissions)} icon="#" />
+          </div>
+        )}
+
+        {data?.role === "admin" && (
+          <div className="mb-8">
+            <Link
+              href="/admin/plagiarism"
+              className="inline-flex border border-kjprimary/40 text-kjprimary rounded px-4 py-2 text-xs font-mono hover:bg-kjprimary/10"
+            >
+              POST-CONTEST SIMILARITY REVIEW
+            </Link>
           </div>
         )}
 
@@ -240,9 +253,10 @@ export default function AdminPage() {
         </div>
 
         {(data?.role === "admin" || data?.role === "setter") && <ContestsSection />}
-        {data?.role === "admin" && <UsersSection />}
-        {data?.role === "admin" && <SubmissionsSection />}
-        {data?.role === "admin" && <ObservabilitySection />}
+        {data?.isPlatformAdmin && <UsersSection />}
+        {data?.role === "admin" && <SubmissionsSection canRejudge />}
+        {data?.isPlatformAdmin && <ObservabilitySection />}
+        {data?.role === "admin" && <AuditLogSection />}
       </main>
     </>
   );

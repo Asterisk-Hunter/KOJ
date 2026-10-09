@@ -15,6 +15,17 @@ export default clerkMiddleware(async (auth, req) => {
   if (!isPublicRoute(req)) {
     await auth.protect();
   }
+}, {
+  contentSecurityPolicy: {
+    strict: true,
+    directives: {
+      "object-src": ["'none'"],
+      "base-uri": ["'self'"],
+      "frame-ancestors": ["'none'"],
+      "font-src": ["'self'", "data:"],
+      "img-src": ["data:", "blob:"],
+    },
+  },
 });
 
 export const config = {

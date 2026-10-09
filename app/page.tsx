@@ -93,7 +93,7 @@ export default function LandingPage() {
       {/* Hero Section */}
       <section className="flex-1 flex items-center justify-center px-4 sm:px-6 lg:px-8 py-20">
         <div className="max-w-7xl mx-auto w-full flex flex-col lg:flex-row items-center gap-12 lg:gap-20">
-          <div className="flex-1 text-left">
+          <div className="flex-1 text-left reveal">
             <h1 className="text-7xl sm:text-8xl font-mono font-bold text-kjprimary text-glow mb-4 leading-none">
               KOJ
             </h1>
@@ -137,7 +137,7 @@ export default function LandingPage() {
           </div>
 
           {/* Right - Terminal */}
-          <div className="flex-1 w-full max-w-xl">
+          <div className="flex-1 w-full max-w-xl reveal reveal-1">
             <GlitchingTerminal />
           </div>
         </div>
@@ -145,7 +145,7 @@ export default function LandingPage() {
 
       {/* Recent Problems + Active Contests */}
       <section className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 pb-16 grid md:grid-cols-2 gap-6">
-        <div>
+        <div className="reveal reveal-1">
           <h2 className="text-xs uppercase tracking-widest font-mono text-kjprimary mb-4">Recent Problems</h2>
           {recentProblems.length === 0 ? (
             <div className="bg-kjsurface border border-kjborder rounded-lg p-5">
@@ -178,7 +178,7 @@ export default function LandingPage() {
           )}
         </div>
 
-        <div>
+        <div className="reveal reveal-2">
           <h2 className="text-xs uppercase tracking-widest font-mono text-kjprimary mb-4">Active & Upcoming Contests</h2>
           {activeContests.length === 0 ? (
             <div className="bg-kjsurface border border-kjborder rounded-lg p-5">
@@ -222,10 +222,10 @@ export default function LandingPage() {
             Built for Competitive Excellence
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {features.map((feature) => (
+            {features.map((feature, index) => (
               <div
                 key={feature.title}
-                className="bg-kjsurface border border-kjborder rounded-lg p-6 hover:border-kjborder-bright transition-all"
+                className={`bg-kjsurface border border-kjborder rounded-lg p-6 hover:border-kjborder-bright card-lift reveal reveal-${index + 1}`}
               >
                 <div className="text-kjprimary mb-4">{feature.icon}</div>
                 <h3 className="font-mono font-semibold text-kjtext mb-2">

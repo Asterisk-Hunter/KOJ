@@ -11,6 +11,8 @@ type TestCase = {
   position: number;
 };
 
+type OutputComparator = "exact" | "float";
+
 type Problem = {
   id: number;
   title: string;
@@ -23,6 +25,10 @@ type Problem = {
   tags: string[];
   timeLimitMs: number;
   memoryLimitMb: number;
+  outputComparator: OutputComparator;
+  absoluteTolerance: number;
+  relativeTolerance: number;
+  checkerCode: string | null;
   status: "draft" | "published" | "contest_active";
   testCases?: TestCase[];
 };
@@ -438,9 +444,64 @@ export default function ProblemManagerSection({
                 type="number"
                 className={inputCls}
                 value={formData.memoryLimitMb ?? 256}
+                min={16}
+                max={1024}
                 onChange={(e) => handleProblemChange("memoryLimitMb", e.target.value)}
               />
             </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs text-kjtext-muted mb-1">Output Comparator</label>
+              <select
+                className={inputCls}
+                value={formData.outputComparator ?? "exact"}
+                onChange={(e) => handleProblemChange("outputComparator", e.target.value as OutputComparator)}
+              >
+                <option value="exact">Exact tokens</option>
+                <option value="float">Floating-point tolerance</option>
+              </select>
+            </div>
+            {formData.outputComparator === "float" && (
+              <>
+                <div>
+                  <label className="block text-xs text-kjtext-muted mb-1">Absolute Tolerance (0–1)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="1"
+                    step="any"
+                    className={inputCls}
+                    value={formData.absoluteTolerance ?? 0.000001}
+                    onChange={(e) => handleProblemChange("absoluteTolerance", e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-kjtext-muted mb-1">Relative Tolerance (0–1)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="1"
+                    step="any"
+                    className={inputCls}
+                    value={formData.relativeTolerance ?? 0.000001}
+                    onChange={(e) => handleProblemChange("relativeTolerance", e.target.value)}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+          <div>
+            <label className="block text-xs text-kjtext-muted mb-1">Python Special Checker (optional)</label>
+            <textarea
+              className={`${inputCls} text-xs`}
+              rows={8}
+              maxLength={64_000}
+              spellCheck={false}
+              value={formData.checkerCode ?? ""}
+              onChange={(e) => handleProblemChange("checkerCode", e.target.value)}
+            />
+            <p className="mt-1 text-[10px] text-kjtext-muted">JSON stdin contains input, expected_output, and actual_output strings. Exit 0 accepts; exit 1 rejects. Other exits or timeouts are judge infrastructure errors.</p>
           </div>
         </div>
         <div className="flex justify-end pt-4">

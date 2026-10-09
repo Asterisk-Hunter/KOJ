@@ -1,5 +1,6 @@
+import { withApiGuard } from "@/app/api/guard";
 import { NextRequest, NextResponse } from "next/server";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import {
   contestProblems,
@@ -8,38 +9,52 @@ import {
   problems,
   submissions,
 } from "@/db/schema";
-import { jsonError, requireAdmin, requireSetter } from "@/app/api/admin/authz";
+import { jsonError, requireOrganizationAdmin, requireSetter } from "@/app/api/admin/authz";
+import { parseOutputComparator, parseOutputTolerance } from "@/app/api/admin/problems/comparator";
+import { parseCheckerCode } from "@/app/api/admin/problems/checker-code";
+import { MAX_PROBLEM_MEMORY_MB } from "@/app/api/admin/problems/limits";
+import { recordAdminAuditEvent } from "@/app/api/admin/audit-logs/writer";
+import { MAX_PROBLEM_AUTHORING_BODY_BYTES, readBoundedJsonObject } from "@/app/api/body-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-async function findProblem(idRaw: string) {
+async function findProblem(idRaw: string, organizationId: number) {
   const numeric = Number(idRaw);
   if (!Number.isInteger(numeric) || numeric <= 0) return null;
-  const rows = await db.select().from(problems).where(eq(problems.id, numeric)).limit(1);
+  const rows = await db.select().from(problems).where(and(
+    eq(problems.id, numeric),
+    eq(problems.organizationId, organizationId),
+  )).limit(1);
   return rows.length > 0 ? rows[0] : null;
 }
 
 /** True when the problem is locked: `contest_active` with a `live` contest running. */
-async function isLockedByLiveContest(problemId: number): Promise<boolean> {
+async function isLockedByLiveContest(problemId: number, organizationId: number): Promise<boolean> {
   const links = await db
     .select({ status: contests.status })
     .from(contestProblems)
     .innerJoin(contests, eq(contestProblems.contestId, contests.id))
-    .where(eq(contestProblems.problemId, problemId));
+    .where(and(
+      eq(contestProblems.problemId, problemId),
+      eq(contestProblems.organizationId, organizationId),
+    ));
   return links.some((l) => l.status === "live");
 }
 
-async function linkedContestCount(problemId: number): Promise<number> {
+async function linkedContestCount(problemId: number, organizationId: number): Promise<number> {
   const links = await db
     .select({ contestId: contestProblems.contestId })
     .from(contestProblems)
-    .where(eq(contestProblems.problemId, problemId));
+    .where(and(
+      eq(contestProblems.problemId, problemId),
+      eq(contestProblems.organizationId, organizationId),
+    ));
   return links.length;
 }
 
 /** Setter+: full problem with ordered test cases (for edit UIs). */
-export async function GET(
+async function handleGET(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
@@ -47,7 +62,7 @@ export async function GET(
   if (!grant.ok) return grant.response;
 
   const { id: idRaw } = await ctx.params;
-  const problem = await findProblem(idRaw);
+  const problem = await findProblem(idRaw, grant.context.organizationId);
   if (!problem) return jsonError("problem not found", 404);
   if (grant.dbRole !== "admin" && problem.authorId !== grant.userId) {
     return jsonError("forbidden", 403);
@@ -71,6 +86,9 @@ export async function GET(
     tags: problem.tags,
     timeLimitMs: problem.timeLimitMs,
     memoryLimitMb: problem.memoryLimitMb,
+    outputComparator: problem.outputComparator,
+    absoluteTolerance: problem.absoluteTolerance,
+    relativeTolerance: problem.relativeTolerance,
     status: problem.status,
     testCases: cases.map((c) => ({
       id: c.id,
@@ -103,7 +121,7 @@ function parseBoundedInt(v: unknown, min: number, max: number): number | null {
  * Status may move draft<->published directly; `contest_active` is owned
  * by the contest lifecycle.
  */
-export async function PATCH(
+async function handlePATCH(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
@@ -111,23 +129,19 @@ export async function PATCH(
   if (!grant.ok) return grant.response;
 
   const { id: idRaw } = await ctx.params;
-  const problem = await findProblem(idRaw);
+  const problem = await findProblem(idRaw, grant.context.organizationId);
   if (!problem) return jsonError("problem not found", 404);
   if (grant.dbRole !== "admin" && problem.authorId !== grant.userId) {
     return jsonError("forbidden", 403);
   }
 
-  if (problem.status === "contest_active" && (await isLockedByLiveContest(problem.id))) {
+  if (problem.status === "contest_active" && (await isLockedByLiveContest(problem.id, grant.context.organizationId))) {
     return jsonError("problem is locked while its contest is live (BR-08)", 403);
   }
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return jsonError("invalid json", 400);
-  }
-  const b = body as Record<string, unknown>;
+  const parsed = await readBoundedJsonObject(req, MAX_PROBLEM_AUTHORING_BODY_BYTES, "invalid json");
+  if (!parsed.ok) return parsed.response;
+  const b = parsed.value;
   const now = new Date();
   const patch: Partial<typeof problems.$inferInsert> = { updatedAt: now };
 
@@ -173,9 +187,32 @@ export async function PATCH(
     patch.timeLimitMs = n;
   }
   if (b.memoryLimitMb !== undefined) {
-    const n = parseBoundedInt(b.memoryLimitMb, 16, 2048);
-    if (n === null) return jsonError("memoryLimitMb must be an integer 16..2048", 400);
+    const n = parseBoundedInt(b.memoryLimitMb, 16, MAX_PROBLEM_MEMORY_MB);
+    if (n === null) return jsonError(`memoryLimitMb must be an integer 16..${MAX_PROBLEM_MEMORY_MB}`, 400);
     patch.memoryLimitMb = n;
+  }
+
+  if (b.outputComparator !== undefined) {
+    const comparator = parseOutputComparator(b.outputComparator);
+    if (!comparator) return jsonError("outputComparator must be exact or float", 400);
+    patch.outputComparator = comparator;
+  }
+  if (b.absoluteTolerance !== undefined) {
+    const tolerance = parseOutputTolerance(b.absoluteTolerance);
+    if (tolerance === null) return jsonError("absoluteTolerance must be between 0 and 1", 400);
+    patch.absoluteTolerance = tolerance;
+  }
+  if (b.relativeTolerance !== undefined) {
+    const tolerance = parseOutputTolerance(b.relativeTolerance);
+    if (tolerance === null) return jsonError("relativeTolerance must be between 0 and 1", 400);
+    patch.relativeTolerance = tolerance;
+  }
+  if (b.checkerCode !== undefined) {
+    const checkerCode = parseCheckerCode(b.checkerCode);
+    if (!checkerCode.valid) {
+      return jsonError("checkerCode must be Python source no larger than 64 KiB", 400);
+    }
+    patch.checkerCode = checkerCode.checkerCode;
   }
 
   if (b.status !== undefined) {
@@ -204,7 +241,20 @@ export async function PATCH(
     patch.status = to as "draft" | "published";
   }
 
-  await db.update(problems).set(patch).where(eq(problems.id, problem.id));
+  await db.transaction(async (tx) => {
+    await tx.update(problems).set(patch).where(and(
+      eq(problems.id, problem.id),
+      eq(problems.organizationId, grant.context.organizationId),
+    ));
+    await recordAdminAuditEvent(tx, {
+      organizationId: grant.context.organizationId,
+      actorId: grant.userId,
+      action: "problem.updated",
+      entityType: "problem",
+      entityId: problem.id,
+      metadata: { fields: Object.keys(patch).filter((field) => field !== "updatedAt").join(",") },
+    });
+  });
   return NextResponse.json({ id: problem.id, updated: true });
 }
 
@@ -212,18 +262,18 @@ export async function PATCH(
  * Admin: delete a problem. Refused when the problem is linked to any
  * contest or has any submissions (preserves standings/history).
  */
-export async function DELETE(
+async function handleDELETE(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
-  const grant = await requireAdmin();
+  const grant = await requireOrganizationAdmin();
   if (!grant.ok) return grant.response;
 
   const { id: idRaw } = await ctx.params;
-  const problem = await findProblem(idRaw);
+  const problem = await findProblem(idRaw, grant.context.organizationId);
   if (!problem) return jsonError("problem not found", 404);
 
-  if ((await linkedContestCount(problem.id)) > 0) {
+  if ((await linkedContestCount(problem.id, grant.context.organizationId)) > 0) {
     return jsonError("cannot delete a problem linked to a contest", 409);
   }
   const subRows = await db
@@ -235,7 +285,23 @@ export async function DELETE(
     return jsonError("cannot delete a problem with submissions", 409);
   }
 
-  await db.delete(problemTestCases).where(eq(problemTestCases.problemId, problem.id));
-  await db.delete(problems).where(eq(problems.id, problem.id));
+  await db.transaction(async (tx) => {
+    await tx.delete(problemTestCases).where(eq(problemTestCases.problemId, problem.id));
+    await tx.delete(problems).where(and(
+      eq(problems.id, problem.id),
+      eq(problems.organizationId, grant.context.organizationId),
+    ));
+    await recordAdminAuditEvent(tx, {
+      organizationId: grant.context.organizationId,
+      actorId: grant.userId,
+      action: "problem.deleted",
+      entityType: "problem",
+      entityId: problem.id,
+    });
+  });
   return NextResponse.json({ deleted: true });
 }
+
+export const GET = withApiGuard(handleGET);
+export const PATCH = withApiGuard(handlePATCH);
+export const DELETE = withApiGuard(handleDELETE);
